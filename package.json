@@ -1,0 +1,18 @@
+{
+  "name": "lingxiu-cover",
+  "version": "1.0.0",
+  "description": "靈修封面 — 晨更/靈修班開始前的 16:9 封面與背景音樂/敬拜播放工具 (Windows/Mac)",
+  "main": "src/main.js",
+  "author": "",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac"
+  },
+  "devDependencies": {
+    "electron": "^32.2.0",
+    "electron-builder": "^25.1.8"
+  }
+}

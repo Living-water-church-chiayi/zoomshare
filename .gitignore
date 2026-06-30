@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.log
+
+# 大型可下載二進位（用 scripts/setup-win.sh 或 setup-mac.sh 取得，GitHub 單檔上限 100MB）
+resources/bin/
+
+# Claude 個人本機設定
+.claude/settings.local.json

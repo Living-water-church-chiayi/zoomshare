@@ -1,0 +1,31 @@
+appId: com.lingxiu.cover
+productName: 靈修封面
+directories:
+  output: dist
+files:
+  - src/**/*
+  - "!**/*.map"
+win:
+  target:
+    - nsis
+  signAndEditExecutable: false
+  artifactName: ${productName}-${version}-setup.${ext}
+  extraResources:
+    - from: resources/bin/win
+      to: bin
+      filter:
+        - "**/*"
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+mac:
+  target:
+    - dmg
+  category: public.app-category.productivity
+  artifactName: ${productName}-${version}.${ext}
+  extraResources:
+    - from: resources/bin/mac
+      to: bin
+      filter:
+        - "**/*"
