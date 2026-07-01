@@ -1,5 +1,9 @@
 appId: com.lingxiu.cover
 productName: 靈修封面
+publish:
+  provider: github
+  owner: Living-water-church-chiayi
+  repo: zoomshare
 directories:
   output: dist
 files:
@@ -22,8 +26,9 @@ nsis:
 mac:
   target:
     - dmg
+    - zip
   category: public.app-category.productivity
-  artifactName: ${productName}-${version}.${ext}
+  artifactName: ${productName}-${version}-${arch}.${ext}
   extraResources:
     - from: resources/bin/mac
       to: bin

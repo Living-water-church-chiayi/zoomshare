@@ -15,8 +15,21 @@ contextBridge.exposeInMainWorld('api', {
 
   updateYtDlp: () => ipcRenderer.invoke('ytdlp:update'),
   ytDlpVersion: () => ipcRenderer.invoke('ytdlp:version'),
+
+  // App 自動更新
+  appVersion: () => ipcRenderer.invoke('app:version'),
+  checkAppUpdate: () => ipcRenderer.invoke('app:checkUpdate'),
+  downloadAppUpdate: () => ipcRenderer.invoke('app:downloadUpdate'),
+  quitAndInstall: () => ipcRenderer.invoke('app:quitAndInstall'),
+  onUpdateAvailable: (cb) => ipcRenderer.on('update:available', (_e, d) => cb(d)),
+  onUpdateNone: (cb) => ipcRenderer.on('update:none', (_e, d) => cb(d)),
+  onUpdateError: (cb) => ipcRenderer.on('update:error', (_e, d) => cb(d)),
+  onUpdateProgress: (cb) => ipcRenderer.on('update:progress', (_e, d) => cb(d)),
+  onUpdateDownloaded: (cb) => ipcRenderer.on('update:downloaded', (_e, d) => cb(d)),
+
   openExternal: (url) => ipcRenderer.invoke('open:external', url),
   minimizeWindow: () => ipcRenderer.invoke('win:minimize'),
   closeWindow: () => ipcRenderer.invoke('win:close'),
+  readClipboard: () => ipcRenderer.invoke('clipboard:read'),
   pathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch { return ''; } }
 });

@@ -21,6 +21,23 @@ function systemDateMD() {
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
+// 把 zoom 會議網頁連結轉成 zoommtg:// 直接開 Zoom App 加入（免瀏覽器、免「開啟 Zoom？」提示）
+function zoomLaunchUrl(url) {
+  try {
+    const u = new URL(url);
+    if (u.hostname.toLowerCase().endsWith('zoom.us')) {
+      const m = u.pathname.match(/\/j\/(\d+)/);
+      if (m) {
+        let z = `zoommtg://${u.hostname}/join?action=join&confno=${m[1]}`;
+        const pwd = u.searchParams.get('pwd');
+        if (pwd) z += `&pwd=${pwd}`;
+        return z;
+      }
+    }
+  } catch (e) { /* 非標準連結，退回原網址 */ }
+  return url;
+}
+
 // ---------- 套用封面 ----------
 function applyCover(backgroundUrl) {
   $('dateText').textContent = cfg.dateAuto ? systemDateMD() : (cfg.dateManual || systemDateMD());
@@ -40,23 +57,6 @@ function applyCover(backgroundUrl) {
 
   if (backgroundUrl) setBackground(backgroundUrl);
   applyFillMode();
-  applyFont();
-}
-
-const FONT_MAP = {
-  'kai': 'var(--kai)',
-  'sans-regular': "'SHSans-Regular', sans-serif",
-  'sans-medium': "'SHSans-Medium', sans-serif",
-  'sans-bold': "'SHSans-Bold', sans-serif",
-  'sans-heavy': "'SHSans-Heavy', sans-serif",
-  'serif-regular': "'SHSerif-Regular', serif",
-  'serif-medium': "'SHSerif-Medium', serif",
-  'serif-bold': "'SHSerif-Bold', serif",
-  'serif-heavy': "'SHSerif-Heavy', serif"
-};
-function applyFont() {
-  const f = FONT_MAP[cfg.fontFamily] || FONT_MAP.kai;
-  document.documentElement.style.setProperty('--cover-font', f);
 }
 
 function setBackground(url) {
@@ -72,7 +72,6 @@ function applyFillMode() {
 
 // ---------- 設定面板 ----------
 function fillSettings() {
-  $('fontFamily').value = cfg.fontFamily || 'kai';
   $('fillMode').value = cfg.fillMode;
   $('dateAuto').checked = !!cfg.dateAuto;
   $('dateManual').value = cfg.dateManual || '';
@@ -83,12 +82,15 @@ function fillSettings() {
   $('inReading').value = (cfg.readingLines || []).join('\n');
   $('inMusicUrl').value = cfg.musicUrl || '';
   $('inWorshipUrl').value = cfg.worshipUrl || '';
+  $('worshipPreset').value = cfg.worshipPreset || '';
+  $('useWorshipPreset').checked = !!cfg.useWorshipPreset;
+  applyWorshipMode();
+  $('inZoomUrl').value = cfg.zoomUrl || '';
   $('musicVolume').value = cfg.musicVolume;
   $('autoPlayMusic').checked = !!cfg.autoPlayMusic;
 }
 
 function collectSettings() {
-  cfg.fontFamily = $('fontFamily').value;
   cfg.fillMode = $('fillMode').value;
   cfg.dateAuto = $('dateAuto').checked;
   cfg.dateManual = $('dateManual').value.trim();
@@ -98,9 +100,32 @@ function collectSettings() {
   cfg.scriptureLabel = $('inScriptureLabel').value;
   cfg.readingLines = $('inReading').value.split('\n').map((s) => s.trim()).filter(Boolean);
   cfg.musicUrl = $('inMusicUrl').value.trim();
-  cfg.worshipUrl = $('inWorshipUrl').value.trim();
+  cfg.useWorshipPreset = $('useWorshipPreset').checked;
+  cfg.worshipPreset = $('worshipPreset').value;
+  // 敬拜音樂來源：勾選歌單→用下拉選的；否則→用自己貼的連結
+  cfg.worshipUrl = cfg.useWorshipPreset ? cfg.worshipPreset : $('inWorshipUrl').value.trim();
+  cfg.zoomUrl = $('inZoomUrl').value.trim();
   cfg.musicVolume = parseFloat($('musicVolume').value);
   cfg.autoPlayMusic = $('autoPlayMusic').checked;
+}
+
+// 依「使用常用敬拜音樂歌單」勾選，切換顯示下拉選單或貼連結欄
+function applyWorshipMode() {
+  const usePreset = $('useWorshipPreset').checked;
+  $('worshipPresetRow').classList.toggle('hidden', !usePreset);
+  $('worshipUrlRow').classList.toggle('hidden', usePreset);
+}
+
+async function pasteInto(inputId) {
+  const txt = await window.api.readClipboard();
+  if (txt && txt.trim()) {
+    const el = $(inputId);
+    el.value = txt.trim();
+    el.dispatchEvent(new Event('change'));
+    toast('已貼上');
+  } else {
+    toast('剪貼簿沒有文字');
+  }
 }
 
 let saveTimer = null;
@@ -131,12 +156,13 @@ async function prefetch(kind) {
 // ---------- 背景音樂 ----------
 async function resolveAndPlayMusic() {
   if (!cfg.musicUrl) { toast('請先在設定貼上背景音樂 YouTube 連結'); openSettings(); return; }
+  const a = $('bgAudio');
   showBadge('背景音樂 準備中…');
   const r = await window.api.ensureMedia(cfg.musicUrl, 'audio');
   hideBadge();
   if (!r.ok) { toast('背景音樂下載失敗：' + r.error, 4000); return; }
-  const a = $('bgAudio');
-  a.src = r.path;
+  // 只有在音源不同（換歌或首次）時才重設 src；同一首則保留播放進度續播
+  if (a.src !== r.path) a.src = r.path;
   a.volume = cfg.musicVolume;
   try { await a.play(); } catch (e) { toast('播放失敗：' + e.message, 3000); return; }
   musicPlaying = true;
@@ -204,7 +230,9 @@ function backToCover() {
   $('worshipLoading').classList.add('hidden');
   $('btnBack').classList.add('hidden');
   $('btnWorship').classList.remove('hidden');
-  if (musicResumeAfterWorship) resolveAndPlayMusic();
+  showToolbar(); // 返回封面後立即顯示工具列
+  // 返回封面（含敬拜播畢自動返回、中途手動返回）一律自動開啟背景音樂
+  if (cfg.musicUrl && !musicPlaying) resolveAndPlayMusic();
 }
 
 // ---------- 背景圖：拖放與選取 ----------
@@ -261,27 +289,76 @@ function setupWorshipControls() {
   });
   v.addEventListener('play', () => { $('wPlay').textContent = '⏸'; });
   v.addEventListener('pause', () => { $('wPlay').textContent = '▶'; });
+  v.addEventListener('ended', backToCover); // 影片播畢自動返回封面
   seek.addEventListener('input', () => {
     if (v.duration) v.currentTime = (parseFloat(seek.value) / 1000) * v.duration;
   });
   $('wPlay').addEventListener('click', () => { if (v.paused) v.play(); else v.pause(); });
   $('wReturn').addEventListener('click', backToCover);
+  $('wMin').addEventListener('click', () => window.api.minimizeWindow());
+  $('wClose').addEventListener('click', () => window.api.closeWindow());
 }
 
 // ---------- 設定開關 ----------
 function openSettings() {
   fillSettings();
   $('settingsPanel').classList.remove('hidden');
+  $('settingsBackdrop').classList.remove('hidden');
   $('toolbar').classList.add('show');
   refreshYtDlpVersion();
 }
 function closeSettings() {
   $('settingsPanel').classList.add('hidden');
+  $('settingsBackdrop').classList.add('hidden');
 }
 
 async function refreshYtDlpVersion() {
   const v = await window.api.ytDlpVersion();
   $('ytdlpVer').textContent = v || '未安裝（請確認 yt-dlp）';
+}
+
+// ---------- App 自動更新 ----------
+function setupAppUpdater() {
+  // 顯示目前版本
+  window.api.appVersion().then((v) => { $('appVer').textContent = v || '—'; });
+
+  // 「檢查軟體更新」按鈕
+  $('btnAppUpdate').addEventListener('click', async () => {
+    $('appUpdateMsg').textContent = '檢查中…';
+    $('btnAppUpdate').disabled = true;
+    const r = await window.api.checkAppUpdate();
+    $('btnAppUpdate').disabled = false;
+    if (!r.ok) { $('appUpdateMsg').textContent = r.error || '檢查失敗'; return; }
+    if (r.available) {
+      $('appUpdateMsg').textContent = `發現新版本 ${r.version}，開始下載…`;
+      $('appUpdateProgress').classList.remove('hidden');
+      const d = await window.api.downloadAppUpdate();
+      if (!d.ok) $('appUpdateMsg').textContent = '下載失敗：' + d.error;
+    } else {
+      $('appUpdateMsg').textContent = '已是最新版本';
+    }
+  });
+
+  // 「重新啟動以安裝」按鈕
+  $('btnAppInstall').addEventListener('click', () => window.api.quitAndInstall());
+
+  // 主進程推來的更新事件
+  window.api.onUpdateAvailable((d) => {
+    toast(`發現新版本 ${d.version}，可到設定更新`, 4000);
+    $('appUpdateMsg').textContent = `發現新版本 ${d.version}`;
+  });
+  window.api.onUpdateProgress((d) => {
+    $('appUpdateProgress').classList.remove('hidden');
+    $('appUpdatePct').textContent = Math.round(d.percent || 0);
+  });
+  window.api.onUpdateDownloaded((d) => {
+    $('appUpdateProgress').classList.add('hidden');
+    $('appUpdateMsg').textContent = `新版本 ${d.version} 已下載完成`;
+    $('btnAppInstall').classList.remove('hidden');
+    toast('更新已下載，按「重新啟動以安裝更新」即可完成', 5000);
+  });
+  window.api.onUpdateError((d) => { $('appUpdateMsg').textContent = '更新錯誤：' + d.error; });
+  window.api.onUpdateNone(() => { $('appUpdateMsg').textContent = '已是最新版本'; });
 }
 
 // ---------- 初始化 ----------
@@ -301,6 +378,13 @@ async function init() {
   $('btnBack').addEventListener('click', backToCover);
   $('btnMin').addEventListener('click', () => window.api.minimizeWindow());
   $('btnClose').addEventListener('click', () => window.api.closeWindow());
+  $('btnPasteMusic').addEventListener('click', () => pasteInto('inMusicUrl'));
+  $('btnPasteWorship').addEventListener('click', () => pasteInto('inWorshipUrl'));
+  $('btnPasteZoom').addEventListener('click', () => pasteInto('inZoomUrl'));
+  $('btnZoom').addEventListener('click', () => {
+    if (cfg.zoomUrl) window.api.openExternal(zoomLaunchUrl(cfg.zoomUrl));
+    else { toast('請先在設定貼上 Zoom 會議連結'); openSettings(); }
+  });
   $('btnPickImage').addEventListener('click', async () => {
     const p = await window.api.pickImage();
     if (p) useImagePath(p);
@@ -315,13 +399,26 @@ async function init() {
   });
 
   // 設定即時變更
-  ['fontFamily','fillMode','dateAuto','dateManual','inTitle1','inTitle2','inTitle3',
-   'inScriptureLabel','inReading','inMusicUrl','inWorshipUrl','musicVolume','autoPlayMusic']
+  ['fillMode','dateAuto','dateManual','inTitle1','inTitle2','inTitle3',
+   'inScriptureLabel','inReading','inMusicUrl','inWorshipUrl','inZoomUrl','musicVolume','autoPlayMusic',
+   'useWorshipPreset','worshipPreset']
     .forEach((id) => {
       const el = $(id);
       el.addEventListener('input', onSettingsChanged);
       el.addEventListener('change', onSettingsChanged);
     });
+
+  // 勾選「使用常用敬拜音樂歌單」→ 切換顯示下拉/連結欄，並套用來源
+  $('useWorshipPreset').addEventListener('change', () => {
+    applyWorshipMode();
+    collectSettings();
+    if (cfg.worshipUrl) prefetch('video');
+  });
+  // 下拉選了常用敬拜音樂 → 立即套用並背景快取
+  $('worshipPreset').addEventListener('change', () => {
+    collectSettings();
+    if (cfg.useWorshipPreset && cfg.worshipUrl) prefetch('video');
+  });
 
   // URL 變更時在背景預先下載快取
   $('inMusicUrl').addEventListener('change', () => { collectSettings(); prefetch('audio'); });
@@ -339,6 +436,19 @@ async function init() {
 
   setupDragDrop();
   setupWorshipControls();
+  setupAppUpdater();
+
+  // 點透明捕捉層（設定面板以外的空白處）→ 關閉設定
+  $('settingsBackdrop').addEventListener('click', closeSettings);
+
+  // 點其他按鈕（工具列等非拖動元件）→ 自動關閉設定
+  document.addEventListener('click', (e) => {
+    const panel = $('settingsPanel');
+    if (panel.classList.contains('hidden')) return;
+    if (panel.contains(e.target)) return;      // 點面板內部不關
+    if (e.target.closest('#btnSettings')) return; // 齒輪自己負責切換
+    closeSettings();
+  });
 
   // 自動隱藏工具條
   window.addEventListener('mousemove', showToolbar);

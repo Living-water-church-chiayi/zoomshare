@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = require('fs/promises');
@@ -9,6 +9,7 @@ const crypto = require('crypto');
 const { execFile, spawn } = require('child_process');
 const { promisify } = require('util');
 const execFileP = promisify(execFile);
+const { autoUpdater } = require('electron-updater');
 
 // 允許音/視訊在無使用者互動下自動播放（背景音樂 / 敬拜）
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -30,10 +31,13 @@ const DEFAULT_CONFIG = {
   fillMode: 'blur',
   musicUrl: '',
   worshipUrl: '',
+  useWorshipPreset: false,
+  worshipPreset: '',
   musicVolume: 0.8,
   autoPlayMusic: true,
   videoQuality: 1080,
-  fontFamily: 'sans-bold'
+  fontFamily: 'sans-bold',
+  zoomUrl: 'https://us06web.zoom.us/j/77730692079?pwd=EbYm30dRERJb8FI3GRHadpkqdNLfE4.1'
 };
 
 // ---------- 二進位位置（yt-dlp / deno / ffmpeg） ----------
@@ -234,10 +238,29 @@ function registerIpc() {
 
   ipcMain.handle('ytdlp:update', async () => autoUpdateYtDlp());
   ipcMain.handle('ytdlp:version', async () => localYtDlpVersion());
+
+  // ---------- App 自動更新（electron-updater / GitHub Releases） ----------
+  ipcMain.handle('app:version', () => app.getVersion());
+  ipcMain.handle('app:checkUpdate', async () => {
+    if (!app.isPackaged) return { ok: false, error: '開發模式不檢查更新（請用打包後的版本）' };
+    try {
+      const r = await autoUpdater.checkForUpdates();
+      const info = r && r.updateInfo;
+      const available = !!info && info.version !== app.getVersion();
+      return { ok: true, available, version: info ? info.version : app.getVersion() };
+    } catch (e) { return { ok: false, error: e.message }; }
+  });
+  ipcMain.handle('app:downloadUpdate', async () => {
+    try { await autoUpdater.downloadUpdate(); return { ok: true }; }
+    catch (e) { return { ok: false, error: e.message }; }
+  });
+  ipcMain.handle('app:quitAndInstall', () => { autoUpdater.quitAndInstall(); });
+
   ipcMain.handle('open:external', async (_e, url) => { shell.openExternal(url); });
 
   ipcMain.handle('win:minimize', () => { if (mainWindow) mainWindow.minimize(); });
   ipcMain.handle('win:close', () => { if (mainWindow) mainWindow.close(); });
+  ipcMain.handle('clipboard:read', () => clipboard.readText());
 }
 
 // ---------- 視窗 ----------
@@ -255,13 +278,43 @@ function createWindow() {
   mainWindow.setAspectRatio(16 / 9); // 鎖 16:9，可自由縮放
   mainWindow.removeMenu();
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+
+  // 右鍵複製/貼上選單（無邊框視窗預設沒有）
+  mainWindow.webContents.on('context-menu', (_e, params) => {
+    const tmpl = [];
+    if (params.isEditable) {
+      tmpl.push({ role: 'cut' }, { role: 'copy' }, { role: 'paste' },
+                { type: 'separator' }, { role: 'selectAll' });
+    } else if (params.selectionText) {
+      tmpl.push({ role: 'copy' }, { type: 'separator' }, { role: 'selectAll' });
+    }
+    if (tmpl.length) Menu.buildFromTemplate(tmpl).popup({ window: mainWindow });
+  });
+}
+
+// ---------- App 自動更新設定 ----------
+function sendUpdate(channel, payload) {
+  if (mainWindow && !mainWindow.isDestroyed())
+    mainWindow.webContents.send(channel, payload);
+}
+function setupAutoUpdater() {
+  autoUpdater.autoDownload = false;            // 由使用者按下載才下載
+  autoUpdater.autoInstallOnAppQuit = true;     // 下載後關閉 app 時自動安裝
+  autoUpdater.on('update-available', (info) => sendUpdate('update:available', { version: info.version }));
+  autoUpdater.on('update-not-available', () => sendUpdate('update:none', {}));
+  autoUpdater.on('error', (err) => sendUpdate('update:error', { error: String(err && err.message || err) }));
+  autoUpdater.on('download-progress', (p) => sendUpdate('update:progress', { percent: p.percent }));
+  autoUpdater.on('update-downloaded', (info) => sendUpdate('update:downloaded', { version: info.version }));
 }
 
 app.whenReady().then(async () => {
   registerIpc();
   await ensureWritableYtDlp();
   createWindow();
+  setupAutoUpdater();
   autoUpdateYtDlp().then((r) => { if (r && r.updated) console.log('yt-dlp 已更新至', r.to); });
+  // 開機靜默檢查 App 更新（有新版時前端會收到 update:available 提示）
+  if (app.isPackaged) autoUpdater.checkForUpdates().catch(() => {});
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

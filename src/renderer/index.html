@@ -39,17 +39,19 @@
         <input id="wSeek" class="wseek" type="range" min="0" max="1000" value="0" step="1" />
         <span id="wDur" class="wtime">0:00</span>
         <button id="wReturn" class="wbtn" title="返回封面">↩ 返回封面</button>
+        <button id="wMin" class="wbtn" title="縮小視窗">—</button>
+        <button id="wClose" class="wbtn wbtn-close" title="關閉軟體">✕ 關閉</button>
       </div>
     </div>
   </div>
 
   <!-- 自動隱藏工具條 -->
   <div id="toolbar" class="toolbar">
-    <span class="drag-grip" title="拖動視窗">⠿</span>
     <button id="btnSettings" title="設定">⚙</button>
     <button id="btnMusic" title="背景音樂">🎵</button>
     <button id="btnWorship" title="敬拜">▶ 敬拜</button>
     <button id="btnBack" title="返回封面" class="hidden">↩ 返回封面</button>
+    <button id="btnZoom" title="加入 Zoom 會議" class="btn-zoom">📹 Zoom</button>
     <span class="tb-sep"></span>
     <button id="btnMin" title="縮小視窗">—</button>
     <button id="btnClose" title="關閉" class="btn-close">✕</button>
@@ -57,6 +59,9 @@
 
   <!-- 背景音樂 -->
   <audio id="bgAudio" loop></audio>
+
+  <!-- 點此透明層可關閉設定（因畫面為可拖動區，點擊事件會被吞，故用此層捕捉） -->
+  <div id="settingsBackdrop" class="settings-backdrop hidden"></div>
 
   <!-- 設定抽屜 -->
   <div id="settingsPanel" class="settings hidden">
@@ -89,19 +94,6 @@
 
       <fieldset>
         <legend>文字</legend>
-        <label>字體
-          <select id="fontFamily">
-            <option value="kai">楷體（全字庫）</option>
-            <option value="sans-regular">思源黑體 Regular</option>
-            <option value="sans-medium">思源黑體 Medium</option>
-            <option value="sans-bold">思源黑體 Bold</option>
-            <option value="sans-heavy">思源黑體 Heavy（最粗）</option>
-            <option value="serif-regular">思源宋體 Regular</option>
-            <option value="serif-medium">思源宋體 Medium</option>
-            <option value="serif-bold">思源宋體 Bold</option>
-            <option value="serif-heavy">思源宋體 Heavy（最粗）</option>
-          </select>
-        </label>
         <label>標題（日期後）<input type="text" id="inTitle1" /></label>
         <label>副標題 1<input type="text" id="inTitle2" /></label>
         <label>副標題 2<input type="text" id="inTitle3" /></label>
@@ -113,10 +105,68 @@
 
       <fieldset>
         <legend>YouTube</legend>
-        <label>背景音樂連結<input type="text" id="inMusicUrl" placeholder="https://www.youtube.com/watch?v=..." /></label>
+        <label>背景音樂連結
+          <div class="url-row">
+            <input type="text" id="inMusicUrl" placeholder="https://www.youtube.com/watch?v=..." />
+            <button type="button" id="btnPasteMusic" class="paste-btn">貼上</button>
+          </div>
+        </label>
         <label class="inline"><input type="checkbox" id="autoPlayMusic" /> 開啟軟體時自動播放背景音樂</label>
         <label>音量 <input type="range" id="musicVolume" min="0" max="1" step="0.05" /></label>
-        <label>敬拜影片連結<input type="text" id="inWorshipUrl" placeholder="https://www.youtube.com/watch?v=..." /></label>
+
+        <label>敬拜音樂</label>
+        <label class="inline"><input type="checkbox" id="useWorshipPreset" /> 使用常用敬拜音樂歌單</label>
+        <div id="worshipPresetRow">
+          <label>選擇常用敬拜音樂
+            <select id="worshipPreset">
+              <option value="">— 選擇敬拜音樂 —</option>
+              <optgroup label="盛曉玫 泥土音樂">
+                <option value="https://www.youtube.com/watch?v=uSHI-9s4dTU">依然愛我</option>
+                <option value="https://www.youtube.com/watch?v=lfP-3JLVvaw">活出愛</option>
+                <option value="https://www.youtube.com/watch?v=Q3m-in8i6FU">幸福</option>
+                <option value="https://www.youtube.com/watch?v=96WDXhk6qjU">有一天</option>
+                <option value="https://www.youtube.com/watch?v=eGAeeQxZ6FM">因為祢</option>
+              </optgroup>
+              <optgroup label="讚美之泉">
+                <option value="https://www.youtube.com/watch?v=v76-wz1mv8w">祢的恩典夠我用</option>
+                <option value="https://www.youtube.com/watch?v=mVqSmWIjoZU">好喜歡與你在一起</option>
+                <option value="https://www.youtube.com/watch?v=kvrRtRe9AoU">我們的神</option>
+              </optgroup>
+              <optgroup label="新店行道會">
+                <option value="https://www.youtube.com/watch?v=KqlvbYd5uJA">叫我抬起頭的神</option>
+                <option value="https://www.youtube.com/watch?v=v-k7ojwYE08">這裡有榮耀</option>
+              </optgroup>
+            </select>
+          </label>
+        </div>
+        <div id="worshipUrlRow">
+          <label>敬拜影片連結（自己貼上下載）
+            <div class="url-row">
+              <input type="text" id="inWorshipUrl" placeholder="https://www.youtube.com/watch?v=..." />
+              <button type="button" id="btnPasteWorship" class="paste-btn">貼上</button>
+            </div>
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Zoom 會議</legend>
+        <label>會議連結
+          <div class="url-row">
+            <input type="text" id="inZoomUrl" placeholder="https://...zoom.us/j/..." />
+            <button type="button" id="btnPasteZoom" class="paste-btn">貼上</button>
+          </div>
+        </label>
+        <p class="hint">工具列的「📹 Zoom」按鈕會開啟此連結加入會議。</p>
+      </fieldset>
+
+      <fieldset>
+        <legend>軟體更新</legend>
+        <p class="hint">目前版本：<span id="appVer">—</span></p>
+        <button id="btnAppUpdate" class="full-btn">檢查軟體更新</button>
+        <div id="appUpdateProgress" class="hint hidden">下載中 <span id="appUpdatePct">0</span>%</div>
+        <button id="btnAppInstall" class="full-btn hidden" style="margin-top:8px;background:#2e9e5b;">重新啟動以安裝更新</button>
+        <p id="appUpdateMsg" class="hint"></p>
       </fieldset>
 
       <fieldset>

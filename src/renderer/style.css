@@ -25,6 +25,11 @@ html, body {
   user-select: none;
 }
 
+/* 整個畫面都可拖動視窗；互動元件除外 */
+body { -webkit-app-region: drag; }
+.toolbar, .settings, .worship-controls, .worship-layer,
+button, input, select, textarea, a { -webkit-app-region: no-drag; }
+
 /* 16:9 畫面（視窗已鎖 16:9，畫布填滿） */
 .canvas {
   position: relative;
@@ -62,7 +67,7 @@ html, body {
   display: flex;
   flex-direction: column;
   color: #fff;
-  font-family: var(--cover-font);
+  font-family: 'SHSans-Bold', sans-serif; /* 鎖定思源黑體 Bold */
   -webkit-text-stroke: 0.6cqw #000; /* 白字＋黑色外框（描邊放在字後，白字完整不糊） */
   paint-order: stroke fill;
   text-shadow: 0 0.12cqw 0.3cqw rgba(0,0,0,.45);
@@ -136,6 +141,7 @@ html, body {
   white-space: nowrap;
 }
 .worship-controls .wbtn:hover { background: rgba(255,255,255,0.3); }
+.worship-controls .wbtn-close:hover { background: #e23b3b; }
 .worship-controls .wtime {
   color: #fff;
   font-size: 14px;
@@ -180,18 +186,19 @@ html, body {
 }
 .toolbar button:hover { background: rgba(255,255,255,0.25); }
 .toolbar button.active { background: #2d7ef7; }
-.toolbar .drag-grip {
-  -webkit-app-region: drag;        /* 這塊可拖動整個視窗 */
-  cursor: move;
-  color: #9aa;
-  font-size: 18px;
-  padding: 0 6px;
-  display: flex;
-  align-items: center;
-  letter-spacing: -2px;
-}
+.toolbar .btn-zoom { background: #2d8cff; }
+.toolbar .btn-zoom:hover { background: #4a9dff; }
 .toolbar .tb-sep { width: 1px; align-self: stretch; background: rgba(255,255,255,0.18); margin: 4px 2px; }
 .toolbar .btn-close:hover { background: #e23b3b; }
+
+/* 設定背後的透明點擊捕捉層（可拖動區會吞點擊，故用它關閉設定） */
+.settings-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 15;                 /* 高於封面、低於工具列(20)與設定(30) */
+  background: transparent;
+  -webkit-app-region: no-drag;
+}
 
 /* 設定抽屜 */
 .settings {
@@ -232,6 +239,14 @@ html, body {
 }
 .settings .full-btn:hover { background: #3a8bff; }
 .settings .hint { font-size: 12px; color: #888; margin: 6px 0; }
+.settings .url-row { display: flex; gap: 6px; margin-top: 4px; }
+.settings .url-row input { margin-top: 0; flex: 1; min-width: 0; }
+.settings .paste-btn {
+  flex: 0 0 auto; padding: 7px 12px; background: #3a3a3a; color: #fff;
+  border: 1px solid #555; border-radius: 6px; cursor: pointer;
+  font-family: var(--kai); font-size: 13px;
+}
+.settings .paste-btn:hover { background: #4a4a4a; }
 
 .dl-badge {
   position: fixed; left: 14px; bottom: 14px;
