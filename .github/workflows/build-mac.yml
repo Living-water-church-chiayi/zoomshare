@@ -1,0 +1,31 @@
+name: Build macOS (.dmg)
+
+# 沒有 Mac 也能打包：用 GitHub 的雲端 macOS 幫你 build 出 .dmg 並上傳到 Release。
+# 觸發方式：Actions 分頁 → 左側選此工作流程 → 右上「Run workflow」（在 main 上跑）。
+# 也會在有新 Release 發佈時自動補上 mac 版。
+on:
+  workflow_dispatch: {}
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+    env:
+      MAC_ARCH: x86_64                        # x64：Intel 原生 + Apple Silicon 走 Rosetta，涵蓋所有 Mac
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # 發佈用（上傳到 Release）
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'    # 不簽章（未簽名 App 首次開啟需右鍵→打開）
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: 安裝相依套件
+        run: npm install
+      - name: 下載 mac 用的 yt-dlp / deno / ffmpeg
+        run: bash scripts/setup-mac.sh
+      - name: 打包並發佈 mac .dmg（版號取自 package.json）
+        run: npx electron-builder --mac --x64 --publish always

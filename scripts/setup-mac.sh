@@ -6,8 +6,8 @@ cd "$(dirname "$0")/.."
 DEST="resources/bin/mac"
 mkdir -p "$DEST"
 
-ARCH="$(uname -m)"   # arm64 (Apple Silicon) 或 x86_64 (Intel)
-echo "偵測到 CPU 架構：$ARCH"
+ARCH="${MAC_ARCH:-$(uname -m)}"   # 可用 MAC_ARCH 覆寫（arm64 / x86_64）；否則偵測
+echo "目標 CPU 架構：$ARCH"
 
 # ---- yt-dlp（抽取串流）----
 echo "下載 yt-dlp ..."
