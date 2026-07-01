@@ -4,6 +4,7 @@ publish:
   provider: github
   owner: Living-water-church-chiayi
   repo: zoomshare
+  releaseType: release
 directories:
   output: dist
 files:
