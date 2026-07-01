@@ -29,7 +29,7 @@ mac:
     - dmg
     - zip
   category: public.app-category.productivity
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  artifactName: Lingxiu-Cover-${version}-${arch}.${ext}   # 純 ASCII，避免 CJK 檔名上傳失敗
   extraResources:
     - from: resources/bin/mac
       to: bin
