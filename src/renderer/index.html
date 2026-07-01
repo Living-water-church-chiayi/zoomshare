@@ -161,6 +161,23 @@
       </fieldset>
 
       <fieldset>
+        <legend>媒體快取</legend>
+        <p class="hint">目前佔用：<span id="cacheSize">計算中…</span></p>
+        <label>自動清理：超過幾天沒用到的快取
+          <select id="cacheKeepDays">
+            <option value="7">7 天</option>
+            <option value="14">14 天</option>
+            <option value="30">30 天</option>
+            <option value="90">90 天</option>
+            <option value="0">不自動清理</option>
+          </select>
+        </label>
+        <button id="btnCleanCache" class="full-btn">立即清理全部快取</button>
+        <p class="hint">清理時會保留目前設定使用中的背景音樂與敬拜音樂。</p>
+        <p id="cacheMsg" class="hint"></p>
+      </fieldset>
+
+      <fieldset>
         <legend>軟體更新</legend>
         <p class="hint">目前版本：<span id="appVer">—</span></p>
         <button id="btnAppUpdate" class="full-btn">檢查軟體更新</button>

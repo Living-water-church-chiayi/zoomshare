@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('api', {
   ensureMedia: (url, kind, quality) => ipcRenderer.invoke('media:ensure', { url, kind, quality }),
   mediaStatus: (url, kind) => ipcRenderer.invoke('media:status', { url, kind }),
   onMediaProgress: (cb) => ipcRenderer.on('media:progress', (_e, d) => cb(d)),
+  cacheSize: () => ipcRenderer.invoke('cache:size'),
+  cleanCache: (keepDays) => ipcRenderer.invoke('cache:clean', keepDays),
 
   updateYtDlp: () => ipcRenderer.invoke('ytdlp:update'),
   ytDlpVersion: () => ipcRenderer.invoke('ytdlp:version'),

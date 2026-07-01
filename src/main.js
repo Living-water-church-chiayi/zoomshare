@@ -36,6 +36,7 @@ const DEFAULT_CONFIG = {
   musicVolume: 0.8,
   autoPlayMusic: true,
   videoQuality: 1080,
+  cacheKeepDays: 30,
   fontFamily: 'sans-bold',
   zoomUrl: 'https://us06web.zoom.us/j/77730692079?pwd=EbYm30dRERJb8FI3GRHadpkqdNLfE4.1'
 };
@@ -174,12 +175,56 @@ async function ensureMedia(url, kind, quality) {
   if (!url || !/^https?:\/\//i.test(url)) throw new Error('請貼上有效的 YouTube 連結');
   await fsp.mkdir(CACHE_DIR(), { recursive: true });
   const out = cachedFilePath(url, kind);
-  if (fs.existsSync(out)) return out; // 已快取，直接用
+  if (fs.existsSync(out)) {
+    fsp.utimes(out, new Date(), new Date()).catch(() => {}); // 觸碰：更新最後使用時間，避免被當成舊快取清掉
+    return out;
+  }
   const key = cacheKey(url, kind);
   if (inflight.has(key)) return inflight.get(key);
   const p = downloadMedia(url, kind, quality).finally(() => inflight.delete(key));
   inflight.set(key, p);
   return p;
+}
+
+// ---------- 快取清理 ----------
+// 計算 media/ 目前佔用大小（bytes）
+async function cacheSize() {
+  try {
+    const files = await fsp.readdir(CACHE_DIR());
+    let total = 0;
+    for (const f of files) {
+      try { total += (await fsp.stat(path.join(CACHE_DIR(), f))).size; } catch {}
+    }
+    return total;
+  } catch { return 0; }
+}
+// 清理快取。keepDays<=0 表示清全部（仍保留目前設定在用的背景音樂/敬拜音樂）
+async function cleanCache(keepDays) {
+  const result = { removed: 0, freed: 0 };
+  let files;
+  try { files = await fsp.readdir(CACHE_DIR()); } catch { return result; }
+  // 目前設定正在用的檔，永不刪
+  const cfg = await readConfig();
+  const keep = new Set();
+  if (cfg.musicUrl) keep.add(path.basename(cachedFilePath(cfg.musicUrl, 'audio')));
+  if (cfg.worshipUrl) keep.add(path.basename(cachedFilePath(cfg.worshipUrl, 'video')));
+  const now = Date.now();
+  const cutoff = keepDays > 0 ? now - keepDays * 86400000 : now + 1; // keepDays<=0 → 全數過期
+  for (const f of files) {
+    if (keep.has(f)) continue;
+    const fp = path.join(CACHE_DIR(), f);
+    try {
+      const st = await fsp.stat(fp);
+      if (!st.isFile()) continue;
+      const lastUsed = st.mtimeMs; // 觸碰機制讓 mtime = 最後使用時間
+      if (lastUsed < cutoff) {
+        await fsp.unlink(fp);
+        result.removed++;
+        result.freed += st.size;
+      }
+    } catch {}
+  }
+  return result;
 }
 
 // ---------- 設定 ----------
@@ -235,6 +280,8 @@ function registerIpc() {
     try { return { cached: !!url && fs.existsSync(cachedFilePath(url, kind)) }; }
     catch { return { cached: false }; }
   });
+  ipcMain.handle('cache:size', async () => cacheSize());
+  ipcMain.handle('cache:clean', async (_e, keepDays) => cleanCache(typeof keepDays === 'number' ? keepDays : 0));
 
   ipcMain.handle('ytdlp:update', async () => autoUpdateYtDlp());
   ipcMain.handle('ytdlp:version', async () => localYtDlpVersion());
@@ -313,6 +360,13 @@ app.whenReady().then(async () => {
   createWindow();
   setupAutoUpdater();
   autoUpdateYtDlp().then((r) => { if (r && r.updated) console.log('yt-dlp 已更新至', r.to); });
+  // 開機自動清理過久沒用到的媒體快取（依設定的保留天數；保留目前在用的背景音樂/敬拜音樂）
+  readConfig().then((cfg) => {
+    const days = typeof cfg.cacheKeepDays === 'number' ? cfg.cacheKeepDays : 30;
+    if (days > 0) cleanCache(days).then((r) => {
+      if (r.removed) console.log(`已清理 ${r.removed} 個舊快取，釋放 ${(r.freed / 1048576).toFixed(0)} MB`);
+    });
+  });
   // 開機靜默檢查 App 更新（有新版時前端會收到 update:available 提示）
   if (app.isPackaged) autoUpdater.checkForUpdates().catch(() => {});
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

@@ -88,6 +88,7 @@ function fillSettings() {
   $('inZoomUrl').value = cfg.zoomUrl || '';
   $('musicVolume').value = cfg.musicVolume;
   $('autoPlayMusic').checked = !!cfg.autoPlayMusic;
+  $('cacheKeepDays').value = String(cfg.cacheKeepDays != null ? cfg.cacheKeepDays : 30);
 }
 
 function collectSettings() {
@@ -107,6 +108,7 @@ function collectSettings() {
   cfg.zoomUrl = $('inZoomUrl').value.trim();
   cfg.musicVolume = parseFloat($('musicVolume').value);
   cfg.autoPlayMusic = $('autoPlayMusic').checked;
+  cfg.cacheKeepDays = parseInt($('cacheKeepDays').value, 10);
 }
 
 // 依「使用常用敬拜音樂歌單」勾選，切換顯示下拉選單或貼連結欄
@@ -361,6 +363,26 @@ function setupAppUpdater() {
   window.api.onUpdateNone(() => { $('appUpdateMsg').textContent = '已是最新版本'; });
 }
 
+// ---------- 媒體快取 ----------
+function fmtBytes(b) {
+  if (!b) return '0 MB';
+  const mb = b / 1048576;
+  return mb >= 1024 ? (mb / 1024).toFixed(2) + ' GB' : mb.toFixed(0) + ' MB';
+}
+async function refreshCacheSize() {
+  const b = await window.api.cacheSize();
+  $('cacheSize').textContent = fmtBytes(b);
+}
+function setupCache() {
+  refreshCacheSize();
+  $('btnCleanCache').addEventListener('click', async () => {
+    $('cacheMsg').textContent = '清理中…';
+    const r = await window.api.cleanCache(0); // 0 = 清全部（仍保留使用中的）
+    $('cacheMsg').textContent = `已清理 ${r.removed} 個檔案，釋放 ${fmtBytes(r.freed)}`;
+    refreshCacheSize();
+  });
+}
+
 // ---------- 初始化 ----------
 async function init() {
   const { cfg: loaded, backgroundUrl } = await window.api.getConfig();
@@ -401,7 +423,7 @@ async function init() {
   // 設定即時變更
   ['fillMode','dateAuto','dateManual','inTitle1','inTitle2','inTitle3',
    'inScriptureLabel','inReading','inMusicUrl','inWorshipUrl','inZoomUrl','musicVolume','autoPlayMusic',
-   'useWorshipPreset','worshipPreset']
+   'useWorshipPreset','worshipPreset','cacheKeepDays']
     .forEach((id) => {
       const el = $(id);
       el.addEventListener('input', onSettingsChanged);
@@ -437,6 +459,7 @@ async function init() {
   setupDragDrop();
   setupWorshipControls();
   setupAppUpdater();
+  setupCache();
 
   // 點透明捕捉層（設定面板以外的空白處）→ 關閉設定
   $('settingsBackdrop').addEventListener('click', closeSettings);
