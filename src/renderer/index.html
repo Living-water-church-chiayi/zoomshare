@@ -33,6 +33,7 @@
     <div id="worshipLayer" class="worship-layer hidden">
       <video id="worshipVideo" class="worship-video" playsinline></video>
       <div id="worshipLoading" class="worship-loading hidden">敬拜影片載入中…</div>
+      <div id="worshipHotzone" class="worship-hotzone"></div>
       <div id="worshipControls" class="worship-controls">
         <button id="wPlay" class="wbtn" title="播放/暫停">⏸</button>
         <span id="wCur" class="wtime">0:00</span>
@@ -98,8 +99,19 @@
         <label>副標題 1<input type="text" id="inTitle2" /></label>
         <label>副標題 2<input type="text" id="inTitle3" /></label>
         <label>經文標籤<input type="text" id="inScriptureLabel" /></label>
-        <label>讀經進度（每行一項）
-          <textarea id="inReading" rows="3"></textarea>
+        <label>本日經文（下拉選擇）</label>
+        <select id="bkBook" class="ref-book"></select>
+        <div class="ref-row">
+          <span class="ref-lab">起</span>
+          <select id="bkStartCh"></select><span class="ref-colon">:</span><select id="bkStartV"></select>
+        </div>
+        <div class="ref-row">
+          <span class="ref-lab">迄</span>
+          <select id="bkEndCh"></select><span class="ref-colon">:</span><select id="bkEndV"></select>
+        </div>
+        <p class="hint">預覽：<span id="refPreview"></span></p>
+        <label>其他讀物（每行一項，非聖經）
+          <textarea id="inReading" rows="2" placeholder="《竭誠獻上》《靈命日糧》"></textarea>
         </label>
       </fieldset>
 
@@ -198,6 +210,7 @@
   <div id="dlBadge" class="dl-badge hidden"></div>
   <div id="toast" class="toast hidden"></div>
 
+  <script src="bible.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

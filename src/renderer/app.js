@@ -48,7 +48,10 @@ function applyCover(backgroundUrl) {
 
   const rl = $('readingLines');
   rl.innerHTML = '';
-  (cfg.readingLines || []).forEach((line) => {
+  const lines = [formatRef()].concat(
+    (cfg.readingExtra || '').split('\n').map((s) => s.trim()).filter(Boolean)
+  );
+  lines.forEach((line) => {
     if (!line) return;
     const div = document.createElement('div');
     div.textContent = line;
@@ -70,6 +73,93 @@ function applyFillMode() {
   else blur.classList.remove('black');
 }
 
+// ---------- 本日經文（聖經下拉） ----------
+function bookByName(name) {
+  return window.BIBLE.find((b) => b.n === name) || window.BIBLE[0];
+}
+function clampNum(v, lo, hi) { v = parseInt(v, 10) || lo; return Math.min(hi, Math.max(lo, v)); }
+function fillNumberSelect(sel, n, val, min = 1) {
+  sel.innerHTML = '';
+  for (let i = min; i <= n; i++) {
+    const o = document.createElement('option');
+    o.value = i; o.textContent = i;
+    if (i === val) o.selected = true;
+    sel.appendChild(o);
+  }
+}
+
+// 依「開始」重建「結束」下拉：只列出 ≥ 開始 的章/節（更早的直接隱藏）
+function syncEndOptions(desiredEndCh, desiredEndV) {
+  const bk = bookByName($('bkBook').value);
+  const sc = +$('bkStartCh').value, sv = +$('bkStartV').value;
+  const nCh = bk.v.length;
+  let ec = clampNum(desiredEndCh, sc, nCh);          // 結束章 ≥ 開始章
+  fillNumberSelect($('bkEndCh'), nCh, ec, sc);
+  ec = +$('bkEndCh').value;
+  const vMin = (ec === sc) ? sv : 1;                 // 同章時，結束節 ≥ 開始節
+  const ev = clampNum(desiredEndV, vMin, bk.v[ec - 1]);
+  fillNumberSelect($('bkEndV'), bk.v[ec - 1], ev, vMin);
+}
+function fillBookSelect() {
+  const sel = $('bkBook');
+  sel.innerHTML = '';
+  window.BIBLE.forEach((b) => {
+    const o = document.createElement('option');
+    o.value = b.n; o.textContent = b.n;
+    sel.appendChild(o);
+  });
+}
+function formatRef() {
+  const book = '《' + (cfg.scriptureBook || '') + '》';
+  const sc = cfg.scriptureStartCh, sv = cfg.scriptureStartV, ec = cfg.scriptureEndCh, ev = cfg.scriptureEndV;
+  if (sc === ec) return sv === ev ? `${book}${sc}:${sv}` : `${book}${sc}:${sv}-${ev}`;
+  return `${book}${sc}:${sv}-${ec}:${ev}`;
+}
+function updateRefPreview() { const el = $('refPreview'); if (el) el.textContent = formatRef(); }
+
+// 依 cfg 目前值填入四個下拉
+function fillScriptureControls() {
+  const bk = bookByName(cfg.scriptureBook);
+  cfg.scriptureBook = bk.n;
+  $('bkBook').value = bk.n;
+  const nCh = bk.v.length;
+  const sc = clampNum(cfg.scriptureStartCh, 1, nCh);
+  fillNumberSelect($('bkStartCh'), nCh, sc);
+  fillNumberSelect($('bkStartV'), bk.v[sc - 1], clampNum(cfg.scriptureStartV, 1, bk.v[sc - 1]));
+  // 結束下拉：只列 ≥ 開始（必要時自動上移），並寫回 cfg
+  syncEndOptions(cfg.scriptureEndCh, cfg.scriptureEndV);
+  cfg.scriptureEndCh = +$('bkEndCh').value;
+  cfg.scriptureEndV = +$('bkEndV').value;
+  updateRefPreview();
+}
+
+// 使用者變更下拉時：級聯更新「節」的範圍，並存檔
+function onScriptureChange(which) {
+  const bk = bookByName($('bkBook').value);
+  cfg.scriptureBook = bk.n;
+  const nCh = bk.v.length;
+  if (which === 'book') {
+    fillNumberSelect($('bkStartCh'), nCh, 1);
+    fillNumberSelect($('bkStartV'), bk.v[0], 1);
+    syncEndOptions(1, 1);
+  } else if (which === 'startCh') {
+    fillNumberSelect($('bkStartV'), bk.v[$('bkStartCh').value - 1], 1);
+    syncEndOptions(+$('bkEndCh').value, +$('bkEndV').value); // 開始章變→結束重算（必要時上移）
+  } else if (which === 'startV') {
+    syncEndOptions(+$('bkEndCh').value, +$('bkEndV').value); // 開始節變→同章結束節重算
+  } else if (which === 'endCh') {
+    syncEndOptions(+$('bkEndCh').value, +$('bkEndV').value); // 結束章變→結束節下限重算
+  }
+  cfg.scriptureStartCh = +$('bkStartCh').value;
+  cfg.scriptureStartV = +$('bkStartV').value;
+  cfg.scriptureEndCh = +$('bkEndCh').value;
+  cfg.scriptureEndV = +$('bkEndV').value;
+  updateRefPreview();
+  applyCover(null);
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => window.api.setConfig(cfg), 300);
+}
+
 // ---------- 設定面板 ----------
 function fillSettings() {
   $('fillMode').value = cfg.fillMode;
@@ -79,7 +169,8 @@ function fillSettings() {
   $('inTitle2').value = cfg.title2 || '';
   $('inTitle3').value = cfg.title3 || '';
   $('inScriptureLabel').value = cfg.scriptureLabel || '';
-  $('inReading').value = (cfg.readingLines || []).join('\n');
+  $('inReading').value = cfg.readingExtra || '';
+  fillScriptureControls();
   $('inMusicUrl').value = cfg.musicUrl || '';
   $('inWorshipUrl').value = cfg.worshipUrl || '';
   $('worshipPreset').value = cfg.worshipPreset || '';
@@ -99,7 +190,7 @@ function collectSettings() {
   cfg.title2 = $('inTitle2').value;
   cfg.title3 = $('inTitle3').value;
   cfg.scriptureLabel = $('inScriptureLabel').value;
-  cfg.readingLines = $('inReading').value.split('\n').map((s) => s.trim()).filter(Boolean);
+  cfg.readingExtra = $('inReading').value;
   cfg.musicUrl = $('inMusicUrl').value.trim();
   cfg.useWorshipPreset = $('useWorshipPreset').checked;
   cfg.worshipPreset = $('worshipPreset').value;
@@ -460,6 +551,14 @@ async function init() {
   setupWorshipControls();
   setupAppUpdater();
   setupCache();
+
+  // 本日經文下拉
+  fillBookSelect();
+  $('bkBook').addEventListener('change', () => onScriptureChange('book'));
+  $('bkStartCh').addEventListener('change', () => onScriptureChange('startCh'));
+  $('bkStartV').addEventListener('change', () => onScriptureChange('startV'));
+  $('bkEndCh').addEventListener('change', () => onScriptureChange('endCh'));
+  $('bkEndV').addEventListener('change', () => onScriptureChange('endV'));
 
   // 點透明捕捉層（設定面板以外的空白處）→ 關閉設定
   $('settingsBackdrop').addEventListener('click', closeSettings);

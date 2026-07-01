@@ -27,7 +27,7 @@ html, body {
 
 /* 整個畫面都可拖動視窗；互動元件除外 */
 body { -webkit-app-region: drag; }
-.toolbar, .settings, .worship-controls, .worship-layer,
+.toolbar, .settings, .worship-controls, .worship-hotzone,
 button, input, select, textarea, a { -webkit-app-region: no-drag; }
 
 /* 16:9 畫面（視窗已鎖 16:9，畫布填滿） */
@@ -114,6 +114,14 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
   position: absolute;
   color: #fff;
   font-size: 3cqw;
+}
+/* 底部透明感應區：影片區可拖動視窗，移到底部才喚出控制條 */
+.worship-hotzone {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 15cqh;
+  z-index: 5;
+  background: transparent;
 }
 .worship-controls {
   position: absolute;
@@ -247,6 +255,12 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
   font-family: var(--kai); font-size: 13px;
 }
 .settings .paste-btn:hover { background: #4a4a4a; }
+.settings .ref-book { width: 100%; margin-top: 4px; }
+.settings .ref-row { display: flex; align-items: center; gap: 6px; margin: 6px 0; }
+.settings .ref-row select { flex: 1; min-width: 0; margin-top: 0; }
+.settings .ref-lab { color: #9ab; font-size: 13px; width: 1.6em; flex: 0 0 auto; }
+.settings .ref-colon { color: #ccc; flex: 0 0 auto; }
+#refPreview { color: #cfe3ff; }
 
 .dl-badge {
   position: fixed; left: 14px; bottom: 14px;
