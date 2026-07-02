@@ -66,7 +66,8 @@ function resolveYtDlpPath() {
 // 讓 yt-dlp 找得到 deno（解 JS 挑戰）與 ffmpeg（合併/轉檔）
 function spawnEnv() {
   const sep = process.platform === 'win32' ? ';' : ':';
-  return { ...process.env, PATH: bundledBinDir() + sep + (process.env.PATH || '') };
+  // NO_COLOR：關閉 yt-dlp 進度行的 ANSI 色碼（macOS 預設會上色，導致百分比解析失敗）
+  return { ...process.env, NO_COLOR: '1', PATH: bundledBinDir() + sep + (process.env.PATH || '') };
 }
 
 // ---------- yt-dlp 自動更新 ----------
@@ -160,9 +161,24 @@ function downloadMedia(url, kind, quality) {
 
     const child = spawn(resolveYtDlpPath(), args, { windowsHide: true, env: spawnEnv() });
     let stderr = '';
+    let destCount = 0; // 已開始下載的檔數（影片=影像+聲音兩檔）
     const onLine = (buf) => {
-      const m = String(buf).match(/\[download\]\s+([\d.]+)%/);
-      if (m) sendProgress(kind, parseFloat(m[1]));
+      const text = String(buf).replace(/\x1B\[[0-9;]*[A-Za-z]/g, ''); // 去除 ANSI 色碼
+      const dests = text.match(/\[download\]\s+Destination:/g);
+      if (dests) destCount += dests.length;
+      const pcts = text.match(/\[download\]\s+([\d.]+)%/g); // 這批的所有百分比
+      if (pcts && pcts.length) {
+        const pm = pcts[pcts.length - 1].match(/([\d.]+)%/); // 取最新的一個
+        if (pm) {
+          let pct = parseFloat(pm[1]);
+          if (kind === 'video') { // 兩段：影像→0-50、聲音→50-100
+            const phase = Math.min(Math.max(destCount, 1), 2);
+            pct = (phase - 1) * 50 + pct / 2;
+          }
+          if (!isNaN(pct)) sendProgress(kind, pct);
+        }
+      }
+      if (/\[Merger\]|\[ExtractAudio\]/.test(text)) sendProgress(kind, 99); // 合併/轉檔中
     };
     child.stdout.on('data', onLine);
     child.stderr.on('data', (d) => { stderr += d; onLine(d); });
