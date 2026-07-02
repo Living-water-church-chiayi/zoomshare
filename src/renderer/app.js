@@ -245,7 +245,7 @@ async function prefetch(kind) {
   const r = await window.api.ensureMedia(url, kind, cfg.videoQuality);
   hideBadge();
   if (!r.ok) { toast(label + '下載失敗：' + r.error, 4000); return; }
-  toast('✓ ' + label + ' 已下載完成', 10000); // 下載完成通知，停留 10 秒
+  toast('✓ ' + label + ' 已下載完成', 3000); // 下載完成通知，停留 3 秒
 }
 
 // ---------- 背景音樂 ----------
@@ -264,7 +264,7 @@ async function resolveAndPlayMusic() {
   try { await a.play(); } catch (e) { toast('播放失敗：' + e.message, 3000); return; }
   musicPlaying = true;
   $('btnMusic').classList.add('active');
-  if (needDownload) toast('✓ 背景音樂已下載完成，開始播放', 10000); // 下載完成通知，停留 10 秒
+  if (needDownload) toast('✓ 背景音樂已下載完成，開始播放', 3000); // 下載完成通知，停留 3 秒
 }
 
 function fadeOutMusic(done) {
@@ -466,17 +466,46 @@ function setupAppUpdater() {
   window.api.onUpdateError((d) => { $('appUpdateMsg').textContent = '更新錯誤：' + d.error; });
   window.api.onUpdateNone(() => { $('appUpdateMsg').textContent = '已是最新版本'; });
 
-  // 開機檢查到新版本 → 顯示頂端橫幅（macOS 也適用；點下載開啟下載頁）
+  // 開機檢查到新版本 → 顯示頂端橫幅
+  const isWin = window.api.platform === 'win32';
   let newVersionUrl = '';
+  let winUpdating = false;
   window.api.onNewVersion(({ version, url }) => {
     newVersionUrl = url;
     $('updateBannerText').textContent = `🔔 有新版本 v${version} 可用`;
+    $('btnUpdateDownload').textContent = isWin ? '立即更新' : '前往下載更新';
     $('updateBanner').classList.remove('hidden');
   });
-  $('btnUpdateDownload').addEventListener('click', () => {
-    if (newVersionUrl) window.api.openExternal(newVersionUrl);
+  $('btnUpdateDownload').addEventListener('click', async () => {
+    if (isWin) {
+      // Windows：一鍵自動下載並安裝（不開瀏覽器）
+      winUpdating = true;
+      $('btnUpdateDownload').disabled = true;
+      $('updateBannerText').textContent = '下載更新中… 0%';
+      const r = await window.api.downloadAppUpdate();
+      if (!r.ok) {
+        winUpdating = false;
+        $('btnUpdateDownload').disabled = false;
+        $('updateBannerText').textContent = '更新失敗，請稍後再試';
+      }
+      // 下載完成由 onUpdateDownloaded 自動重啟安裝
+    } else if (newVersionUrl) {
+      // Mac：開啟下載頁，手動下載安裝包
+      window.api.openExternal(newVersionUrl);
+    }
   });
   $('btnUpdateDismiss').addEventListener('click', () => $('updateBanner').classList.add('hidden'));
+
+  // Windows 橫幅自動更新的下載進度與完成後自動安裝
+  window.api.onUpdateProgress((d) => {
+    if (winUpdating) $('updateBannerText').textContent = `下載更新中… ${Math.round(d.percent || 0)}%`;
+  });
+  window.api.onUpdateDownloaded(() => {
+    if (winUpdating) {
+      $('updateBannerText').textContent = '更新完成，即將重新啟動…';
+      setTimeout(() => window.api.quitAndInstall(), 900);
+    }
+  });
 }
 
 // ---------- 媒體快取 ----------
