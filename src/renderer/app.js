@@ -465,6 +465,18 @@ function setupAppUpdater() {
   });
   window.api.onUpdateError((d) => { $('appUpdateMsg').textContent = '更新錯誤：' + d.error; });
   window.api.onUpdateNone(() => { $('appUpdateMsg').textContent = '已是最新版本'; });
+
+  // 開機檢查到新版本 → 顯示頂端橫幅（macOS 也適用；點下載開啟下載頁）
+  let newVersionUrl = '';
+  window.api.onNewVersion(({ version, url }) => {
+    newVersionUrl = url;
+    $('updateBannerText').textContent = `🔔 有新版本 v${version} 可用`;
+    $('updateBanner').classList.remove('hidden');
+  });
+  $('btnUpdateDownload').addEventListener('click', () => {
+    if (newVersionUrl) window.api.openExternal(newVersionUrl);
+  });
+  $('btnUpdateDismiss').addEventListener('click', () => $('updateBanner').classList.add('hidden'));
 }
 
 // ---------- 媒體快取 ----------

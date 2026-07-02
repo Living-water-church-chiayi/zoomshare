@@ -360,6 +360,9 @@ function createWindow() {
     }
     if (tmpl.length) Menu.buildFromTemplate(tmpl).popup({ window: mainWindow });
   });
+
+  // 視窗載入完成後，檢查是否有新版本（不經簽章，macOS 也適用）
+  mainWindow.webContents.once('did-finish-load', () => { checkLatestVersion(); });
 }
 
 // ---------- App 自動更新設定 ----------
@@ -375,6 +378,28 @@ function setupAutoUpdater() {
   autoUpdater.on('error', (err) => sendUpdate('update:error', { error: String(err && err.message || err) }));
   autoUpdater.on('download-progress', (p) => sendUpdate('update:progress', { percent: p.percent }));
   autoUpdater.on('update-downloaded', (info) => sendUpdate('update:downloaded', { version: info.version }));
+}
+
+// ---------- 開機版本檢查（純比對版本號 + 給下載連結，不需簽章，macOS 也適用）----------
+const RELEASES_API = 'https://api.github.com/repos/Living-water-church-chiayi/zoomshare/releases/latest';
+const RELEASES_PAGE = 'https://github.com/Living-water-church-chiayi/zoomshare/releases/latest';
+function isNewerVersion(a, b) { // a 是否比 b 新
+  const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) > (pb[i] || 0)) return true;
+    if ((pa[i] || 0) < (pb[i] || 0)) return false;
+  }
+  return false;
+}
+async function checkLatestVersion() {
+  try {
+    const rel = await httpGetJson(RELEASES_API);
+    const tag = ((rel && rel.tag_name) || '').replace(/^v/i, '').trim();
+    if (tag && isNewerVersion(tag, app.getVersion())) {
+      sendUpdate('app:new-version', { version: tag, url: RELEASES_PAGE });
+    }
+  } catch (e) { /* 靜默失敗，不打擾 */ }
 }
 
 app.whenReady().then(async () => {

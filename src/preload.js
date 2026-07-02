@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('api', {
   downloadAppUpdate: () => ipcRenderer.invoke('app:downloadUpdate'),
   quitAndInstall: () => ipcRenderer.invoke('app:quitAndInstall'),
   onUpdateAvailable: (cb) => ipcRenderer.on('update:available', (_e, d) => cb(d)),
+  onNewVersion: (cb) => ipcRenderer.on('app:new-version', (_e, d) => cb(d)),
   onUpdateNone: (cb) => ipcRenderer.on('update:none', (_e, d) => cb(d)),
   onUpdateError: (cb) => ipcRenderer.on('update:error', (_e, d) => cb(d)),
   onUpdateProgress: (cb) => ipcRenderer.on('update:progress', (_e, d) => cb(d)),

@@ -7,6 +7,13 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <!-- 有新版本時的頂端橫幅通知 -->
+  <div id="updateBanner" class="update-banner hidden">
+    <span id="updateBannerText">🔔 有新版本可用</span>
+    <button id="btnUpdateDownload" class="ub-btn">下載更新</button>
+    <button id="btnUpdateDismiss" class="ub-close" title="關閉">✕</button>
+  </div>
+
   <!-- 16:9 封面畫面 -->
   <div id="canvas" class="canvas">
     <div id="bgBlur" class="bg-blur"></div>
