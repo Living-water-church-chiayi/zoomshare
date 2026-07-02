@@ -135,9 +135,13 @@ function cacheKey(url, kind) {
   const h = crypto.createHash('sha1').update(url).digest('hex').slice(0, 16);
   return `${kind}_${h}`;
 }
-function cachedFilePath(url, kind) {
-  const ext = kind === 'video' ? 'mp4' : 'mp3';
-  return path.join(CACHE_DIR(), `${cacheKey(url, kind)}.${ext}`);
+// 依 cacheKey 前綴找出已快取的檔（音訊副檔名不固定：m4a/webm…）
+function findCachedFile(url, kind) {
+  const base = cacheKey(url, kind) + '.';
+  try {
+    const f = fs.readdirSync(CACHE_DIR()).find((n) => n.startsWith(base));
+    return f ? path.join(CACHE_DIR(), f) : null;
+  } catch { return null; }
 }
 function fileUrl(p) { return 'file://' + p.replace(/\\/g, '/'); }
 
@@ -150,14 +154,13 @@ function sendProgress(kind, percent, phase) {
 
 function downloadMedia(url, kind, quality) {
   return new Promise((resolve, reject) => {
-    const out = cachedFilePath(url, kind);
     const tmpl = path.join(CACHE_DIR(), `${cacheKey(url, kind)}.%(ext)s`);
+    // 音訊：直接下載原生格式（m4a，Chromium 可直接播），不轉檔 → 大幅加快（長音樂尤其明顯）
     const args = kind === 'video'
       ? ['-f', `bestvideo[height<=${quality || 1080}]+bestaudio/best`,
          '--merge-output-format', 'mp4', '--no-playlist', '--newline',
          '--ffmpeg-location', bundledBinDir(), '-o', tmpl, url]
-      : ['-f', 'bestaudio', '-x', '--audio-format', 'mp3', '--no-playlist', '--newline',
-         '--ffmpeg-location', bundledBinDir(), '-o', tmpl, url];
+      : ['-f', 'bestaudio[ext=m4a]/bestaudio', '--no-playlist', '--newline', '-o', tmpl, url];
 
     const child = spawn(resolveYtDlpPath(), args, { windowsHide: true, env: spawnEnv() });
     let stderr = '';
@@ -184,7 +187,8 @@ function downloadMedia(url, kind, quality) {
     child.stderr.on('data', (d) => { stderr += d; onLine(d); });
     child.on('error', reject);
     child.on('close', (code) => {
-      if (code === 0 && fs.existsSync(out)) { sendProgress(kind, 100); resolve(out); }
+      const out = findCachedFile(url, kind);
+      if (code === 0 && out) { sendProgress(kind, 100); resolve(out); }
       else reject(new Error(stderr.split('\n').filter(Boolean).pop() || ('yt-dlp 結束碼 ' + code)));
     });
   });
@@ -193,8 +197,8 @@ function downloadMedia(url, kind, quality) {
 async function ensureMedia(url, kind, quality) {
   if (!url || !/^https?:\/\//i.test(url)) throw new Error('請貼上有效的 YouTube 連結');
   await fsp.mkdir(CACHE_DIR(), { recursive: true });
-  const out = cachedFilePath(url, kind);
-  if (fs.existsSync(out)) {
+  const out = findCachedFile(url, kind);
+  if (out) {
     fsp.utimes(out, new Date(), new Date()).catch(() => {}); // 觸碰：更新最後使用時間，避免被當成舊快取清掉
     return out;
   }
@@ -224,13 +228,13 @@ async function cleanCache(keepDays) {
   try { files = await fsp.readdir(CACHE_DIR()); } catch { return result; }
   // 目前設定正在用的檔，永不刪
   const cfg = await readConfig();
-  const keep = new Set();
-  if (cfg.musicUrl) keep.add(path.basename(cachedFilePath(cfg.musicUrl, 'audio')));
-  if (cfg.worshipUrl) keep.add(path.basename(cachedFilePath(cfg.worshipUrl, 'video')));
+  const keepPrefixes = [];
+  if (cfg.musicUrl) keepPrefixes.push(cacheKey(cfg.musicUrl, 'audio') + '.');
+  if (cfg.worshipUrl) keepPrefixes.push(cacheKey(cfg.worshipUrl, 'video') + '.');
   const now = Date.now();
   const cutoff = keepDays > 0 ? now - keepDays * 86400000 : now + 1; // keepDays<=0 → 全數過期
   for (const f of files) {
-    if (keep.has(f)) continue;
+    if (keepPrefixes.some((p) => f.startsWith(p))) continue;
     const fp = path.join(CACHE_DIR(), f);
     try {
       const st = await fsp.stat(fp);
@@ -296,7 +300,7 @@ function registerIpc() {
     catch (e) { return { ok: false, error: e.message }; }
   });
   ipcMain.handle('media:status', async (_e, { url, kind }) => {
-    try { return { cached: !!url && fs.existsSync(cachedFilePath(url, kind)) }; }
+    try { return { cached: !!url && !!findCachedFile(url, kind) }; }
     catch { return { cached: false }; }
   });
   ipcMain.handle('cache:size', async () => cacheSize());

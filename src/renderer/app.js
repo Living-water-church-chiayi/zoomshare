@@ -236,14 +236,16 @@ function hideBadge() { $('dlBadge').classList.add('hidden'); }
 
 // 預先下載快取（設定連結後在背景準備，點擊時即可秒播）
 async function prefetch(kind) {
+  const label = kind === 'video' ? '敬拜影片' : '背景音樂';
   const url = kind === 'video' ? cfg.worshipUrl : cfg.musicUrl;
   if (!url) return;
   const s = await window.api.mediaStatus(url, kind);
   if (s.cached) return;
-  showBadge((kind === 'video' ? '敬拜影片' : '背景音樂') + ' 準備中…');
+  showBadge(label + ' 準備中…');
   const r = await window.api.ensureMedia(url, kind, cfg.videoQuality);
   hideBadge();
-  if (!r.ok) toast((kind === 'video' ? '敬拜影片' : '背景音樂') + '下載失敗：' + r.error, 4000);
+  if (!r.ok) { toast(label + '下載失敗：' + r.error, 4000); return; }
+  toast('✓ ' + label + ' 已下載完成', 3000); // 下載完成給明確提示
 }
 
 // ---------- 背景音樂 ----------
@@ -534,7 +536,8 @@ async function init() {
   });
 
   // URL 變更時在背景預先下載快取
-  $('inMusicUrl').addEventListener('change', () => { collectSettings(); prefetch('audio'); });
+  // 換背景音樂連結：下載新的並「自動播放新音樂」（取代舊的）
+  $('inMusicUrl').addEventListener('change', () => { collectSettings(); if (cfg.musicUrl) resolveAndPlayMusic(); });
   $('inWorshipUrl').addEventListener('change', () => { collectSettings(); prefetch('video'); });
 
   // 下載進度
