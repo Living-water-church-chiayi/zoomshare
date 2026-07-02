@@ -245,13 +245,15 @@ async function prefetch(kind) {
   const r = await window.api.ensureMedia(url, kind, cfg.videoQuality);
   hideBadge();
   if (!r.ok) { toast(label + '下載失敗：' + r.error, 4000); return; }
-  toast('✓ ' + label + ' 已下載完成', 3000); // 下載完成給明確提示
+  toast('✓ ' + label + ' 已下載完成', 10000); // 下載完成通知，停留 10 秒
 }
 
 // ---------- 背景音樂 ----------
 async function resolveAndPlayMusic() {
   if (!cfg.musicUrl) { toast('請先在設定貼上背景音樂 YouTube 連結'); openSettings(); return; }
   const a = $('bgAudio');
+  const st = await window.api.mediaStatus(cfg.musicUrl, 'audio');
+  const needDownload = !st.cached;
   showBadge('背景音樂 準備中…');
   const r = await window.api.ensureMedia(cfg.musicUrl, 'audio');
   hideBadge();
@@ -262,6 +264,7 @@ async function resolveAndPlayMusic() {
   try { await a.play(); } catch (e) { toast('播放失敗：' + e.message, 3000); return; }
   musicPlaying = true;
   $('btnMusic').classList.add('active');
+  if (needDownload) toast('✓ 背景音樂已下載完成，開始播放', 10000); // 下載完成通知，停留 10 秒
 }
 
 function fadeOutMusic(done) {
@@ -286,6 +289,14 @@ function fadeOutMusic(done) {
 function toggleMusic() {
   if (musicPlaying) fadeOutMusic();
   else resolveAndPlayMusic();
+}
+
+// 空白鍵用：單純暫停/繼續（不淡出、不重新下載）
+function toggleMusicPlayPause() {
+  const a = $('bgAudio');
+  if (!a.src) { resolveAndPlayMusic(); return; } // 尚未載入 → 載入並播放
+  if (a.paused) { a.play(); musicPlaying = true; $('btnMusic').classList.add('active'); }
+  else { a.pause(); musicPlaying = false; $('btnMusic').classList.remove('active'); }
 }
 
 // ---------- 敬拜影片 ----------
@@ -578,6 +589,21 @@ async function init() {
   // 自動隱藏工具條
   window.addEventListener('mousemove', showToolbar);
   window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('settingsPanel').classList.contains('hidden')) closeSettings(); });
+
+  // 空白鍵：暫停/播放（敬拜播放中→控制敬拜影片；否則→控制背景音樂）
+  window.addEventListener('keydown', (e) => {
+    if (e.code !== 'Space') return;
+    const tag = e.target && e.target.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;        // 編輯中不攔截
+    if (!$('settingsPanel').classList.contains('hidden')) return;                 // 設定開啟時不攔截
+    e.preventDefault();
+    if (worshipActive) {
+      const v = $('worshipVideo');
+      if (v.paused) v.play(); else v.pause();
+    } else {
+      toggleMusicPlayPause();
+    }
+  });
   showToolbar();
 
   // 每分鐘更新日期（跨午夜自動換日）
