@@ -11,28 +11,73 @@
 :root {
   --kai: 'TWKai', '標楷體', DFKai-SB, 'BiauKai', 'Kaiti TC', 'Kaiti', KaiTi, STKaiti, serif;
   --cover-font: var(--kai);
-  /* UI 介面用的無襯線字（比楷體更俐落現代） */
-  --ui: 'Microsoft JhengHei', '微軟正黑體', 'PingFang TC', 'Noto Sans TC', -apple-system, 'Segoe UI', Roboto, sans-serif;
-  /* 色彩 / 造型 tokens */
-  --accent: #3b82f6; --accent-2: #2563eb; --accent-soft: rgba(59,130,246,.18);
-  --surface: #1b1e24; --surface-2: #23272f; --surface-3: #2c313b;
-  --field: #14171c; --border: #333b47; --border-soft: #2b313b;
-  --text: #eef1f5; --text-dim: #9aa5b3; --text-mute: #6b7583;
-  --radius: 12px; --radius-sm: 9px; --pill: 999px;
-  --shadow: 0 12px 34px rgba(0,0,0,.5);
-  --shadow-sm: 0 4px 16px rgba(0,0,0,.38);
+  --ui-mac: -apple-system, 'SF Pro Text', 'SF Pro', 'PingFang TC', 'Helvetica Neue', sans-serif;
+  --ui-win: 'Segoe UI Variable Text', 'Segoe UI', 'Microsoft JhengHei', '微軟正黑體', 'Noto Sans TC', sans-serif;
+  --ui: var(--ui-win);
+  --pill: 999px;
+}
+
+/* ============ 平台設計系統：Mac = Liquid Glass / Windows = Fluent ============ */
+/* ---- Mac（Liquid Glass，深色預設） ---- */
+body.plat-mac {
+  --ui: var(--ui-mac);
+  --radius: 14px; --radius-lg: 20px; --radius-sm: 10px;
+  --accent: #0a84ff; --accent-2: #0a6fe0; --accent-soft: rgba(10,132,255,.22);
+  --panel-bg: rgba(30,32,38,.60); --panel-border: 1px solid rgba(255,255,255,.16); --panel-blur: saturate(1.8) blur(44px);
+  --card-bg: rgba(255,255,255,.06); --card-border: 1px solid rgba(255,255,255,.09);
+  --field-bg: rgba(255,255,255,.09); --field-border: 1px solid rgba(255,255,255,.15);
+  --legend-bg: rgba(255,255,255,.12);
+  --btn2-bg: rgba(255,255,255,.11); --btn2-border: 1px solid rgba(255,255,255,.16); --btn2-hover: rgba(255,255,255,.2);
+  --text: #f2f4f8; --text-dim: #b3bcc9; --text-mute: #808a98;
+  --elev: 0 30px 80px rgba(0,0,0,.5);
+  --bar-bg: rgba(40,42,50,.5); --bar-blur: saturate(1.8) blur(34px); --bar-border: 1px solid rgba(255,255,255,.16);
+  --divider: rgba(255,255,255,.08);
+}
+/* ---- Windows（Fluent / Mica，深色預設） ---- */
+body.plat-win {
+  --ui: var(--ui-win);
+  --radius: 8px; --radius-lg: 8px; --radius-sm: 6px;
+  --accent: #60cdff; --accent-2: #005fb8; --accent-soft: rgba(96,205,255,.18);
+  --panel-bg: rgba(32,34,37,.9); --panel-border: 1px solid rgba(255,255,255,.08); --panel-blur: blur(30px) saturate(1.4);
+  --card-bg: rgba(255,255,255,.04); --card-border: 1px solid rgba(255,255,255,.07);
+  --field-bg: rgba(255,255,255,.05); --field-border: 1px solid rgba(255,255,255,.1);
+  --legend-bg: rgba(255,255,255,.08);
+  --btn2-bg: rgba(255,255,255,.06); --btn2-border: 1px solid rgba(255,255,255,.09); --btn2-hover: rgba(255,255,255,.1);
+  --text: #f0f0f0; --text-dim: #c8c8c8; --text-mute: #909090;
+  --elev: 0 18px 52px rgba(0,0,0,.5);
+  --bar-bg: rgba(43,43,43,.78); --bar-blur: blur(26px) saturate(1.3); --bar-border: 1px solid rgba(255,255,255,.09);
+  --divider: rgba(255,255,255,.09);
+}
+/* ---- 淺色（跟隨系統） ---- */
+@media (prefers-color-scheme: light) {
+  body.plat-mac {
+    --accent: #007aff; --accent-2: #0062cc; --accent-soft: rgba(0,122,255,.16);
+    --panel-bg: rgba(250,250,252,.62); --panel-border: 1px solid rgba(255,255,255,.7); --panel-blur: saturate(1.8) blur(44px);
+    --card-bg: rgba(255,255,255,.5); --card-border: 1px solid rgba(0,0,0,.06);
+    --field-bg: rgba(255,255,255,.72); --field-border: 1px solid rgba(0,0,0,.12);
+    --legend-bg: rgba(0,0,0,.05);
+    --btn2-bg: rgba(0,0,0,.05); --btn2-border: 1px solid rgba(0,0,0,.1); --btn2-hover: rgba(0,0,0,.09);
+    --text: #1b1d21; --text-dim: #5b6470; --text-mute: #97a1ad;
+    --elev: 0 30px 80px rgba(20,30,55,.22); --divider: rgba(0,0,0,.08);
+  }
+  body.plat-win {
+    --accent: #005fb8; --accent-2: #005299; --accent-soft: rgba(0,95,184,.14);
+    --panel-bg: rgba(243,243,243,.95); --panel-border: 1px solid rgba(0,0,0,.08); --panel-blur: blur(30px) saturate(1.2);
+    --card-bg: rgba(255,255,255,.72); --card-border: 1px solid rgba(0,0,0,.06);
+    --field-bg: #ffffff; --field-border: 1px solid rgba(0,0,0,.16);
+    --legend-bg: rgba(0,0,0,.05);
+    --btn2-bg: rgba(0,0,0,.04); --btn2-border: 1px solid rgba(0,0,0,.1); --btn2-hover: rgba(0,0,0,.07);
+    --text: #1a1a1a; --text-dim: #565656; --text-mute: #8a8a8a;
+    --elev: 0 18px 52px rgba(0,0,0,.18); --divider: rgba(0,0,0,.08);
+  }
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body {
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  background: #000;
-  font-family: var(--ui);
-  cursor: default;
-  user-select: none;
+  width: 100%; height: 100%; overflow: hidden; background: #000;
+  font-family: var(--ui); cursor: default; user-select: none;
+  -webkit-font-smoothing: antialiased;
 }
 
 /* 整個畫面都可拖動視窗；互動元件除外 */
@@ -40,48 +85,27 @@ body { -webkit-app-region: drag; }
 .toolbar, .settings, .worship-controls, .worship-hotzone, .update-banner,
 button, input, select, textarea, a { -webkit-app-region: no-drag; }
 
-/* 16:9 畫面（視窗已鎖 16:9，畫布填滿） */
+/* ===================== 封面（功能性，維持不變） ===================== */
 .canvas {
-  position: relative;
-  width: 100vw;
-  height: 100vh;
-  overflow: hidden;
-  container-type: size;
-  background: #000;
+  position: relative; width: 100vw; height: 100vh; overflow: hidden;
+  container-type: size; background: #000;
 }
-
-/* 背景：模糊鋪底（cover）+ 完整原圖（拉伸填滿） */
 .bg-blur {
-  position: absolute;
-  inset: -4%;
-  background-size: cover;
-  background-position: center;
-  filter: blur(28px) brightness(0.85);
-  transform: scale(1.08);
+  position: absolute; inset: -4%;
+  background-size: cover; background-position: center;
+  filter: blur(28px) brightness(0.85); transform: scale(1.08);
 }
 .bg-blur.black { background: #000 !important; filter: none; }
 .bg-image {
-  position: absolute;
-  inset: 0;
-  background-size: 100% 100%;
-  background-position: center;
-  background-repeat: no-repeat;
+  position: absolute; inset: 0;
+  background-size: 100% 100%; background-position: center; background-repeat: no-repeat;
 }
-
-/* 文字疊層：上方標題組 + 底部經文組（保留黑體 + 黑框，投影清楚） */
 .overlay-top, .overlay-bottom {
-  position: absolute;
-  left: 2.5cqw;
-  width: 95cqw;
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  color: #fff;
+  position: absolute; left: 2.5cqw; width: 95cqw; z-index: 2;
+  display: flex; flex-direction: column; color: #fff;
   font-family: 'SHSans-Bold', sans-serif;
-  -webkit-text-stroke: 0.6cqw #000;
-  paint-order: stroke fill;
-  text-shadow: 0 0.12cqw 0.3cqw rgba(0,0,0,.45);
-  line-height: 1.2;
+  -webkit-text-stroke: 0.6cqw #000; paint-order: stroke fill;
+  text-shadow: 0 0.12cqw 0.3cqw rgba(0,0,0,.45); line-height: 1.2;
 }
 .overlay-top { top: 13cqh; }
 .overlay-bottom { bottom: 4.5cqh; }
@@ -94,214 +118,117 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
 .reading { font-size: 3.5cqw; }
 .reading div { white-space: nowrap; }
 
-/* 拖放提示 */
 .drop-hint {
-  position: absolute;
-  inset: 0;
-  z-index: 4;
-  display: none;
-  flex-direction: column;
-  gap: 1cqh;
-  align-items: center;
-  justify-content: center;
-  font-size: 3.4cqw;
-  color: #fff;
-  background: rgba(20, 80, 200, 0.42);
-  backdrop-filter: blur(3px);
-  border: 0.5cqw dashed rgba(255,255,255,.9);
-  border-radius: 2cqw;
+  position: absolute; inset: 0; z-index: 4; display: none;
+  flex-direction: column; gap: 1cqh; align-items: center; justify-content: center;
+  font-size: 3.4cqw; color: #fff;
+  background: rgba(20, 80, 200, 0.42); backdrop-filter: blur(3px);
+  border: 0.5cqw dashed rgba(255,255,255,.9); border-radius: 2cqw;
 }
 .canvas.dragging .drop-hint { display: flex; }
 
-/* 敬拜影片覆蓋層 */
-.worship-layer {
-  position: absolute;
-  inset: 0;
-  background: #000;
-  z-index: 5;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
+/* ===================== 敬拜影片 ===================== */
+.worship-layer { position: absolute; inset: 0; background: #000; z-index: 5; display: flex; align-items: center; justify-content: center; }
 .worship-video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 .worship-loading {
-  position: absolute;
-  color: #fff;
-  font-size: 2.4cqw;
-  font-weight: 600;
-  padding: 1.4cqh 2.4cqw;
-  background: rgba(0,0,0,.55);
-  border-radius: 999px;
-  backdrop-filter: blur(8px);
+  position: absolute; color: #fff; font-size: 2.4cqw; font-weight: 600;
+  padding: 1.4cqh 2.4cqw; background: rgba(0,0,0,.5); border-radius: 999px; backdrop-filter: blur(8px);
 }
-/* 底部透明感應區：影片區可拖動視窗，移到底部才喚出控制條 */
-.worship-hotzone {
-  position: absolute;
-  left: 0; right: 0; bottom: 0;
-  height: 15cqh;
-  z-index: 5;
-  background: transparent;
-}
+.worship-hotzone { position: absolute; left: 0; right: 0; bottom: 0; height: 15cqh; z-index: 5; background: transparent; }
 .worship-controls {
-  position: absolute;
-  left: 0; right: 0; bottom: 0;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 16px 22px 20px;
+  position: absolute; left: 0; right: 0; bottom: 0;
+  display: flex; align-items: center; gap: 12px; padding: 16px 22px 20px;
   background: linear-gradient(to top, rgba(0,0,0,.85), rgba(0,0,0,0));
-  z-index: 6;
-  opacity: 0;
-  transform: translateY(6px);
-  transition: opacity .3s ease, transform .3s ease;
-  pointer-events: none;
+  z-index: 6; opacity: 0; transform: translateY(6px);
+  transition: opacity .3s ease, transform .3s ease; pointer-events: none;
 }
 .worship-controls.show { opacity: 1; pointer-events: auto; transform: translateY(0); }
 .worship-controls .wbtn {
-  font-family: var(--ui);
-  font-size: 14px;
-  font-weight: 600;
-  color: #fff;
-  background: rgba(255,255,255,0.14);
-  border: 1px solid rgba(255,255,255,.1);
-  border-radius: var(--pill);
-  padding: 9px 16px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background .15s, transform .1s;
+  font-family: var(--ui); font-size: 14px; font-weight: 600; color: #fff;
+  background: rgba(255,255,255,0.16); border: 1px solid rgba(255,255,255,.12);
+  border-radius: var(--pill); padding: 9px 16px; cursor: pointer; white-space: nowrap;
+  backdrop-filter: blur(10px); transition: background .15s, transform .1s;
 }
-.worship-controls .wbtn:hover { background: rgba(255,255,255,0.28); }
+.worship-controls .wbtn:hover { background: rgba(255,255,255,0.3); }
 .worship-controls .wbtn:active { transform: translateY(1px); }
-.worship-controls .wbtn-close:hover { background: #e23b3b; border-color: #e23b3b; }
-.worship-controls .wtime {
-  color: #fff;
-  font-size: 13px;
-  min-width: 48px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-  opacity: .9;
-}
-.worship-controls .wseek {
-  flex: 1;
-  height: 6px;
-  cursor: pointer;
-  accent-color: var(--accent);
-}
+.worship-controls .wbtn-close:hover { background: #e2463b; border-color: #e2463b; }
+.worship-controls .wtime { color: #fff; font-size: 13px; min-width: 48px; text-align: center; font-variant-numeric: tabular-nums; opacity: .9; }
+.worship-controls .wseek { flex: 1; height: 6px; cursor: pointer; accent-color: var(--accent); }
 
-/* 工具條（自動隱藏，毛玻璃質感） */
+/* ===================== 工具列（毛玻璃自動隱藏） ===================== */
 .toolbar {
-  position: fixed;
-  left: 50%;
-  bottom: 22px;
-  transform: translateX(-50%) translateY(8px);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 9px;
-  background: rgba(24,27,33,0.72);
-  backdrop-filter: blur(18px) saturate(1.3);
-  -webkit-backdrop-filter: blur(18px) saturate(1.3);
-  border: 1px solid rgba(255,255,255,0.09);
-  border-radius: var(--pill);
-  box-shadow: var(--shadow);
-  z-index: 20;
-  opacity: 0;
-  transition: opacity .3s ease, transform .3s ease;
-  pointer-events: none;
+  position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(10px);
+  display: flex; align-items: center; gap: 6px; padding: 7px 9px;
+  background: var(--bar-bg); backdrop-filter: var(--bar-blur); -webkit-backdrop-filter: var(--bar-blur);
+  border: var(--bar-border); border-radius: var(--pill); box-shadow: var(--elev);
+  z-index: 20; opacity: 0; transition: opacity .3s ease, transform .3s cubic-bezier(.32,.72,0,1); pointer-events: none;
 }
 .toolbar.show { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0); }
 .toolbar button {
-  font-family: var(--ui);
-  font-size: 14px;
-  font-weight: 600;
-  color: #e7ebf1;
-  background: rgba(255,255,255,0.08);
-  border: 1px solid transparent;
-  border-radius: var(--pill);
-  padding: 9px 15px;
-  cursor: pointer;
-  transition: background .15s ease, transform .12s ease, color .15s;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+  font-family: var(--ui); font-size: 14px; font-weight: 600; color: #eef1f6;
+  background: rgba(255,255,255,0.08); border: 1px solid transparent; border-radius: var(--pill);
+  padding: 9px 15px; cursor: pointer; transition: background .15s ease, transform .12s ease, color .15s;
+  display: inline-flex; align-items: center; gap: 5px;
 }
 .toolbar button:hover { background: rgba(255,255,255,0.2); transform: translateY(-1px); }
 .toolbar button:active { transform: translateY(0); }
 .toolbar button.active { background: var(--accent); color: #fff; }
 .toolbar .btn-zoom { background: var(--accent); color: #fff; }
-.toolbar .btn-zoom:hover { background: var(--accent-2); }
-.toolbar .btn-close:hover { background: #e23b3b; color: #fff; }
-.toolbar .tb-sep { width: 1px; align-self: stretch; background: rgba(255,255,255,0.14); margin: 5px 3px; }
+.toolbar .btn-zoom:hover { filter: brightness(1.12); }
+.toolbar .btn-close:hover { background: #e2463b; color: #fff; }
+.toolbar .tb-sep { width: 1px; align-self: stretch; background: rgba(255,255,255,0.16); margin: 5px 3px; }
+/* Mac 的按鈕更貼近 liquid glass */
+body.plat-mac .toolbar button { background: rgba(255,255,255,.12); }
+body.plat-mac .toolbar button:hover { background: rgba(255,255,255,.24); }
 
-/* 設定背後的透明點擊捕捉層 */
-.settings-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 15;
-  background: rgba(0,0,0,.28);
-  -webkit-app-region: no-drag;
-  animation: fadeIn .2s ease;
-}
+/* ===================== 設定面板 ===================== */
+.settings-backdrop { position: fixed; inset: 0; z-index: 15; background: rgba(0,0,0,.28); -webkit-app-region: no-drag; animation: fadeIn .2s ease; }
 
-/* 設定抽屜 */
 .settings {
-  position: fixed;
-  top: 0; right: 0;
-  width: 392px;
-  max-width: 92vw;
-  height: 100vh;
-  background: var(--surface);
-  color: var(--text);
-  z-index: 30;
-  border-left: 1px solid var(--border-soft);
-  box-shadow: -16px 0 48px rgba(0,0,0,.5);
-  display: flex;
-  flex-direction: column;
-  transform: translateX(0);
-  transition: transform .28s cubic-bezier(.4,0,.2,1);
+  position: fixed; top: 0; right: 0; height: 100vh; width: 396px; max-width: 92vw;
+  z-index: 30; display: flex; flex-direction: column;
+  background: var(--panel-bg); color: var(--text);
+  backdrop-filter: var(--panel-blur); -webkit-backdrop-filter: var(--panel-blur);
+  border-left: var(--panel-border); box-shadow: var(--elev); font-family: var(--ui);
+  transform: translateX(0); transition: transform .32s cubic-bezier(.32,.72,0,1);
 }
 .settings.hidden { transform: translateX(106%); }
+/* Mac：懸浮圓角玻璃卡片 */
+body.plat-mac .settings {
+  top: 12px; right: 12px; bottom: 12px; height: auto;
+  border: var(--panel-border); border-radius: var(--radius-lg); overflow: hidden;
+}
+body.plat-mac .settings.hidden { transform: translateX(calc(100% + 24px)); }
+
 .settings-head {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 16px 18px;
-  font-size: 17px; font-weight: 700; letter-spacing: .5px;
-  border-bottom: 1px solid var(--border-soft);
-  background: linear-gradient(180deg, var(--surface-2), var(--surface));
+  display: flex; justify-content: space-between; align-items: center; padding: 16px 18px;
+  font-size: 17px; font-weight: 700; letter-spacing: .3px; border-bottom: 1px solid var(--divider);
 }
 .settings-head .close {
-  background: rgba(128,132,140,.14); border: none; color: var(--text-dim);
-  width: 30px; height: 30px; border-radius: 8px; font-size: 16px; cursor: pointer;
-  transition: background .15s, color .15s;
+  background: var(--btn2-bg); border: none; color: var(--text-dim);
+  width: 30px; height: 30px; border-radius: 8px; font-size: 16px; cursor: pointer; transition: background .15s, color .15s;
 }
-.settings-head .close:hover { background: rgba(128,132,140,.28); color: var(--text); }
+body.plat-mac .settings-head .close { border-radius: var(--pill); }
+.settings-head .close:hover { background: var(--btn2-hover); color: var(--text); }
 .settings-body { padding: 16px; overflow-y: auto; flex: 1 1 auto; min-height: 0; }
 .settings-body::-webkit-scrollbar { width: 10px; }
-.settings-body::-webkit-scrollbar-thumb {
-  background: rgba(140,150,165,.5); border-radius: 8px; border: 2px solid transparent; background-clip: content-box;
-}
-.settings-body::-webkit-scrollbar-thumb:hover { background: rgba(140,150,165,.72); background-clip: content-box; }
+.settings-body::-webkit-scrollbar-thumb { background: rgba(140,150,165,.45); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+.settings-body::-webkit-scrollbar-thumb:hover { background: rgba(140,150,165,.68); background-clip: content-box; }
+
 .settings fieldset {
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius);
-  padding: 15px 14px 5px;
-  margin-bottom: 16px;
-  background: var(--surface-2);
+  border: var(--card-border); border-radius: var(--radius); padding: 15px 14px 5px; margin-bottom: 16px; background: var(--card-bg);
 }
 .settings legend {
-  padding: 3px 11px;
-  color: #d3dbe6; font-size: 12px; font-weight: 700; letter-spacing: 1px;
-  background: var(--surface-3); border: 1px solid var(--border-soft);
-  border-radius: var(--pill);
+  padding: 3px 11px; color: var(--text); font-size: 12px; font-weight: 700; letter-spacing: .8px;
+  background: var(--legend-bg); border: var(--card-border); border-radius: var(--pill);
 }
 .settings label { display: block; font-size: 12.5px; color: var(--text-dim); margin-bottom: 12px; font-weight: 600; }
 .settings label.inline { display: flex; align-items: center; gap: 8px; }
 .settings label.inline input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); }
 .settings input[type="text"], .settings textarea, .settings select {
-  width: 100%; margin-top: 6px; padding: 9px 11px;
-  background: var(--field); color: var(--text);
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-  font-family: var(--ui); font-size: 14px; font-weight: 400;
-  transition: border-color .15s ease, box-shadow .15s ease;
+  width: 100%; margin-top: 6px; padding: 9px 11px; background: var(--field-bg); color: var(--text);
+  border: var(--field-border); border-radius: var(--radius-sm);
+  font-family: var(--ui); font-size: 14px; transition: border-color .15s ease, box-shadow .15s ease, background .15s;
 }
 .settings input[type="text"]:focus, .settings textarea:focus, .settings select:focus {
   outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
@@ -309,25 +236,23 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
 .settings input[type="text"]::placeholder, .settings textarea::placeholder { color: var(--text-mute); }
 .settings input[type="range"] { width: 100%; accent-color: var(--accent); margin-top: 6px; }
 .settings .full-btn {
-  width: 100%; padding: 11px;
-  background: linear-gradient(180deg, var(--accent), var(--accent-2));
-  color: #fff; border: none; border-radius: var(--radius-sm);
-  cursor: pointer; font-size: 14px; font-weight: 700; font-family: var(--ui);
+  width: 100%; padding: 11px; background: var(--accent); color: #fff; border: none;
+  border-radius: var(--radius-sm); cursor: pointer; font-size: 14px; font-weight: 700; font-family: var(--ui);
   transition: filter .15s ease, transform .1s ease;
 }
+body.plat-mac .full-btn { border-radius: var(--pill); background: linear-gradient(180deg, var(--accent), var(--accent-2)); }
 .settings .full-btn:hover { filter: brightness(1.1); }
 .settings .full-btn:active { transform: translateY(1px); }
 .settings .hint { font-size: 12px; color: var(--text-mute); margin: 8px 0; line-height: 1.5; }
 .settings .url-row { display: flex; gap: 8px; margin-top: 6px; }
 .settings .url-row input { margin-top: 0; flex: 1; min-width: 0; }
 .settings .paste-btn {
-  flex: 0 0 auto; padding: 9px 14px;
-  background: var(--surface-3); color: var(--text);
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-  cursor: pointer; font-family: var(--ui); font-size: 13px; font-weight: 600;
-  transition: background .15s, border-color .15s;
+  flex: 0 0 auto; padding: 9px 14px; background: var(--btn2-bg); color: var(--text);
+  border: var(--btn2-border); border-radius: var(--radius-sm); cursor: pointer;
+  font-family: var(--ui); font-size: 13px; font-weight: 600; transition: background .15s, border-color .15s;
 }
-.settings .paste-btn:hover { background: #363c47; border-color: #454d5b; }
+body.plat-mac .paste-btn { border-radius: var(--pill); }
+.settings .paste-btn:hover { background: var(--btn2-hover); }
 .settings .ref-book { width: 100%; margin-top: 6px; }
 .settings .ref-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
 .settings .ref-row select { flex: 1; min-width: 0; margin-top: 0; }
@@ -335,68 +260,35 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
 .settings .ref-colon { color: var(--text-dim); flex: 0 0 auto; }
 #refPreview { color: var(--accent); font-weight: 700; }
 
-/* 下載進度徽章 */
+/* ===================== 徽章 / 提示 / 更新橫幅 ===================== */
 .dl-badge {
-  position: fixed; left: 16px; bottom: 16px;
-  background: rgba(24,27,33,0.82);
-  backdrop-filter: blur(14px);
-  border: 1px solid rgba(255,255,255,.08);
-  color: #cfe0ff; padding: 9px 14px;
-  border-radius: 10px; z-index: 25; font-size: 13px; font-weight: 600;
-  box-shadow: var(--shadow-sm);
+  position: fixed; left: 16px; bottom: 16px; background: var(--bar-bg); backdrop-filter: var(--bar-blur);
+  border: var(--bar-border); color: #cfe0ff; padding: 9px 14px; border-radius: 12px; z-index: 25; font-size: 13px; font-weight: 600; box-shadow: var(--elev);
 }
-/* 提示 toast */
 .toast {
   position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%);
-  background: rgba(24,27,33,0.92);
-  backdrop-filter: blur(14px);
-  border: 1px solid rgba(255,255,255,.08);
-  color: #fff; padding: 11px 20px;
-  border-radius: 10px; z-index: 40; font-size: 14px; font-weight: 500;
-  box-shadow: var(--shadow);
-  animation: toastIn .22s ease;
+  background: var(--bar-bg); backdrop-filter: var(--bar-blur); border: var(--bar-border);
+  color: #fff; padding: 11px 20px; border-radius: 12px; z-index: 40; font-size: 14px; font-weight: 500;
+  box-shadow: var(--elev); animation: toastIn .22s ease;
 }
-/* 有新版本橫幅（頂端） */
+body.plat-mac .dl-badge, body.plat-mac .toast { border-radius: 16px; }
 .update-banner {
-  position: fixed;
-  top: 0; left: 0; right: 0;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 11px 18px;
-  background: linear-gradient(90deg, var(--accent-2), var(--accent));
-  color: #fff;
-  font-size: 14px; font-weight: 600;
-  box-shadow: 0 6px 20px rgba(0,0,0,.35);
-  animation: slideDown .3s ease;
+  position: fixed; top: 0; left: 0; right: 0; z-index: 50;
+  display: flex; align-items: center; gap: 12px; padding: 11px 18px;
+  background: linear-gradient(90deg, var(--accent-2), var(--accent)); color: #fff;
+  font-size: 14px; font-weight: 600; box-shadow: 0 8px 24px rgba(0,0,0,.35); animation: slideDown .3s ease;
 }
 .update-banner #updateBannerText { flex: 1; }
 .update-banner .ub-btn {
-  background: #fff; color: var(--accent-2); border: none;
-  border-radius: 8px; padding: 7px 16px; cursor: pointer;
-  font-family: var(--ui); font-size: 14px; font-weight: 700;
-  transition: background .15s, transform .1s;
+  background: rgba(255,255,255,.95); color: var(--accent-2); border: none; border-radius: 8px;
+  padding: 7px 16px; cursor: pointer; font-family: var(--ui); font-size: 14px; font-weight: 700; transition: background .15s, transform .1s;
 }
-.update-banner .ub-btn:hover { background: #eaf1ff; }
+body.plat-mac .update-banner .ub-btn { border-radius: var(--pill); }
+.update-banner .ub-btn:hover { background: #fff; }
 .update-banner .ub-btn:active { transform: translateY(1px); }
-.update-banner .ub-close {
-  background: rgba(255,255,255,.15); color: #fff; border: none;
-  width: 28px; height: 28px; border-radius: 7px;
-  font-size: 15px; cursor: pointer; transition: background .15s;
-}
-.update-banner .ub-close:hover { background: rgba(255,255,255,.3); }
-
-/* 淺色主題：跟隨系統（macOS/Windows 淺色模式時，設定面板轉為淺色） */
-@media (prefers-color-scheme: light) {
-  :root {
-    --accent: #2563eb; --accent-2: #1d4ed8; --accent-soft: rgba(37,99,235,.14);
-    --surface: #ffffff; --surface-2: #f4f6fa; --surface-3: #e8edf4;
-    --field: #ffffff; --border: #cfd6e0; --border-soft: #e4e9f0;
-    --text: #1b2430; --text-dim: #566171; --text-mute: #949eac;
-    --shadow: 0 12px 34px rgba(20,30,55,.16); --shadow-sm: 0 4px 16px rgba(20,30,55,.1);
-  }
-}
+.update-banner .ub-close { background: rgba(255,255,255,.18); color: #fff; border: none; width: 28px; height: 28px; border-radius: 7px; font-size: 15px; cursor: pointer; transition: background .15s; }
+body.plat-mac .update-banner .ub-close { border-radius: var(--pill); }
+.update-banner .ub-close:hover { background: rgba(255,255,255,.32); }
 
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }

@@ -542,6 +542,8 @@ function setupCache() {
 
 // ---------- 初始化 ----------
 async function init() {
+  // 依平台套用不同介面風格：Mac = Liquid Glass、Windows = Fluent
+  document.body.classList.add(window.api.platform === 'darwin' ? 'plat-mac' : 'plat-win');
   const { cfg: loaded, backgroundUrl } = await window.api.getConfig();
   cfg = loaded;
   applyCover(backgroundUrl);
