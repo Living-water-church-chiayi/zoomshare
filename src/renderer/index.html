@@ -123,6 +123,19 @@
       </fieldset>
 
       <fieldset>
+        <legend>自動經文（Google 試算表）</legend>
+        <label class="inline"><input type="checkbox" id="scheduleEnabled" /> 開機自動依今天日期抓取經文</label>
+        <label>試算表連結（欄位：日期,書卷,章起,節起,章迄,節迄）
+          <div class="url-row">
+            <input type="text" id="inScheduleUrl" placeholder="https://docs.google.com/spreadsheets/..." />
+            <button type="button" id="btnPasteSchedule" class="paste-btn">貼上</button>
+          </div>
+        </label>
+        <button id="btnScheduleNow" class="full-btn" style="margin-top:4px;">立即依今天日期更新</button>
+        <p id="scheduleStatus" class="hint"></p>
+      </fieldset>
+
+      <fieldset>
         <legend>YouTube</legend>
         <label>背景音樂連結
           <div class="url-row">

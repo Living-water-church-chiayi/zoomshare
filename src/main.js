@@ -41,7 +41,10 @@ const DEFAULT_CONFIG = {
   videoQuality: 1080,
   cacheKeepDays: 30,
   fontFamily: 'sans-bold',
-  zoomUrl: 'https://us06web.zoom.us/j/77730692079?pwd=EbYm30dRERJb8FI3GRHadpkqdNLfE4.1'
+  zoomUrl: 'https://us06web.zoom.us/j/77730692079?pwd=EbYm30dRERJb8FI3GRHadpkqdNLfE4.1',
+  // 開機自動依日期抓取經文的 Google 試算表（日期,書卷,章起,節起,章迄,節迄）
+  scheduleEnabled: true,
+  scheduleUrl: 'https://docs.google.com/spreadsheets/d/11O0As3DWpT45otcL5T7BadMpPVWcWKAoiZ5OUPocMpA/edit?usp=sharing'
 };
 
 // ---------- 二進位位置（yt-dlp / deno / ffmpeg） ----------
@@ -92,6 +95,78 @@ function httpGetJson(url) {
       res.on('end', () => { try { resolve(JSON.parse(data)); } catch (e) { reject(e); } });
     }).on('error', reject);
   });
+}
+// 取回純文字（跟隨轉址；用於 Google 試算表 CSV）
+function httpGetText(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0 lingxiu-cover' } }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location)
+        return resolve(httpGetText(res.headers.location));
+      if (res.statusCode !== 200) { res.resume(); return reject(new Error('HTTP ' + res.statusCode)); }
+      let data = ''; res.setEncoding('utf8');
+      res.on('data', (c) => (data += c));
+      res.on('end', () => resolve(data));
+    }).on('error', reject);
+  });
+}
+
+// ---------- 依日期自動抓取經文（Google 試算表 CSV） ----------
+// 中文數字轉阿拉伯數字（章用中文如「四」「十六」「一百五十」；節可能是阿拉伯或中文）
+function cnToNum(str) {
+  str = String(str || '').trim();
+  if (str === '') return NaN;
+  if (/^\d+$/.test(str)) return parseInt(str, 10);
+  const d = { 零: 0, 〇: 0, 一: 1, 二: 2, 兩: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  const u = { 十: 10, 百: 100 };
+  let total = 0, cur = 0;
+  for (const ch of str) {
+    if (ch in d) cur = d[ch];
+    else if (ch in u) { total += (cur === 0 ? 1 : cur) * u[ch]; cur = 0; }
+  }
+  total += cur;
+  return total || NaN;
+}
+function parseCsvLine(line) {
+  const out = []; let cur = '', q = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (q) { if (c === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += c; }
+    else if (c === '"') q = true;
+    else if (c === ',') { out.push(cur); cur = ''; }
+    else cur += c;
+  }
+  out.push(cur); return out;
+}
+function sheetCsvUrl(url) {
+  const m = String(url || '').match(/\/spreadsheets\/d\/([a-zA-Z0-9\-_]+)/);
+  if (!m) return null;
+  const g = String(url).match(/[#&?]gid=(\d+)/);
+  return `https://docs.google.com/spreadsheets/d/${m[1]}/export?format=csv&gid=${g ? g[1] : '0'}`;
+}
+// 讀試算表，找出「今天日期（月/日）」那一列，回傳 {book,startCh,startV,endCh,endV}
+async function fetchScheduleToday(url) {
+  const csvUrl = sheetCsvUrl(url);
+  if (!csvUrl) return { ok: false, error: '無效的試算表連結' };
+  let text;
+  try { text = await httpGetText(csvUrl); } catch (e) { return { ok: false, error: e.message }; }
+  const now = new Date(), tm = now.getMonth() + 1, td = now.getDate();
+  const lines = text.split(/\r?\n/).filter((l) => l.trim() !== '');
+  for (const line of lines) {
+    const cols = parseCsvLine(line).map((s) => s.trim());
+    if (cols.length < 6) continue;
+    const dm = cols[0].match(/(\d{1,4})[\/\-.](\d{1,2})(?:[\/\-.](\d{1,2}))?/);
+    if (!dm) continue; // 表頭或非日期列
+    const mo = dm[3] ? +dm[2] : +dm[1];
+    const da = dm[3] ? +dm[3] : +dm[2];
+    if (mo === tm && da === td) {
+      return { ok: true, found: true, row: {
+        book: cols[1],
+        startCh: cnToNum(cols[2]), startV: cnToNum(cols[3]),
+        endCh: cnToNum(cols[4]), endV: cnToNum(cols[5])
+      } };
+    }
+  }
+  return { ok: true, found: false };
 }
 function downloadTo(url, dest) {
   return new Promise((resolve, reject) => {
@@ -329,6 +404,7 @@ function registerIpc() {
   ipcMain.handle('app:quitAndInstall', () => { autoUpdater.quitAndInstall(); });
 
   ipcMain.handle('open:external', async (_e, url) => { shell.openExternal(url); });
+  ipcMain.handle('schedule:today', async (_e, url) => fetchScheduleToday(url));
 
   ipcMain.handle('win:minimize', () => { if (mainWindow) mainWindow.minimize(); });
   ipcMain.handle('win:close', () => { if (mainWindow) mainWindow.close(); });

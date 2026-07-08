@@ -160,6 +160,41 @@ function onScriptureChange(which) {
   saveTimer = setTimeout(() => window.api.setConfig(cfg), 300);
 }
 
+// 依 Google 試算表某列（今天日期）套用經文；書卷對不上或超範圍會夾住/略過
+function applyScheduleRow(row) {
+  const bk = window.BIBLE.find((b) => b.n === String(row.book || '').trim());
+  if (!bk) return false;
+  const nCh = bk.v.length;
+  const sc = clampNum(row.startCh, 1, nCh);
+  const sv = clampNum(row.startV, 1, bk.v[sc - 1]);
+  const ec = clampNum(row.endCh, sc, nCh);
+  const ev = clampNum(row.endV, ec === sc ? sv : 1, bk.v[ec - 1]);
+  cfg.scriptureBook = bk.n;
+  cfg.scriptureStartCh = sc; cfg.scriptureStartV = sv;
+  cfg.scriptureEndCh = ec; cfg.scriptureEndV = ev;
+  fillScriptureControls();
+  applyCover(null);
+  window.api.setConfig(cfg);
+  return true;
+}
+async function applySchedule(manual) {
+  if (!cfg.scheduleUrl) { if (manual) toast('請先貼上試算表連結'); return; }
+  const st = $('scheduleStatus');
+  if (st) st.textContent = '讀取試算表中…';
+  const r = await window.api.scheduleToday(cfg.scheduleUrl);
+  if (!r.ok) { const m = '讀取失敗：' + (r.error || ''); if (st) st.textContent = m; if (manual) toast('經文表' + m, 4000); return; }
+  if (!r.found) { const m = '試算表沒有今天（' + systemDateMD() + '）的經文'; if (st) st.textContent = m; if (manual) toast(m, 3500); return; }
+  if (applyScheduleRow(r.row)) {
+    const m = '已依 ' + systemDateMD() + ' 更新：' + formatRef();
+    if (st) st.textContent = m;
+    if (manual) toast('✓ ' + m, 3000);
+  } else {
+    const m = '書卷「' + r.row.book + '」對不上聖經名稱';
+    if (st) st.textContent = m;
+    if (manual) toast(m, 4000);
+  }
+}
+
 // ---------- 設定面板 ----------
 function fillSettings() {
   $('fillMode').value = cfg.fillMode;
@@ -170,6 +205,8 @@ function fillSettings() {
   $('inTitle3').value = cfg.title3 || '';
   $('inScriptureLabel').value = cfg.scriptureLabel || '';
   $('inReading').value = cfg.readingExtra || '';
+  $('scheduleEnabled').checked = !!cfg.scheduleEnabled;
+  $('inScheduleUrl').value = cfg.scheduleUrl || '';
   fillScriptureControls();
   $('inMusicUrl').value = cfg.musicUrl || '';
   $('inWorshipUrl').value = cfg.worshipUrl || '';
@@ -191,6 +228,8 @@ function collectSettings() {
   cfg.title3 = $('inTitle3').value;
   cfg.scriptureLabel = $('inScriptureLabel').value;
   cfg.readingExtra = $('inReading').value;
+  cfg.scheduleEnabled = $('scheduleEnabled').checked;
+  cfg.scheduleUrl = $('inScheduleUrl').value.trim();
   cfg.musicUrl = $('inMusicUrl').value.trim();
   cfg.useWorshipPreset = $('useWorshipPreset').checked;
   cfg.worshipPreset = $('worshipPreset').value;
@@ -562,6 +601,8 @@ async function init() {
   $('btnPasteMusic').addEventListener('click', () => pasteInto('inMusicUrl'));
   $('btnPasteWorship').addEventListener('click', () => pasteInto('inWorshipUrl'));
   $('btnPasteZoom').addEventListener('click', () => pasteInto('inZoomUrl'));
+  $('btnPasteSchedule').addEventListener('click', () => pasteInto('inScheduleUrl'));
+  $('btnScheduleNow').addEventListener('click', () => applySchedule(true));
   $('btnZoom').addEventListener('click', () => {
     if (cfg.zoomUrl) window.api.openExternal(zoomLaunchUrl(cfg.zoomUrl));
     else { toast('請先在設定貼上 Zoom 會議連結'); openSettings(); }
@@ -582,7 +623,7 @@ async function init() {
   // 設定即時變更
   ['fillMode','dateAuto','dateManual','inTitle1','inTitle2','inTitle3',
    'inScriptureLabel','inReading','inMusicUrl','inWorshipUrl','inZoomUrl','musicVolume','autoPlayMusic',
-   'useWorshipPreset','worshipPreset','cacheKeepDays']
+   'useWorshipPreset','worshipPreset','cacheKeepDays','scheduleEnabled','inScheduleUrl']
     .forEach((id) => {
       const el = $(id);
       el.addEventListener('input', onSettingsChanged);
@@ -669,6 +710,9 @@ async function init() {
   if (cfg.autoPlayMusic && cfg.musicUrl) resolveAndPlayMusic();
   else prefetch('audio');
   setTimeout(() => prefetch('video'), 8000);
+
+  // 開機依今天日期，自動從 Google 試算表抓取並套用經文
+  if (cfg.scheduleEnabled && cfg.scheduleUrl) applySchedule(false);
 }
 
 window.addEventListener('DOMContentLoaded', init);

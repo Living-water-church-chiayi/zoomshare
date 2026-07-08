@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('api', {
   onUpdateDownloaded: (cb) => ipcRenderer.on('update:downloaded', (_e, d) => cb(d)),
 
   openExternal: (url) => ipcRenderer.invoke('open:external', url),
+  scheduleToday: (url) => ipcRenderer.invoke('schedule:today', url),
   minimizeWindow: () => ipcRenderer.invoke('win:minimize'),
   closeWindow: () => ipcRenderer.invoke('win:close'),
   readClipboard: () => ipcRenderer.invoke('clipboard:read'),
