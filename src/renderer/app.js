@@ -664,10 +664,11 @@ async function init() {
   // 每分鐘更新日期（跨午夜自動換日）
   setInterval(() => { if (cfg.dateAuto) $('dateText').textContent = systemDateMD(); }, 60000);
 
-  // 啟動時：背景預先下載敬拜影片；自動播放背景音樂
-  prefetch('video');
+  // 啟動時：先自動播放背景音樂（單一下載）；敬拜影片延後 8 秒才背景預抓，
+  // 避免開機同時兩個下載（deno 解 JS 很吃 CPU）把介面卡住、按鈕點不動
   if (cfg.autoPlayMusic && cfg.musicUrl) resolveAndPlayMusic();
   else prefetch('audio');
+  setTimeout(() => prefetch('video'), 8000);
 }
 
 window.addEventListener('DOMContentLoaded', init);

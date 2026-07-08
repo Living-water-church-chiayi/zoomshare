@@ -23,51 +23,51 @@ body.plat-mac {
   --ui: var(--ui-mac);
   --radius: 14px; --radius-lg: 20px; --radius-sm: 10px;
   --accent: #0a84ff; --accent-2: #0a6fe0; --accent-soft: rgba(10,132,255,.22);
-  --panel-bg: rgba(30,32,38,.60); --panel-border: 1px solid rgba(255,255,255,.16); --panel-blur: saturate(1.8) blur(44px);
-  --card-bg: rgba(255,255,255,.06); --card-border: 1px solid rgba(255,255,255,.09);
-  --field-bg: rgba(255,255,255,.09); --field-border: 1px solid rgba(255,255,255,.15);
-  --legend-bg: rgba(255,255,255,.12);
-  --btn2-bg: rgba(255,255,255,.11); --btn2-border: 1px solid rgba(255,255,255,.16); --btn2-hover: rgba(255,255,255,.2);
-  --text: #f2f4f8; --text-dim: #b3bcc9; --text-mute: #808a98;
-  --elev: 0 30px 80px rgba(0,0,0,.5);
-  --bar-bg: rgba(40,42,50,.5); --bar-blur: saturate(1.8) blur(34px); --bar-border: 1px solid rgba(255,255,255,.16);
-  --divider: rgba(255,255,255,.08);
+  --panel-bg: rgba(28,30,36,.85); --panel-border: 1px solid rgba(255,255,255,.14); --panel-blur: saturate(1.5) blur(22px);
+  --card-bg: rgba(255,255,255,.07); --card-border: 1px solid rgba(255,255,255,.1);
+  --field-bg: rgba(255,255,255,.1); --field-border: 1px solid rgba(255,255,255,.16);
+  --legend-bg: rgba(255,255,255,.14);
+  --btn2-bg: rgba(255,255,255,.12); --btn2-border: 1px solid rgba(255,255,255,.16); --btn2-hover: rgba(255,255,255,.22);
+  --text: #f5f7fa; --text-dim: #cad3df; --text-mute: #8b95a3;
+  --elev: 0 24px 64px rgba(0,0,0,.5);
+  --bar-bg: rgba(38,40,48,.66); --bar-blur: saturate(1.5) blur(20px); --bar-border: 1px solid rgba(255,255,255,.14);
+  --divider: rgba(255,255,255,.1);
 }
 /* ---- Windows（Fluent / Mica，深色預設） ---- */
 body.plat-win {
   --ui: var(--ui-win);
   --radius: 8px; --radius-lg: 8px; --radius-sm: 6px;
   --accent: #60cdff; --accent-2: #005fb8; --accent-soft: rgba(96,205,255,.18);
-  --panel-bg: rgba(32,34,37,.9); --panel-border: 1px solid rgba(255,255,255,.08); --panel-blur: blur(30px) saturate(1.4);
-  --card-bg: rgba(255,255,255,.04); --card-border: 1px solid rgba(255,255,255,.07);
-  --field-bg: rgba(255,255,255,.05); --field-border: 1px solid rgba(255,255,255,.1);
-  --legend-bg: rgba(255,255,255,.08);
-  --btn2-bg: rgba(255,255,255,.06); --btn2-border: 1px solid rgba(255,255,255,.09); --btn2-hover: rgba(255,255,255,.1);
-  --text: #f0f0f0; --text-dim: #c8c8c8; --text-mute: #909090;
+  --panel-bg: rgba(30,31,34,.97); --panel-border: 1px solid rgba(255,255,255,.08); --panel-blur: blur(18px) saturate(1.2);
+  --card-bg: rgba(255,255,255,.045); --card-border: 1px solid rgba(255,255,255,.08);
+  --field-bg: rgba(255,255,255,.06); --field-border: 1px solid rgba(255,255,255,.12);
+  --legend-bg: rgba(255,255,255,.09);
+  --btn2-bg: rgba(255,255,255,.07); --btn2-border: 1px solid rgba(255,255,255,.1); --btn2-hover: rgba(255,255,255,.12);
+  --text: #f3f3f3; --text-dim: #d6d6d6; --text-mute: #9a9a9a;
   --elev: 0 18px 52px rgba(0,0,0,.5);
-  --bar-bg: rgba(43,43,43,.78); --bar-blur: blur(26px) saturate(1.3); --bar-border: 1px solid rgba(255,255,255,.09);
+  --bar-bg: rgba(40,40,42,.85); --bar-blur: blur(18px) saturate(1.2); --bar-border: 1px solid rgba(255,255,255,.09);
   --divider: rgba(255,255,255,.09);
 }
 /* ---- 淺色（跟隨系統） ---- */
 @media (prefers-color-scheme: light) {
   body.plat-mac {
     --accent: #007aff; --accent-2: #0062cc; --accent-soft: rgba(0,122,255,.16);
-    --panel-bg: rgba(250,250,252,.62); --panel-border: 1px solid rgba(255,255,255,.7); --panel-blur: saturate(1.8) blur(44px);
-    --card-bg: rgba(255,255,255,.5); --card-border: 1px solid rgba(0,0,0,.06);
-    --field-bg: rgba(255,255,255,.72); --field-border: 1px solid rgba(0,0,0,.12);
+    --panel-bg: rgba(248,249,251,.9); --panel-border: 1px solid rgba(255,255,255,.7); --panel-blur: saturate(1.5) blur(22px);
+    --card-bg: rgba(0,0,0,.03); --card-border: 1px solid rgba(0,0,0,.07);
+    --field-bg: #ffffff; --field-border: 1px solid rgba(0,0,0,.14);
     --legend-bg: rgba(0,0,0,.05);
     --btn2-bg: rgba(0,0,0,.05); --btn2-border: 1px solid rgba(0,0,0,.1); --btn2-hover: rgba(0,0,0,.09);
-    --text: #1b1d21; --text-dim: #5b6470; --text-mute: #97a1ad;
-    --elev: 0 30px 80px rgba(20,30,55,.22); --divider: rgba(0,0,0,.08);
+    --text: #16181c; --text-dim: #4a5460; --text-mute: #8b95a1;
+    --elev: 0 24px 64px rgba(20,30,55,.2); --divider: rgba(0,0,0,.09);
   }
   body.plat-win {
     --accent: #005fb8; --accent-2: #005299; --accent-soft: rgba(0,95,184,.14);
-    --panel-bg: rgba(243,243,243,.95); --panel-border: 1px solid rgba(0,0,0,.08); --panel-blur: blur(30px) saturate(1.2);
-    --card-bg: rgba(255,255,255,.72); --card-border: 1px solid rgba(0,0,0,.06);
+    --panel-bg: rgba(243,243,243,.98); --panel-border: 1px solid rgba(0,0,0,.08); --panel-blur: blur(18px) saturate(1.2);
+    --card-bg: rgba(0,0,0,.025); --card-border: 1px solid rgba(0,0,0,.07);
     --field-bg: #ffffff; --field-border: 1px solid rgba(0,0,0,.16);
     --legend-bg: rgba(0,0,0,.05);
     --btn2-bg: rgba(0,0,0,.04); --btn2-border: 1px solid rgba(0,0,0,.1); --btn2-hover: rgba(0,0,0,.07);
-    --text: #1a1a1a; --text-dim: #565656; --text-mute: #8a8a8a;
+    --text: #131313; --text-dim: #4c4c4c; --text-mute: #808080;
     --elev: 0 18px 52px rgba(0,0,0,.18); --divider: rgba(0,0,0,.08);
   }
 }
@@ -90,12 +90,8 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
   position: relative; width: 100vw; height: 100vh; overflow: hidden;
   container-type: size; background: #000;
 }
-.bg-blur {
-  position: absolute; inset: -4%;
-  background-size: cover; background-position: center;
-  filter: blur(28px) brightness(0.85); transform: scale(1.08);
-}
-.bg-blur.black { background: #000 !important; filter: none; }
+/* 背景圖已拉伸填滿 16:9（無留白），這層模糊填充永遠被蓋住 → 停用以省效能 */
+.bg-blur { display: none; }
 .bg-image {
   position: absolute; inset: 0;
   background-size: 100% 100%; background-position: center; background-repeat: no-repeat;
@@ -219,8 +215,8 @@ body.plat-mac .settings-head .close { border-radius: var(--pill); }
   border: var(--card-border); border-radius: var(--radius); padding: 15px 14px 5px; margin-bottom: 16px; background: var(--card-bg);
 }
 .settings legend {
-  padding: 3px 11px; color: var(--text); font-size: 12px; font-weight: 700; letter-spacing: .8px;
-  background: var(--legend-bg); border: var(--card-border); border-radius: var(--pill);
+  padding: 0 8px; color: var(--accent); font-size: 12px; font-weight: 800; letter-spacing: 1.2px;
+  background: transparent; border: none;
 }
 .settings label { display: block; font-size: 12.5px; color: var(--text-dim); margin-bottom: 12px; font-weight: 600; }
 .settings label.inline { display: flex; align-items: center; gap: 8px; }
