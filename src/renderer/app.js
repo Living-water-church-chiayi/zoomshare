@@ -195,6 +195,66 @@ async function applySchedule(manual) {
   }
 }
 
+// ---------- 早靈修班公告（一鍵複製） ----------
+// 中文星期：依系統今天
+const CN_WEEKDAYS = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+// 把 zoom 會議網址拆成 (會議ID, 密碼)；例如 https://us06web.zoom.us/j/77730692079?pwd=EbYm30dRERJb8FI3GRHadpkqdNLfE4.1
+function parseZoomUrl(url) {
+  if (!url) return { id: '', pwd: '' };
+  try {
+    const u = new URL(url);
+    const m = u.pathname.match(/\/j\/(\d+)/);
+    return { id: m ? m[1] : '', pwd: u.searchParams.get('pwd') || '' };
+  } catch { return { id: '', pwd: '' }; }
+}
+// 產生「M月D日 星期X」字串（純本機時間，沒有時區困擾）
+function todayCNDate() {
+  const d = new Date();
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${CN_WEEKDAYS[d.getDay()]}`;
+}
+// 從 cfg 目前的經文欄位（已被試算表更新過）組出精簡版，例如「提摩太前書 5:1-25」
+function formatScriptureShort() {
+  const bk = cfg.scriptureBook || '';
+  const sc = cfg.scriptureStartCh, sv = cfg.scriptureStartV, ec = cfg.scriptureEndCh, ev = cfg.scriptureEndV;
+  if (!bk) return '';
+  if (sc === ec && sv === ev) return `${bk} ${sc}:${sv}`;
+  if (sc === ec) return `${bk} ${sc}:${sv}-${ev}`;
+  return `${bk} ${sc}:${sv}-${ec}:${ev}`;
+}
+// 組出最終要複製到剪貼簿的字串（對齊你原本群組訊息的格式）
+function buildAnnounceText() {
+  const z = parseZoomUrl(cfg.zoomUrl);
+  // 帳號顯示用「777 3069 2079」格式：從右邊每 4 碼切，剩下放最前（11 碼→3+4+4）
+  const idFmt = z.id ? z.id.replace(/(\d{1,4})(?=(\d{4})+(?!\d))/g, '$1 ').trim() : '';
+  const ref = formatScriptureShort();
+  const extras = (cfg.readingExtra || '').split('\n').map((s) => s.trim()).filter(Boolean);
+  const lines = [];
+  lines.push('親愛的活水家人們，早安！');
+  lines.push(`今天是${todayCNDate()}。`);
+  lines.push('');
+  lines.push('請預備大家的聖經');
+  if (ref) lines.push(`【聖經】${ref}`);
+  extras.forEach((x) => lines.push(x));
+  lines.push('');
+  lines.push('主題: 早靈修班');
+  lines.push('時間: 週二-周五 8:30 am');
+  lines.push('');
+  lines.push('加入 Zoom 會議');
+  if (cfg.zoomUrl) lines.push(cfg.zoomUrl);
+  lines.push('');
+  lines.push('蘋果電腦平板手機，');
+  lines.push('請手動輸入帳號密碼喔！');
+  if (idFmt) lines.push(`帳號：${idFmt}`);
+  if (z.pwd) lines.push(`密碼：${z.pwd}（我愛耶穌耶穌愛我）`);
+  return lines.join('\n');
+}
+// 按下「📋 複製公告」：寫入剪貼簿 + 跳出已複製通知
+async function copyAnnounce() {
+  const text = buildAnnounceText();
+  await window.api.writeClipboard(text);
+  toast('✓ 已複製到剪貼簿，到群組直接貼上即可', 2400);
+}
+
 // ---------- 設定面板 ----------
 function fillSettings() {
   $('fillMode').value = cfg.fillMode;
@@ -713,6 +773,9 @@ async function init() {
 
   // 開機依今天日期，自動從 Google 試算表抓取並套用經文
   if (cfg.scheduleEnabled && cfg.scheduleUrl) applySchedule(false);
+
+  // ---------- 早靈修班公告：一鍵複製 ----------
+  $('btnAnnounce').addEventListener('click', copyAnnounce);
 }
 
 window.addEventListener('DOMContentLoaded', init);

@@ -44,7 +44,8 @@ const DEFAULT_CONFIG = {
   zoomUrl: 'https://us06web.zoom.us/j/77730692079?pwd=EbYm30dRERJb8FI3GRHadpkqdNLfE4.1',
   // 開機自動依日期抓取經文的 Google 試算表（日期,書卷,章起,節起,章迄,節迄）
   scheduleEnabled: true,
-  scheduleUrl: 'https://docs.google.com/spreadsheets/d/11O0As3DWpT45otcL5T7BadMpPVWcWKAoiZ5OUPocMpA/edit?usp=sharing'
+  scheduleUrl: 'https://docs.google.com/spreadsheets/d/11O0As3DWpT45otcL5T7BadMpPVWcWKAoiZ5OUPocMpA/edit?usp=sharing',
+  skippedVersion: '' // 使用者按「略過此次更新」記住的版本
 };
 
 // ---------- 二進位位置（yt-dlp / deno / ffmpeg） ----------
@@ -149,24 +150,28 @@ async function fetchScheduleToday(url) {
   if (!csvUrl) return { ok: false, error: '無效的試算表連結' };
   let text;
   try { text = await httpGetText(csvUrl); } catch (e) { return { ok: false, error: e.message }; }
-  const now = new Date(), tm = now.getMonth() + 1, td = now.getDate();
-  const lines = text.split(/\r?\n/).filter((l) => l.trim() !== '');
-  for (const line of lines) {
+  const now = new Date(), ty = now.getFullYear(), tm = now.getMonth() + 1, td = now.getDate();
+  const mkRow = (c) => ({ book: c[1], startCh: cnToNum(c[2]), startV: cnToNum(c[3]), endCh: cnToNum(c[4]), endV: cnToNum(c[5]) });
+  let exact = null, loose = null; // exact：日期含年份且=今年今天；loose：只有月/日相符（每年重複）
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
     const cols = parseCsvLine(line).map((s) => s.trim());
     if (cols.length < 6) continue;
-    const dm = cols[0].match(/(\d{1,4})[\/\-.](\d{1,2})(?:[\/\-.](\d{1,2}))?/);
-    if (!dm) continue; // 表頭或非日期列
-    const mo = dm[3] ? +dm[2] : +dm[1];
-    const da = dm[3] ? +dm[3] : +dm[2];
-    if (mo === tm && da === td) {
-      return { ok: true, found: true, row: {
-        book: cols[1],
-        startCh: cnToNum(cols[2]), startV: cnToNum(cols[3]),
-        endCh: cnToNum(cols[4]), endV: cnToNum(cols[5])
-      } };
+    // 耐格式解析：抓出 4 位數當年份，其餘兩個依序為「月、日」（支援 2026/07/08、2026-7-8、07/08…）
+    const parts = cols[0].split(/[\/\-.]/).map((s) => parseInt(s, 10)).filter((n) => !isNaN(n));
+    if (parts.length < 2) continue; // 表頭或非日期列
+    let yr = null; const md = [];
+    for (const p of parts) { if (p >= 1000 && yr === null) yr = p; else md.push(p); }
+    if (md.length < 2) continue;
+    const mo = md[0], da = md[1];
+    if (yr !== null) {                          // 含年份 → 需精確到今年今天（跨年不會誤抓）
+      if (yr === ty && mo === tm && da === td && !exact) exact = mkRow(cols);
+    } else if (mo === tm && da === td && !loose) {  // 無年份 → 月日相符即可（每年重複）
+      loose = mkRow(cols);
     }
   }
-  return { ok: true, found: false };
+  const row = exact || loose; // 有年份的精確列優先於「每年重複」列
+  return row ? { ok: true, found: true, row } : { ok: true, found: false };
 }
 function downloadTo(url, dest) {
   return new Promise((resolve, reject) => {
@@ -409,6 +414,7 @@ function registerIpc() {
   ipcMain.handle('win:minimize', () => { if (mainWindow) mainWindow.minimize(); });
   ipcMain.handle('win:close', () => { if (mainWindow) mainWindow.close(); });
   ipcMain.handle('clipboard:read', () => clipboard.readText());
+  ipcMain.handle('clipboard:write', (_e, text) => { clipboard.writeText(String(text == null ? '' : text)); return { ok: true }; });
 }
 
 // ---------- 視窗 ----------

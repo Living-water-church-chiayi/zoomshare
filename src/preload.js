@@ -36,5 +36,6 @@ contextBridge.exposeInMainWorld('api', {
   minimizeWindow: () => ipcRenderer.invoke('win:minimize'),
   closeWindow: () => ipcRenderer.invoke('win:close'),
   readClipboard: () => ipcRenderer.invoke('clipboard:read'),
+  writeClipboard: (text) => ipcRenderer.invoke('clipboard:write', text),
   pathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch { return ''; } }
 });

@@ -7,3 +7,12 @@ resources/bin/
 
 # Claude 個人本機設定
 .claude/settings.local.json
+
+# Hermes 桌面 agent 本機設定（不應發佈）
+.hermes/
+
+# 講道 PPT 工具（另一個專案的目錄，不屬於本專案）
+sermon-ppt/
+
+# Windows 殘留的 nul 假裝裝置檔
+nul

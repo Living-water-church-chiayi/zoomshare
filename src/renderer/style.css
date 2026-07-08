@@ -171,6 +171,8 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
 .toolbar button.active { background: var(--accent); color: #fff; }
 .toolbar .btn-zoom { background: var(--accent); color: #fff; }
 .toolbar .btn-zoom:hover { filter: brightness(1.12); }
+.toolbar .btn-announce { background: linear-gradient(180deg, #34c77a, #1f9d57); color: #fff; }
+.toolbar .btn-announce:hover { filter: brightness(1.12); }
 .toolbar .btn-close:hover { background: #e2463b; color: #fff; }
 .toolbar .tb-sep { width: 1px; align-self: stretch; background: rgba(255,255,255,0.16); margin: 5px 3px; }
 /* Mac 的按鈕更貼近 liquid glass */
@@ -282,9 +284,13 @@ body.plat-mac .dl-badge, body.plat-mac .toast { border-radius: 16px; }
 body.plat-mac .update-banner .ub-btn { border-radius: var(--pill); }
 .update-banner .ub-btn:hover { background: #fff; }
 .update-banner .ub-btn:active { transform: translateY(1px); }
-.update-banner .ub-close { background: rgba(255,255,255,.18); color: #fff; border: none; width: 28px; height: 28px; border-radius: 7px; font-size: 15px; cursor: pointer; transition: background .15s; }
-body.plat-mac .update-banner .ub-close { border-radius: var(--pill); }
-.update-banner .ub-close:hover { background: rgba(255,255,255,.32); }
+.update-banner .ub-skip {
+  background: rgba(255,255,255,.16); color: #fff; border: 1px solid rgba(255,255,255,.25);
+  border-radius: 8px; padding: 7px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
+  font-family: var(--ui); white-space: nowrap; transition: background .15s;
+}
+body.plat-mac .update-banner .ub-skip { border-radius: var(--pill); }
+.update-banner .ub-skip:hover { background: rgba(255,255,255,.3); }
 
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
