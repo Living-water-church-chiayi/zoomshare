@@ -318,11 +318,23 @@ async function startWorship() {
   if (musicPlaying) fadeOutMusic();
 
   const r = await window.api.ensureMedia(cfg.worshipUrl, 'video', cfg.videoQuality);
+  if (!worshipActive) return;                 // 下載期間若已返回封面則不繼續
   if (!r.ok) { toast('敬拜影片載入失敗：' + r.error, 4000); backToCover(); return; }
-  video.src = r.path;
+  playWorshipVideo(r.path, false);
+}
+
+// 播放敬拜影片：設來源後「明確 load()」再 play；若被拒自動重試一次（修正閒置久後首次黑屏）
+function playWorshipVideo(src, retried) {
+  const video = $('worshipVideo');
+  video.pause();
+  video.src = src;
+  video.load();
   video.volume = 1;
-  try { await video.play(); } catch (e) { /* 等待使用者互動 */ }
-  $('worshipLoading').classList.add('hidden');
+  video.play().then(() => {
+    $('worshipLoading').classList.add('hidden');
+  }).catch(() => {
+    if (!retried && worshipActive) setTimeout(() => playWorshipVideo(src, true), 300);
+  });
 }
 
 function backToCover() {

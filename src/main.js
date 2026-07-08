@@ -156,11 +156,13 @@ function downloadMedia(url, kind, quality) {
   return new Promise((resolve, reject) => {
     const tmpl = path.join(CACHE_DIR(), `${cacheKey(url, kind)}.%(ext)s`);
     // 音訊：直接下載原生格式（m4a，Chromium 可直接播），不轉檔 → 大幅加快（長音樂尤其明顯）
+    // 多重試：YouTube 直鏈偶發 403，重試可自動恢復（macOS 較常見）
+    const retry = ['--retries', '20', '--fragment-retries', '20', '--extractor-retries', '3'];
     const args = kind === 'video'
       ? ['-f', `bestvideo[height<=${quality || 1080}]+bestaudio/best`,
-         '--merge-output-format', 'mp4', '--no-playlist', '--newline',
+         '--merge-output-format', 'mp4', '--no-playlist', '--newline', ...retry,
          '--ffmpeg-location', bundledBinDir(), '-o', tmpl, url]
-      : ['-f', 'bestaudio[ext=m4a]/bestaudio', '--no-playlist', '--newline', '-o', tmpl, url];
+      : ['-f', 'bestaudio[ext=m4a]/bestaudio', '--no-playlist', '--newline', ...retry, '-o', tmpl, url];
 
     const child = spawn(resolveYtDlpPath(), args, { windowsHide: true, env: spawnEnv() });
     let stderr = '';
