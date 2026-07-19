@@ -3,18 +3,18 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>靈修封面</title>
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' file: data:; media-src 'self' file:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'" />
+  <title>早靈修投影</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <!-- 有新版本時的頂端橫幅通知 -->
   <div id="updateBanner" class="update-banner hidden">
-    <span id="updateBannerText">🔔 有新版本可用</span>
-    <button id="btnUpdateDownload" class="ub-btn">下載更新</button>
-    <button id="btnUpdateDismiss" class="ub-skip">略過此次更新</button>
+    <span id="updateBannerText">有新版可以使用</span>
+    <button id="btnUpdateDownload" class="ub-btn">立即更新</button>
+    <button id="btnUpdateDismiss" class="ub-skip">稍後提醒</button>
   </div>
 
-  <!-- 16:9 封面畫面 -->
   <div id="canvas" class="canvas">
     <div id="bgBlur" class="bg-blur"></div>
     <div id="bgImage" class="bg-image"></div>
@@ -22,10 +22,10 @@
     <div class="overlay-top">
       <div class="line title1">
         <span id="dateText" class="date">6/30</span>
-        <span id="title1" class="title-main">靈修班即將開始</span>
+        <span id="title1" class="title-main">早靈修班</span>
       </div>
       <div id="title2" class="line title2">歡迎聖靈與我們同在</div>
-      <div id="title3" class="line title3">讓我們一起預備《聖經》</div>
+      <div id="title3" class="line title3">讓我們一起預備聖經</div>
     </div>
 
     <div class="overlay-bottom">
@@ -33,147 +33,134 @@
       <div id="readingLines" class="reading"></div>
     </div>
 
-    <!-- 拖放提示 -->
-    <div id="dropHint" class="drop-hint">放開即可更換背景圖</div>
+    <div id="flowScreen" class="flow-screen hidden">
+      <div class="flow-topbar">
+        <button id="flowHomeButton" class="flow-home-btn" title="回主畫面" aria-label="回主畫面">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M3 10.8 12 3l9 7.8" />
+            <path d="M5.4 9.2V21h4.8v-6.2h3.6V21h4.8V9.2" />
+          </svg>
+        </button>
+        <div class="flow-heading">
+          <div id="flowEyebrow" class="flow-eyebrow"></div>
+          <div id="flowTitle" class="flow-title">讀經內容</div>
+        </div>
+      </div>
+      <div id="flowMeta" class="flow-meta"></div>
+      <div id="flowContent" class="flow-content"></div>
+      <div id="flowFooterHotzone" class="flow-footer-hotzone" aria-hidden="true"></div>
+      <div class="flow-footer">
+        <button id="flowPrevPage" class="flow-btn">上一頁</button>
+        <span id="flowPageInfo" class="flow-page-info"></span>
+        <button id="flowNextPage" class="flow-btn primary">下一頁</button>
+      </div>
+    </div>
 
-    <!-- 敬拜影片覆蓋層（窗口內 16:9，非系統全屏） -->
+    <div id="dropHint" class="drop-hint">拖曳圖片到這裡更換背景</div>
+
     <div id="worshipLayer" class="worship-layer hidden">
       <video id="worshipVideo" class="worship-video" playsinline></video>
-      <div id="worshipLoading" class="worship-loading hidden">敬拜影片載入中…</div>
+      <div id="worshipLoading" class="worship-loading hidden">敬拜影片載入中...</div>
+      <button id="wBackTop" class="worship-back" title="返回封面">‹</button>
       <div id="worshipHotzone" class="worship-hotzone"></div>
       <div id="worshipControls" class="worship-controls">
-        <button id="wPlay" class="wbtn" title="播放/暫停">⏸</button>
+        <button id="wPlay" class="wbtn worship-play-btn" title="播放" aria-label="播放">
+          <svg class="play-icon" viewBox="0 0 48 48" aria-hidden="true">
+            <circle cx="24" cy="24" r="20"></circle>
+            <path d="M20 16v16l14-8z"></path>
+          </svg>
+          <svg class="pause-icon" viewBox="0 0 48 48" aria-hidden="true">
+            <circle cx="24" cy="24" r="20"></circle>
+            <path d="M19 16v16"></path>
+            <path d="M29 16v16"></path>
+          </svg>
+        </button>
         <span id="wCur" class="wtime">0:00</span>
         <input id="wSeek" class="wseek" type="range" min="0" max="1000" value="0" step="1" />
         <span id="wDur" class="wtime">0:00</span>
-        <button id="wReturn" class="wbtn" title="返回封面">↩ 返回封面</button>
-        <button id="wMin" class="wbtn" title="縮小視窗">—</button>
-        <button id="wClose" class="wbtn wbtn-close" title="關閉軟體">✕ 關閉</button>
+        <button id="wReturn" class="wbtn worship-next-btn" title="前往經文">
+          <span>前往今日經文</span>
+        </button>
       </div>
     </div>
   </div>
 
-  <!-- 自動隱藏工具條 -->
   <div id="toolbar" class="toolbar">
-    <button id="btnSettings" title="設定">⚙</button>
-    <button id="btnMusic" title="背景音樂">🎵</button>
-    <button id="btnWorship" title="敬拜">▶ 敬拜</button>
-    <button id="btnBack" title="返回封面" class="hidden">↩ 返回封面</button>
-    <button id="btnAnnounce" title="複製今天早靈修班公告到剪貼簿" class="btn-announce">📋 複製公告</button>
-    <button id="btnZoom" title="加入 Zoom 會議" class="btn-zoom">📹 Zoom</button>
+    <button id="btnAnnounce" title="複製早靈修公告" class="btn-announce">複製公告</button>
+    <button id="btnZoom" title="開啟 Zoom 會議" class="btn-zoom">Zoom</button>
+    <button id="btnMusic" title="背景音樂" class="switch-btn"><span>背景音樂</span><i>OFF</i></button>
+    <button id="btnFlowNext" title="開始流程" class="btn-flow">開始</button>
+    <button id="btnWorship" title="敬拜" class="hidden">敬拜</button>
+    <button id="btnSettings" title="設定" class="icon-btn" aria-label="設定">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 15.2A3.2 3.2 0 1 0 12 8.8a3.2 3.2 0 0 0 0 6.4Z" />
+        <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2.05 2.05 0 0 1-2.9 2.9l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .58V20a2 2 0 0 1-4 0v-.02a1.7 1.7 0 0 0-1-.58 1.7 1.7 0 0 0-1.88.34l-.06.06a2.05 2.05 0 0 1-2.9-2.9l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.58-1H4a2 2 0 0 1 0-4h.02a1.7 1.7 0 0 0 .58-1 1.7 1.7 0 0 0-.34-1.88l-.06-.06a2.05 2.05 0 0 1 2.9-2.9l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.58V4a2 2 0 0 1 4 0v.02a1.7 1.7 0 0 0 1 .58 1.7 1.7 0 0 0 1.88-.34l.06-.06a2.05 2.05 0 0 1 2.9 2.9l-.06.06A1.7 1.7 0 0 0 19.4 9c.2.38.34.7.58 1H20a2 2 0 0 1 0 4h-.02a1.7 1.7 0 0 0-.58 1Z" />
+      </svg>
+    </button>
+    <button id="btnBack" title="返回封面" class="hidden">返回</button>
     <span class="tb-sep"></span>
-    <button id="btnMin" title="縮小視窗">—</button>
-    <button id="btnClose" title="關閉" class="btn-close">✕</button>
+    <button id="btnMin" title="最小化">−</button>
+    <button id="btnClose" title="關閉" class="btn-close">×</button>
   </div>
 
-  <!-- 背景音樂 -->
   <audio id="bgAudio" loop></audio>
 
-  <!-- 點此透明層可關閉設定（因畫面為可拖動區，點擊事件會被吞，故用此層捕捉） -->
   <div id="settingsBackdrop" class="settings-backdrop hidden"></div>
 
-  <!-- 設定抽屜 -->
   <div id="settingsPanel" class="settings hidden">
     <div class="settings-head">
       <span>設定</span>
-      <button id="btnCloseSettings" class="close">✕</button>
+      <button id="btnCloseSettings" class="close">×</button>
     </div>
     <div class="settings-body">
       <fieldset>
-        <legend>背景圖</legend>
-        <button id="btnPickImage" class="full-btn">選擇圖片…</button>
-        <p class="hint">或直接把圖片拖進畫面。整張圖會完整顯示、不裁切。</p>
-        <label>留白填充
-          <select id="fillMode">
-            <option value="blur">同圖模糊</option>
-            <option value="black">純黑</option>
-          </select>
-        </label>
-      </fieldset>
-
-      <fieldset>
-        <legend>日期</legend>
-        <label class="inline">
-          <input type="checkbox" id="dateAuto" /> 自動使用系統當天日期
-        </label>
-        <label>手動日期（關閉自動時生效）
-          <input type="text" id="dateManual" placeholder="例如 6/30" />
-        </label>
-      </fieldset>
-
-      <fieldset>
-        <legend>文字</legend>
-        <label>標題（日期後）<input type="text" id="inTitle1" /></label>
-        <label>副標題 1<input type="text" id="inTitle2" /></label>
-        <label>副標題 2<input type="text" id="inTitle3" /></label>
-        <label>經文標籤<input type="text" id="inScriptureLabel" /></label>
-        <label>本日經文（下拉選擇）</label>
-        <select id="bkBook" class="ref-book"></select>
-        <div class="ref-row">
-          <span class="ref-lab">起</span>
-          <select id="bkStartCh"></select><span class="ref-colon">:</span><select id="bkStartV"></select>
-        </div>
-        <div class="ref-row">
-          <span class="ref-lab">迄</span>
-          <select id="bkEndCh"></select><span class="ref-colon">:</span><select id="bkEndV"></select>
-        </div>
-        <p class="hint">預覽：<span id="refPreview"></span></p>
-        <label>其他讀物（每行一項，非聖經）
-          <textarea id="inReading" rows="2" placeholder="《竭誠獻上》《靈命日糧》"></textarea>
-        </label>
-      </fieldset>
-
-      <fieldset>
-        <legend>自動經文（Google 試算表）</legend>
-        <label class="inline"><input type="checkbox" id="scheduleEnabled" /> 開機自動依今天日期抓取經文</label>
-        <label>試算表連結（欄位：日期,書卷,章起,節起,章迄,節迄）
-          <div class="url-row">
-            <input type="text" id="inScheduleUrl" placeholder="https://docs.google.com/spreadsheets/..." />
-            <button type="button" id="btnPasteSchedule" class="paste-btn">貼上</button>
-          </div>
-        </label>
-        <button id="btnScheduleNow" class="full-btn" style="margin-top:4px;">立即依今天日期更新</button>
-        <p id="scheduleStatus" class="hint"></p>
-      </fieldset>
-
-      <fieldset>
-        <legend>YouTube</legend>
-        <label>背景音樂連結
+        <legend>音樂</legend>
+        <label>背景音樂
           <div class="url-row">
             <input type="text" id="inMusicUrl" placeholder="https://www.youtube.com/watch?v=..." />
             <button type="button" id="btnPasteMusic" class="paste-btn">貼上</button>
           </div>
         </label>
-        <label class="inline"><input type="checkbox" id="autoPlayMusic" /> 開啟軟體時自動播放背景音樂</label>
+        <label class="inline"><input type="checkbox" id="autoPlayMusic" /> 主畫面自動播放背景音樂</label>
         <label>音量 <input type="range" id="musicVolume" min="0" max="1" step="0.05" /></label>
 
-        <label>敬拜音樂</label>
-        <label class="inline"><input type="checkbox" id="useWorshipPreset" /> 使用常用敬拜音樂歌單</label>
+        <label>敬拜影片</label>
+        <label class="inline"><input type="checkbox" id="useWorshipPreset" /> 使用常用敬拜影片</label>
         <div id="worshipPresetRow">
-          <label>選擇常用敬拜音樂
+          <label>常用敬拜影片
             <select id="worshipPreset">
-              <option value="">— 選擇敬拜音樂 —</option>
-              <optgroup label="盛曉玫 泥土音樂">
-                <option value="https://www.youtube.com/watch?v=uSHI-9s4dTU">依然愛我</option>
-                <option value="https://www.youtube.com/watch?v=lfP-3JLVvaw">活出愛</option>
-                <option value="https://www.youtube.com/watch?v=Q3m-in8i6FU">幸福</option>
-                <option value="https://www.youtube.com/watch?v=96WDXhk6qjU">有一天</option>
-                <option value="https://www.youtube.com/watch?v=eGAeeQxZ6FM">因為祢</option>
-              </optgroup>
+              <option value="">選擇敬拜影片</option>
+              <optgroup id="customWorshipGroup" label="我加入的敬拜影片"></optgroup>
               <optgroup label="讚美之泉">
-                <option value="https://www.youtube.com/watch?v=v76-wz1mv8w">祢的恩典夠我用</option>
-                <option value="https://www.youtube.com/watch?v=mVqSmWIjoZU">好喜歡與你在一起</option>
-                <option value="https://www.youtube.com/watch?v=kvrRtRe9AoU">我們的神</option>
+                <option value="https://youtu.be/7mrMh_2tXCI?si=xiVMJ-2zx56L9oeW" data-announcement-title="讚美之泉（美好的創造）">美好的創造</option>
+                <option value="https://www.youtube.com/watch?v=v76-wz1mv8w" data-announcement-title="讚美之泉（祢的恩典夠我用）">祢的恩典夠我用</option>
+                <option value="https://www.youtube.com/watch?v=mVqSmWIjoZU" data-announcement-title="讚美之泉（好喜歡與你在一起）">好喜歡與你在一起</option>
+                <option value="https://www.youtube.com/watch?v=kvrRtRe9AoU" data-announcement-title="讚美之泉（我們的神）">我們的神</option>
+              </optgroup>
+              <optgroup label="盛曉玫・泥土音樂">
+                <option value="https://www.youtube.com/watch?v=uSHI-9s4dTU" data-announcement-title="盛曉玫（依然愛我）">依然愛我</option>
+                <option value="https://www.youtube.com/watch?v=lfP-3JLVvaw" data-announcement-title="盛曉玫（活出愛）">活出愛</option>
+                <option value="https://www.youtube.com/watch?v=Q3m-in8i6FU" data-announcement-title="盛曉玫（幸福）">幸福</option>
+                <option value="https://www.youtube.com/watch?v=96WDXhk6qjU" data-announcement-title="盛曉玫（有一天）">有一天</option>
+                <option value="https://www.youtube.com/watch?v=eGAeeQxZ6FM" data-announcement-title="盛曉玫（因為祢）">因為祢</option>
               </optgroup>
               <optgroup label="新店行道會">
-                <option value="https://www.youtube.com/watch?v=KqlvbYd5uJA">叫我抬起頭的神</option>
-                <option value="https://www.youtube.com/watch?v=v-k7ojwYE08">這裡有榮耀</option>
+                <option value="https://www.youtube.com/watch?v=KqlvbYd5uJA" data-announcement-title="新店行道會（叫我抬起頭的神）">叫我抬起頭的神</option>
+                <option value="https://www.youtube.com/watch?v=v-k7ojwYE08" data-announcement-title="新店行道會（這裡有榮耀）">這裡有榮耀</option>
               </optgroup>
             </select>
           </label>
+          <label>加入常用敬拜影片
+            <div class="url-row add-preset-row">
+              <input type="text" id="inCustomWorshipUrl" placeholder="貼上 YouTube 連結" />
+              <button type="button" id="btnPasteCustomWorship" class="paste-btn">貼上</button>
+              <button type="button" id="btnAddWorshipPreset" class="paste-btn add-btn">加入</button>
+            </div>
+          </label>
+          <div id="customWorshipList" class="custom-worship-list"></div>
         </div>
         <div id="worshipUrlRow">
-          <label>敬拜影片連結（自己貼上下載）
+          <label>敬拜影片連結
             <div class="url-row">
               <input type="text" id="inWorshipUrl" placeholder="https://www.youtube.com/watch?v=..." />
               <button type="button" id="btnPasteWorship" class="paste-btn">貼上</button>
@@ -183,47 +170,67 @@
       </fieldset>
 
       <fieldset>
-        <legend>Zoom 會議</legend>
-        <label>會議連結
-          <div class="url-row">
-            <input type="text" id="inZoomUrl" placeholder="https://...zoom.us/j/..." />
-            <button type="button" id="btnPasteZoom" class="paste-btn">貼上</button>
-          </div>
-        </label>
-        <p class="hint">工具列的「📹 Zoom」按鈕會開啟此連結加入會議。</p>
+        <legend>日期</legend>
+        <label class="inline"><input type="checkbox" id="dateAuto" /> 自動使用今天日期</label>
+        <div class="date-row">
+          <label>月份<select id="dateMonth"></select></label>
+          <label>日期<select id="dateDay"></select></label>
+        </div>
       </fieldset>
 
       <fieldset>
-        <legend>媒體快取</legend>
-        <p class="hint">目前佔用：<span id="cacheSize">計算中…</span></p>
-        <label>自動清理：超過幾天沒用到的快取
+        <legend>經文</legend>
+        <input type="hidden" id="inScheduleUrl" />
+        <label class="inline"><input type="checkbox" id="scheduleEnabled" /> 開啟時依今天日期更新</label>
+        <button id="btnScheduleNow" class="full-btn">立即更新今日進度</button>
+        <p id="scheduleStatus" class="hint"></p>
+
+        <div class="settings-divider"></div>
+        <label>今日經文範圍</label>
+        <select id="bkBook" class="ref-book"></select>
+        <div class="ref-row">
+          <span class="ref-lab">起</span>
+          <select id="bkStartCh"></select><span class="ref-colon">:</span><select id="bkStartV"></select>
+        </div>
+        <div class="ref-row">
+          <span class="ref-lab">迄</span>
+          <select id="bkEndCh"></select><span class="ref-colon">:</span><select id="bkEndV"></select>
+        </div>
+        <p class="hint">目前：<span id="refPreview"></span></p>
+        <label>其他閱讀
+          <textarea id="inReading" rows="2" placeholder="竭誠獻上"></textarea>
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>背景</legend>
+        <button id="btnPickImage" class="full-btn">選擇背景圖片</button>
+        <p class="hint">也可以直接把圖片拖曳到主畫面。</p>
+      </fieldset>
+
+      <fieldset>
+        <legend>快取</legend>
+        <p class="hint">目前使用：<span id="cacheSize">計算中...</span></p>
+        <label>保留天數
           <select id="cacheKeepDays">
             <option value="7">7 天</option>
             <option value="14">14 天</option>
             <option value="30">30 天</option>
             <option value="90">90 天</option>
-            <option value="0">不自動清理</option>
+            <option value="0">全部清除</option>
           </select>
         </label>
-        <button id="btnCleanCache" class="full-btn">立即清理全部快取</button>
-        <p class="hint">清理時會保留目前設定使用中的背景音樂與敬拜音樂。</p>
+        <button id="btnCleanCache" class="full-btn">清理快取</button>
         <p id="cacheMsg" class="hint"></p>
       </fieldset>
 
       <fieldset>
         <legend>軟體更新</legend>
-        <p class="hint">目前版本：<span id="appVer">—</span></p>
+        <p class="hint">目前版本：<span id="appVer">--</span></p>
         <button id="btnAppUpdate" class="full-btn">檢查軟體更新</button>
         <div id="appUpdateProgress" class="hint hidden">下載中 <span id="appUpdatePct">0</span>%</div>
-        <button id="btnAppInstall" class="full-btn hidden" style="margin-top:8px;background:#2e9e5b;">重新啟動以安裝更新</button>
+        <button id="btnAppInstall" class="full-btn hidden" style="margin-top:8px;background:#2e9e5b;">重新啟動並安裝</button>
         <p id="appUpdateMsg" class="hint"></p>
-      </fieldset>
-
-      <fieldset>
-        <legend>播放引擎 (yt-dlp)</legend>
-        <p class="hint">版本：<span id="ytdlpVer">檢查中…</span></p>
-        <button id="btnUpdate" class="full-btn">立即檢查更新</button>
-        <p id="updateMsg" class="hint"></p>
       </fieldset>
     </div>
   </div>

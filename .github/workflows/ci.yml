@@ -1,0 +1,79 @@
+name: Cross-platform checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Verify reading layout in Electron
+        run: npm run test:layout
+      - name: Check helper setup scripts
+        shell: bash
+        run: |
+          bash -n scripts/setup-win.sh
+          bash -n scripts/setup-mac.sh
+
+  package-windows:
+    name: Package Windows x64
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Prepare pinned Windows media helpers
+        shell: bash
+        run: bash scripts/setup-win.sh
+      - name: Build unpacked Windows application
+        shell: pwsh
+        run: npx electron-builder --win --dir --config.directories.output=ci-dist
+      - name: Verify packaged application
+        shell: pwsh
+        run: |
+          $appDir = Join-Path $PWD 'ci-dist\win-unpacked'
+          $exe = Get-ChildItem -LiteralPath $appDir -Filter '*.exe' | Select-Object -First 1
+          if (-not $exe) { throw 'Packaged application executable is missing' }
+          $expectedVersion = node -p "require('./package.json').version"
+          if ($exe.VersionInfo.FileVersion -ne $expectedVersion) {
+            throw "Packaged version $($exe.VersionInfo.FileVersion) does not match $expectedVersion"
+          }
+          foreach ($helper in 'yt-dlp.exe','deno.exe','ffmpeg.exe','ffprobe.exe') {
+            if (-not (Test-Path -LiteralPath (Join-Path $appDir "resources\bin\$helper"))) {
+              throw "Packaged helper is missing: $helper"
+            }
+          }
+      - name: Smoke-test packaged Electron application
+        shell: pwsh
+        run: |
+          $appDir = Join-Path $PWD 'ci-dist\win-unpacked'
+          $exe = Get-ChildItem -LiteralPath $appDir -Filter '*.exe' | Select-Object -First 1
+          if (-not $exe) { throw 'Packaged application executable is missing' }
+          node scripts/test-packaged-smoke.js "$($exe.FullName)"

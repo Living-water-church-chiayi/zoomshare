@@ -4,8 +4,38 @@ const $ = (id) => document.getElementById(id);
 
 let cfg = null;
 let musicPlaying = false;
-let musicResumeAfterWorship = false;
+let musicDesired = false;
+let musicRequestToken = 0;
+let musicFadeTimer = null;
+let musicResumeOnCover = false;
+let flowReachedUtmost = false;
 let worshipActive = false;
+let worshipPlayRetryTimer = null;
+let flowStep = 'cover';
+let flowPages = [];
+let flowPageScales = [];
+let flowPageIndex = 0;
+let flowLoading = false;
+let cachedUtmost = null;
+let cachedBible = null;
+let cachedBibleKey = '';
+let scriptureRequest = null;
+let scriptureRequestToken = 0;
+let flowNavigationToken = 0;
+let flowPageRenderToken = 0;
+let flowTransitioning = false;
+let flowResizeTimer = null;
+let utmostFooterHideTimer = null;
+let utmostFinishConfirmUntil = 0;
+let utmostFinishConfirmTimer = null;
+let flowWheelDelta = 0;
+let flowWheelGestureLocked = false;
+let flowWheelResetTimer = null;
+let worshipRequestToken = 0;
+const FLOW_ORDER = ['cover', 'worship', 'scripture', 'utmost'];
+const UTMOST_FINISH_CONFIRM_MS = 3500;
+const FLOW_WHEEL_THRESHOLD = 36;
+const FLOW_WHEEL_IDLE_MS = 300;
 
 // ---------- 工具 ----------
 function toast(msg, ms = 2200) {
@@ -21,24 +51,32 @@ function systemDateMD() {
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
-// 把 zoom 會議網頁連結轉成 zoommtg:// 直接開 Zoom App 加入（免瀏覽器、免「開啟 Zoom？」提示）
+function systemDateChinese() {
+  const d = new Date();
+  return `${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
+// 把 Zoom 會議網頁連結轉成 zoommtg://，直接交給 Zoom App。
 function zoomLaunchUrl(url) {
   try {
     const u = new URL(url);
-    if (u.hostname.toLowerCase().endsWith('zoom.us')) {
-      const m = u.pathname.match(/\/j\/(\d+)/);
-      if (m) {
-        let z = `zoommtg://${u.hostname}/join?action=join&confno=${m[1]}`;
-        const pwd = u.searchParams.get('pwd');
-        if (pwd) z += `&pwd=${pwd}`;
-        return z;
-      }
+    const host = u.hostname.toLowerCase();
+    if (host !== 'zoom.us' && !host.endsWith('.zoom.us')) return '';
+    if (u.username || u.password) return '';
+    if (u.protocol === 'zoommtg:') return u.href;
+    if (u.protocol !== 'https:') return '';
+    const m = u.pathname.match(/\/j\/(\d+)/);
+    if (m) {
+      let z = `zoommtg://${u.hostname}/join?action=join&confno=${m[1]}`;
+      const pwd = u.searchParams.get('pwd');
+      if (pwd) z += `&pwd=${encodeURIComponent(pwd)}`;
+      return z;
     }
-  } catch (e) { /* 非標準連結，退回原網址 */ }
-  return url;
+    return u.href;
+  } catch (e) { return ''; }
 }
 
-// ---------- 套用封面 ----------
+// ---------- 封面 ----------
 function applyCover(backgroundUrl) {
   $('dateText').textContent = cfg.dateAuto ? systemDateMD() : (cfg.dateManual || systemDateMD());
   $('title1').textContent = cfg.title1 || '';
@@ -58,22 +96,24 @@ function applyCover(backgroundUrl) {
     rl.appendChild(div);
   });
 
-  if (backgroundUrl) setBackground(backgroundUrl);
+  if (backgroundUrl !== null && backgroundUrl !== undefined) setBackground(backgroundUrl);
   applyFillMode();
 }
 
 function setBackground(url) {
-  $('bgImage').style.backgroundImage = `url("${url}")`;
-  $('bgBlur').style.backgroundImage = `url("${url}")`;
+  const hasBackground = !!url;
+  const image = hasBackground ? `url("${url}")` : 'none';
+  $('canvas').classList.toggle('no-background', !hasBackground);
+  $('bgImage').style.backgroundImage = image;
+  $('bgBlur').style.backgroundImage = image;
 }
 
 function applyFillMode() {
   const blur = $('bgBlur');
-  if (cfg.fillMode === 'black') blur.classList.add('black');
-  else blur.classList.remove('black');
+  blur.classList.remove('black');
 }
 
-// ---------- 本日經文（聖經下拉） ----------
+// ---------- 本日經文下拉選單 ----------
 function bookByName(name) {
   return window.BIBLE.find((b) => b.n === name) || window.BIBLE[0];
 }
@@ -88,15 +128,15 @@ function fillNumberSelect(sel, n, val, min = 1) {
   }
 }
 
-// 依「開始」重建「結束」下拉：只列出 ≥ 開始 的章/節（更早的直接隱藏）
+// 依開始位置重建結束選項，確保結束章節不早於開始章節。
 function syncEndOptions(desiredEndCh, desiredEndV) {
   const bk = bookByName($('bkBook').value);
   const sc = +$('bkStartCh').value, sv = +$('bkStartV').value;
   const nCh = bk.v.length;
-  let ec = clampNum(desiredEndCh, sc, nCh);          // 結束章 ≥ 開始章
+  let ec = clampNum(desiredEndCh, sc, nCh);
   fillNumberSelect($('bkEndCh'), nCh, ec, sc);
   ec = +$('bkEndCh').value;
-  const vMin = (ec === sc) ? sv : 1;                 // 同章時，結束節 ≥ 開始節
+  const vMin = (ec === sc) ? sv : 1;
   const ev = clampNum(desiredEndV, vMin, bk.v[ec - 1]);
   fillNumberSelect($('bkEndV'), bk.v[ec - 1], ev, vMin);
 }
@@ -110,30 +150,62 @@ function fillBookSelect() {
   });
 }
 function formatRef() {
-  const book = '《' + (cfg.scriptureBook || '') + '》';
+  const book = cfg.scriptureBook || '';
   const sc = cfg.scriptureStartCh, sv = cfg.scriptureStartV, ec = cfg.scriptureEndCh, ev = cfg.scriptureEndV;
   if (sc === ec) return sv === ev ? `${book}${sc}:${sv}` : `${book}${sc}:${sv}-${ev}`;
   return `${book}${sc}:${sv}-${ec}:${ev}`;
 }
 function updateRefPreview() { const el = $('refPreview'); if (el) el.textContent = formatRef(); }
 
-// 依 cfg 目前值填入四個下拉
-function fillScriptureControls() {
+function currentRefPayload() {
+  return {
+    book: cfg.scriptureBook,
+    startCh: cfg.scriptureStartCh,
+    startV: cfg.scriptureStartV,
+    endCh: cfg.scriptureEndCh,
+    endV: cfg.scriptureEndV
+  };
+}
+
+function normalizeScriptureConfig() {
+  const before = JSON.stringify([
+    cfg.scriptureBook,
+    cfg.scriptureStartCh,
+    cfg.scriptureStartV,
+    cfg.scriptureEndCh,
+    cfg.scriptureEndV
+  ]);
   const bk = bookByName(cfg.scriptureBook);
+  const startCh = clampNum(cfg.scriptureStartCh, 1, bk.v.length);
+  const startV = clampNum(cfg.scriptureStartV, 1, bk.v[startCh - 1]);
+  const endCh = clampNum(cfg.scriptureEndCh, startCh, bk.v.length);
+  const endV = clampNum(cfg.scriptureEndV, endCh === startCh ? startV : 1, bk.v[endCh - 1]);
   cfg.scriptureBook = bk.n;
+  cfg.scriptureStartCh = startCh;
+  cfg.scriptureStartV = startV;
+  cfg.scriptureEndCh = endCh;
+  cfg.scriptureEndV = endV;
+  return before !== JSON.stringify([bk.n, startCh, startV, endCh, endV]);
+}
+
+// 依 cfg 目前值填入四個下拉選單。
+function fillScriptureControls() {
+  normalizeScriptureConfig();
+  const bk = bookByName(cfg.scriptureBook);
   $('bkBook').value = bk.n;
   const nCh = bk.v.length;
-  const sc = clampNum(cfg.scriptureStartCh, 1, nCh);
+  const sc = cfg.scriptureStartCh;
   fillNumberSelect($('bkStartCh'), nCh, sc);
-  fillNumberSelect($('bkStartV'), bk.v[sc - 1], clampNum(cfg.scriptureStartV, 1, bk.v[sc - 1]));
-  // 結束下拉：只列 ≥ 開始（必要時自動上移），並寫回 cfg
+  fillNumberSelect($('bkStartV'), bk.v[sc - 1], cfg.scriptureStartV);
   syncEndOptions(cfg.scriptureEndCh, cfg.scriptureEndV);
+  cfg.scriptureStartCh = +$('bkStartCh').value;
+  cfg.scriptureStartV = +$('bkStartV').value;
   cfg.scriptureEndCh = +$('bkEndCh').value;
   cfg.scriptureEndV = +$('bkEndV').value;
   updateRefPreview();
 }
 
-// 使用者變更下拉時：級聯更新「節」的範圍，並存檔
+// 級聯更新章節範圍並存檔。
 function onScriptureChange(which) {
   const bk = bookByName($('bkBook').value);
   cfg.scriptureBook = bk.n;
@@ -144,23 +216,24 @@ function onScriptureChange(which) {
     syncEndOptions(1, 1);
   } else if (which === 'startCh') {
     fillNumberSelect($('bkStartV'), bk.v[$('bkStartCh').value - 1], 1);
-    syncEndOptions(+$('bkEndCh').value, +$('bkEndV').value); // 開始章變→結束重算（必要時上移）
+    syncEndOptions(+$('bkEndCh').value, +$('bkEndV').value);
   } else if (which === 'startV') {
-    syncEndOptions(+$('bkEndCh').value, +$('bkEndV').value); // 開始節變→同章結束節重算
+    syncEndOptions(+$('bkEndCh').value, +$('bkEndV').value);
   } else if (which === 'endCh') {
-    syncEndOptions(+$('bkEndCh').value, +$('bkEndV').value); // 結束章變→結束節下限重算
+    syncEndOptions(+$('bkEndCh').value, +$('bkEndV').value);
   }
   cfg.scriptureStartCh = +$('bkStartCh').value;
   cfg.scriptureStartV = +$('bkStartV').value;
   cfg.scriptureEndCh = +$('bkEndCh').value;
   cfg.scriptureEndV = +$('bkEndV').value;
+  invalidateScriptureData();
   updateRefPreview();
   applyCover(null);
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => window.api.setConfig(cfg), 300);
 }
 
-// 依 Google 試算表某列（今天日期）套用經文；書卷對不上或超範圍會夾住/略過
+// 套用 Google 試算表中今天的經文範圍。
 function applyScheduleRow(row) {
   const bk = window.BIBLE.find((b) => b.n === String(row.book || '').trim());
   if (!bk) return false;
@@ -174,134 +247,388 @@ function applyScheduleRow(row) {
   cfg.scriptureEndCh = ec; cfg.scriptureEndV = ev;
   fillScriptureControls();
   applyCover(null);
+  invalidateScriptureData();
   window.api.setConfig(cfg);
   return true;
 }
 async function applySchedule(manual) {
-  if (!cfg.scheduleUrl) { if (manual) toast('請先貼上試算表連結'); return; }
+  if (!cfg.scheduleUrl) { if (manual) toast('請先設定排程網址'); return false; }
   const st = $('scheduleStatus');
-  if (st) st.textContent = '讀取試算表中…';
+  if (st) st.textContent = '讀取今日排程中...';
   const r = await window.api.scheduleToday(cfg.scheduleUrl);
-  if (!r.ok) { const m = '讀取失敗：' + (r.error || ''); if (st) st.textContent = m; if (manual) toast('經文表' + m, 4000); return; }
-  if (!r.found) { const m = '試算表沒有今天（' + systemDateMD() + '）的經文'; if (st) st.textContent = m; if (manual) toast(m, 3500); return; }
+  if (!r.ok) { const m = '讀取失敗：' + (r.error || ''); if (st) st.textContent = m; if (manual) toast(m, 4000); return false; }
+  if (!r.found) { const m = '找不到 ' + systemDateMD() + ' 的排程'; if (st) st.textContent = m; if (manual) toast(m, 3500); return false; }
   if (applyScheduleRow(r.row)) {
-    const m = '已依 ' + systemDateMD() + ' 更新：' + formatRef();
+    const m = '已更新 ' + systemDateMD() + '：' + formatRef();
     if (st) st.textContent = m;
-    if (manual) toast('✓ ' + m, 3000);
+    if (manual) toast(m, 3000);
+    return true;
   } else {
-    const m = '書卷「' + r.row.book + '」對不上聖經名稱';
+    const m = '排程資料格式不正確：' + r.row.book;
     if (st) st.textContent = m;
     if (manual) toast(m, 4000);
+    return false;
   }
 }
 
-// ---------- 早靈修班公告（一鍵複製） ----------
-// 中文星期：依系統今天
+// ---------- 早靈修公告 ----------
 const CN_WEEKDAYS = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
-// 把 zoom 會議網址拆成 (會議ID, 密碼)；例如 https://us06web.zoom.us/j/77730692079?pwd=EbYm30dRERJb8FI3GRHadpkqdNLfE4.1
+const ZOOM_MEETING_PASSCODE = '52141425';
+const ZOOM_PASSCODE_HINT = '我愛耶穌耶穌愛我';
+
 function parseZoomUrl(url) {
-  if (!url) return { id: '', pwd: '' };
+  if (!url) return { id: '' };
   try {
     const u = new URL(url);
     const m = u.pathname.match(/\/j\/(\d+)/);
-    return { id: m ? m[1] : '', pwd: u.searchParams.get('pwd') || '' };
-  } catch { return { id: '', pwd: '' }; }
+    return { id: m ? m[1] : '' };
+  } catch { return { id: '' }; }
 }
-// 產生「M月D日 星期X」字串（純本機時間，沒有時區困擾）
-function todayCNDate() {
-  const d = new Date();
-  return `${d.getMonth() + 1}月${d.getDate()}日 ${CN_WEEKDAYS[d.getDay()]}`;
+
+function todayCNDate(now = new Date()) {
+  let d = now;
+  if (cfg && cfg.dateAuto === false) {
+    const manual = String(cfg.dateManual || '').match(/^(\d{1,2})\/(\d{1,2})$/);
+    if (manual) {
+      const candidate = new Date(now.getFullYear(), Number(manual[1]) - 1, Number(manual[2]));
+      if (candidate.getMonth() === Number(manual[1]) - 1 && candidate.getDate() === Number(manual[2])) {
+        d = candidate;
+      }
+    }
+  }
+  return (d.getMonth() + 1) + '月' + d.getDate() + '日' + CN_WEEKDAYS[d.getDay()];
 }
-// 從 cfg 目前的經文欄位（已被試算表更新過）組出精簡版，例如「提摩太前書 5:1-25」
+
+function chineseChapterNumber(value) {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n) || n <= 0 || n > 999) return String(value || '');
+  const digits = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+  if (n < 10) return digits[n];
+  if (n < 100) {
+    const tens = Math.floor(n / 10);
+    return (tens === 1 ? '' : digits[tens]) + '十' + digits[n % 10];
+  }
+  const hundreds = Math.floor(n / 100);
+  const remainder = n % 100;
+  if (!remainder) return digits[hundreds] + '百';
+  if (remainder < 10) return digits[hundreds] + '百零' + digits[remainder];
+  const tens = Math.floor(remainder / 10);
+  return digits[hundreds] + '百' + digits[tens] + '十' + digits[remainder % 10];
+}
+
 function formatScriptureShort() {
   const bk = cfg.scriptureBook || '';
   const sc = cfg.scriptureStartCh, sv = cfg.scriptureStartV, ec = cfg.scriptureEndCh, ev = cfg.scriptureEndV;
   if (!bk) return '';
-  if (sc === ec && sv === ev) return `${bk} ${sc}:${sv}`;
-  if (sc === ec) return `${bk} ${sc}:${sv}-${ev}`;
-  return `${bk} ${sc}:${sv}-${ec}:${ev}`;
-}
-// 組出最終要複製到剪貼簿的字串（對齊你原本群組訊息的格式）
-function buildAnnounceText() {
-  const z = parseZoomUrl(cfg.zoomUrl);
-  // 帳號顯示用「777 3069 2079」格式：從右邊每 4 碼切，剩下放最前（11 碼→3+4+4）
-  const idFmt = z.id ? z.id.replace(/(\d{1,4})(?=(\d{4})+(?!\d))/g, '$1 ').trim() : '';
-  const ref = formatScriptureShort();
-  const extras = (cfg.readingExtra || '').split('\n').map((s) => s.trim()).filter(Boolean);
-  const lines = [];
-  lines.push('親愛的活水家人們，早安！');
-  lines.push(`今天是${todayCNDate()}。`);
-  lines.push('');
-  lines.push('請預備大家的聖經');
-  if (ref) lines.push(`【聖經】${ref}`);
-  extras.forEach((x) => lines.push(x));
-  lines.push('');
-  lines.push('主題: 早靈修班');
-  lines.push('時間: 週二-周五 8:30 am');
-  lines.push('');
-  lines.push('加入 Zoom 會議');
-  if (cfg.zoomUrl) lines.push(cfg.zoomUrl);
-  lines.push('');
-  lines.push('蘋果電腦平板手機，');
-  lines.push('請手動輸入帳號密碼喔！');
-  if (idFmt) lines.push(`帳號：${idFmt}`);
-  if (z.pwd) lines.push(`密碼：${z.pwd}（我愛耶穌耶穌愛我）`);
-  return lines.join('\n');
-}
-// 按下「📋 複製公告」：寫入剪貼簿 + 跳出已複製通知
-async function copyAnnounce() {
-  const text = buildAnnounceText();
-  await window.api.writeClipboard(text);
-  toast('✓ 已複製到剪貼簿，到群組直接貼上即可', 2400);
+  if (sc === ec && sv === ev) return bk + ' ' + sc + ':' + sv;
+  if (sc === ec) return bk + ' ' + sc + ':' + sv + '-' + ev;
+  return bk + ' ' + sc + ':' + sv + '-' + ec + ':' + ev;
 }
 
-// ---------- 設定面板 ----------
+function formatScriptureBookTitle() {
+  return formatScriptureShort();
+}
+
+function formatScriptureAnnouncementRef() {
+  const book = String(cfg.scriptureBook || '').trim();
+  const startChapterNumber = Number.parseInt(cfg.scriptureStartCh, 10);
+  const endChapterNumber = Number.parseInt(cfg.scriptureEndCh, 10);
+  const startChapter = chineseChapterNumber(startChapterNumber);
+  const endChapter = chineseChapterNumber(endChapterNumber);
+  const startVerse = Number.parseInt(cfg.scriptureStartV, 10);
+  const endVerse = Number.parseInt(cfg.scriptureEndV, 10);
+  if (!book || !startChapter || !startVerse || !endChapter || !endVerse) return '';
+  if (startChapterNumber === endChapterNumber && startVerse === endVerse) {
+    return `${book}${startChapter}：${startVerse}`;
+  }
+  if (startChapterNumber === endChapterNumber) {
+    return `${book}${startChapter}：${startVerse}-${endVerse}`;
+  }
+  return `${book}${startChapter}：${startVerse}-${endChapter}：${endVerse}`;
+}
+
+function youtubeVideoId(value) {
+  try {
+    const url = new URL(String(value || '').trim());
+    const host = url.hostname.toLowerCase();
+    let id = '';
+    if (host === 'youtu.be') {
+      id = url.pathname.split('/').filter(Boolean)[0] || '';
+    } else if (host === 'youtube.com' || host.endsWith('.youtube.com') ||
+      host === 'youtube-nocookie.com' || host.endsWith('.youtube-nocookie.com')) {
+      id = url.searchParams.get('v') || '';
+      if (!id) {
+        const pathMatch = url.pathname.match(/^\/(?:embed|shorts|live)\/([^/]+)/);
+        id = pathMatch ? pathMatch[1] : '';
+      }
+    }
+    return /^[A-Za-z0-9_-]{6,32}$/.test(id) ? id : '';
+  } catch {
+    return '';
+  }
+}
+
+function worshipOptionAnnouncementTitle(option) {
+  if (!option) return '';
+  const explicit = option.dataset && option.dataset.announcementTitle;
+  return String(explicit || option.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+function currentWorshipAnnouncement() {
+  // Playback, prefetch and the announcement all use worshipUrl as the active source.
+  const url = String(cfg.worshipUrl || '').trim();
+  if (!url) return { title: '', url: '' };
+
+  const activeVideoId = youtubeVideoId(url);
+  const isCurrentUrl = (candidate) => {
+    const candidateUrl = String(candidate || '').trim();
+    if (!candidateUrl) return false;
+    if (candidateUrl === url) return true;
+    return !!activeVideoId && youtubeVideoId(candidateUrl) === activeVideoId;
+  };
+  let title = '';
+  let select = null;
+  if (typeof document !== 'undefined') select = document.getElementById('worshipPreset');
+
+  // Preset mode must use the title of the option the user actually selected.
+  // This prevents a duplicate custom preset from lending today's video an old name.
+  if (cfg.useWorshipPreset && select) {
+    const selected = select.selectedOptions && select.selectedOptions[0]
+      ? select.selectedOptions[0]
+      : Array.from(select.options || []).find((item) => item.selected);
+    if (selected && isCurrentUrl(selected.value)) title = worshipOptionAnnouncementTitle(selected);
+  }
+
+  if (!title && select) {
+    const official = Array.from(select.options || []).find((item) =>
+      item.dataset && item.dataset.announcementTitle && isCurrentUrl(item.value));
+    if (official) title = worshipOptionAnnouncementTitle(official);
+  }
+
+  const presets = Array.isArray(cfg.customWorshipPresets) ? cfg.customWorshipPresets : [];
+  const custom = presets.find((item) => item && isCurrentUrl(item.url));
+  if (!title && custom) title = String(custom.title || '').replace(/\s+/g, ' ').trim();
+
+  if (!title && select) {
+    const matchingOption = Array.from(select.options || []).find((item) => isCurrentUrl(item.value));
+    if (matchingOption) title = worshipOptionAnnouncementTitle(matchingOption);
+  }
+  return { title, url };
+}
+
+function buildAnnounceText(now = new Date()) {
+  const z = parseZoomUrl(cfg.zoomUrl);
+  const idFmt = z.id ? z.id.replace(/(\d{1,4})(?=(\d{4})+(?!\d))/g, '$1 ').trim() : '';
+  const ref = formatScriptureAnnouncementRef();
+  const worship = currentWorshipAnnouncement();
+  return [
+    '親愛的活水家人們，早安，',
+    '今天是' + todayCNDate(now) + '。',
+    '',
+    '請預備大家的聖經',
+    '【聖經】' + ref,
+    '【竭誠獻上】',
+    '',
+    '主題: 早靈修班',
+    '時間: 週二-周五 8:30 am',
+    '',
+    '加入 Zoom 會議',
+    String(cfg.zoomUrl || '').trim(),
+    '',
+    '蘋果電腦平板手機，',
+    '請手動輸入帳號密碼喔！',
+    '帳號：' + idFmt,
+    '密碼：' + ZOOM_MEETING_PASSCODE,
+    '(' + ZOOM_PASSCODE_HINT + '）',
+    '',
+    '敬拜詩歌：' + worship.title,
+    worship.url
+  ].join('\n');
+}
+
+async function copyAnnounce() {
+  // If the settings drawer is open, use its current controls even before the
+  // debounced config write finishes. The announcement then mirrors playback.
+  const settingsPanel = $('settingsPanel');
+  if (settingsPanel && !settingsPanel.classList.contains('hidden')) collectSettings();
+  const text = buildAnnounceText();
+  await window.api.writeClipboard(text);
+  toast('已複製公告，可以直接貼到群組上', 3200);
+}
+
+// ---------- 設定資料 ----------
+function parseManualDate(value) {
+  const m = String(value || '').match(/^(\d{1,2})\/(\d{1,2})$/);
+  const now = new Date();
+  return {
+    month: clampNum(m ? m[1] : now.getMonth() + 1, 1, 12),
+    day: clampNum(m ? m[2] : now.getDate(), 1, 31)
+  };
+}
+
+function daysInMonth(month) {
+  return new Date(new Date().getFullYear(), month, 0).getDate();
+}
+
+function fillDateSelects() {
+  const { month, day } = parseManualDate(cfg.dateManual);
+  fillNumberSelect($('dateMonth'), 12, month);
+  syncDateDayOptions(day);
+}
+
+function syncDateDayOptions(day) {
+  const month = +$('dateMonth').value || (new Date().getMonth() + 1);
+  fillNumberSelect($('dateDay'), daysInMonth(month), clampNum(day, 1, daysInMonth(month)));
+}
+
+function customWorshipPresets() {
+  if (!Array.isArray(cfg.customWorshipPresets)) cfg.customWorshipPresets = [];
+  return cfg.customWorshipPresets;
+}
+
+function renderCustomWorshipPresets() {
+  const group = $('customWorshipGroup');
+  const list = $('customWorshipList');
+  const presets = customWorshipPresets();
+  const selectedUrl = cfg.worshipPreset || ($('worshipPreset') && $('worshipPreset').value) || '';
+
+  if (group) group.innerHTML = '';
+  if (list) list.innerHTML = '';
+
+  presets.forEach((item, index) => {
+    if (!item || !item.url) return;
+    const title = item.title || `自訂敬拜影片 ${index + 1}`;
+    if (group) {
+      const option = document.createElement('option');
+      option.value = item.url;
+      option.textContent = title;
+      group.appendChild(option);
+    }
+    if (list) {
+      const row = document.createElement('div');
+      row.className = 'custom-worship-item';
+      row.draggable = true;
+      row.dataset.index = String(index);
+      row.innerHTML = `
+        <span class="drag-handle" aria-hidden="true">⋮⋮</span>
+        <span class="custom-worship-title"></span>
+        <button type="button" class="custom-delete-btn" title="刪除" aria-label="刪除">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 7h12" />
+            <path d="M10 11v6" />
+            <path d="M14 11v6" />
+            <path d="M8 7l1 13h6l1-13" />
+            <path d="M10 7V4h4v3" />
+          </svg>
+        </button>
+      `;
+      row.querySelector('.custom-worship-title').textContent = title;
+      list.appendChild(row);
+    }
+  });
+  if ($('worshipPreset')) $('worshipPreset').value = selectedUrl;
+  if (group) group.hidden = !group.children.length;
+  if (list) list.hidden = !presets.length;
+}
+
+function normalizeCustomWorshipUrl(value) {
+  const url = String(value || '').trim();
+  if (!url) return '';
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    const isYouTube = host === 'youtu.be' || host === 'youtube.com' || host.endsWith('.youtube.com') ||
+      host === 'youtube-nocookie.com' || host.endsWith('.youtube-nocookie.com');
+    if (parsed.protocol !== 'https:' || !isYouTube || parsed.username || parsed.password) return '';
+    return parsed.toString();
+  } catch {
+    return '';
+  }
+}
+
+async function addCustomWorshipPreset() {
+  const input = $('inCustomWorshipUrl');
+  const url = normalizeCustomWorshipUrl(input.value);
+  if (!url) {
+    toast('請貼上有效的 YouTube 網址', 3000);
+    return;
+  }
+  const presets = customWorshipPresets();
+  const existing = presets.find((item) => item.url === url);
+  if (!existing) {
+    presets.push({ title: `自訂敬拜影片 ${presets.length + 1}`, url });
+    renderCustomWorshipPresets();
+  }
+  $('useWorshipPreset').checked = true;
+  $('worshipPreset').value = url;
+  input.value = '';
+  applyWorshipMode();
+  collectSettings();
+  await window.api.setConfig(cfg);
+  toast(existing ? '已選取這部常用敬拜影片' : '已加入常用敬拜影片', 3200);
+}
+
+async function saveCustomWorshipOrder(fromIndex, toIndex) {
+  const presets = customWorshipPresets();
+  if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= presets.length || toIndex >= presets.length) return;
+  const [moved] = presets.splice(fromIndex, 1);
+  presets.splice(toIndex, 0, moved);
+  renderCustomWorshipPresets();
+  await window.api.setConfig(cfg);
+}
+
+async function deleteCustomWorshipPreset(index) {
+  const presets = customWorshipPresets();
+  const removed = presets[index];
+  if (!removed) return;
+  presets.splice(index, 1);
+  if (cfg.worshipPreset === removed.url) {
+    cfg.worshipPreset = '';
+    if ($('worshipPreset')) $('worshipPreset').value = '';
+    collectSettings();
+  }
+  renderCustomWorshipPresets();
+  await window.api.setConfig(cfg);
+  toast('已刪除常用敬拜影片', 2200);
+}
+
 function fillSettings() {
-  $('fillMode').value = cfg.fillMode;
+  cfg.fillMode = 'blur';
   $('dateAuto').checked = !!cfg.dateAuto;
-  $('dateManual').value = cfg.dateManual || '';
-  $('inTitle1').value = cfg.title1 || '';
-  $('inTitle2').value = cfg.title2 || '';
-  $('inTitle3').value = cfg.title3 || '';
-  $('inScriptureLabel').value = cfg.scriptureLabel || '';
+  fillDateSelects();
   $('inReading').value = cfg.readingExtra || '';
   $('scheduleEnabled').checked = !!cfg.scheduleEnabled;
   $('inScheduleUrl').value = cfg.scheduleUrl || '';
   fillScriptureControls();
   $('inMusicUrl').value = cfg.musicUrl || '';
   $('inWorshipUrl').value = cfg.worshipUrl || '';
+  renderCustomWorshipPresets();
   $('worshipPreset').value = cfg.worshipPreset || '';
   $('useWorshipPreset').checked = !!cfg.useWorshipPreset;
   applyWorshipMode();
-  $('inZoomUrl').value = cfg.zoomUrl || '';
   $('musicVolume').value = cfg.musicVolume;
   $('autoPlayMusic').checked = !!cfg.autoPlayMusic;
   $('cacheKeepDays').value = String(cfg.cacheKeepDays != null ? cfg.cacheKeepDays : 30);
 }
 
 function collectSettings() {
-  cfg.fillMode = $('fillMode').value;
+  cfg.fillMode = 'blur';
   cfg.dateAuto = $('dateAuto').checked;
-  cfg.dateManual = $('dateManual').value.trim();
-  cfg.title1 = $('inTitle1').value;
-  cfg.title2 = $('inTitle2').value;
-  cfg.title3 = $('inTitle3').value;
-  cfg.scriptureLabel = $('inScriptureLabel').value;
+  cfg.dateManual = `${+$('dateMonth').value}/${+$('dateDay').value}`;
   cfg.readingExtra = $('inReading').value;
   cfg.scheduleEnabled = $('scheduleEnabled').checked;
   cfg.scheduleUrl = $('inScheduleUrl').value.trim();
   cfg.musicUrl = $('inMusicUrl').value.trim();
   cfg.useWorshipPreset = $('useWorshipPreset').checked;
   cfg.worshipPreset = $('worshipPreset').value;
-  // 敬拜音樂來源：勾選歌單→用下拉選的；否則→用自己貼的連結
+  // 勾選常用影片時採用下拉選單，否則採用手動輸入網址。
   cfg.worshipUrl = cfg.useWorshipPreset ? cfg.worshipPreset : $('inWorshipUrl').value.trim();
-  cfg.zoomUrl = $('inZoomUrl').value.trim();
   cfg.musicVolume = parseFloat($('musicVolume').value);
   cfg.autoPlayMusic = $('autoPlayMusic').checked;
   cfg.cacheKeepDays = parseInt($('cacheKeepDays').value, 10);
 }
 
-// 依「使用常用敬拜音樂歌單」勾選，切換顯示下拉選單或貼連結欄
+// 切換常用影片與手動網址欄位。
 function applyWorshipMode() {
   const usePreset = $('useWorshipPreset').checked;
   $('worshipPresetRow').classList.toggle('hidden', !usePreset);
@@ -316,7 +643,7 @@ async function pasteInto(inputId) {
     el.dispatchEvent(new Event('change'));
     toast('已貼上');
   } else {
-    toast('剪貼簿沒有文字');
+    toast('剪貼簿沒有內容');
   }
 }
 
@@ -329,55 +656,77 @@ function onSettingsChanged() {
   saveTimer = setTimeout(() => window.api.setConfig(cfg), 300);
 }
 
-// ---------- 下載進度徽章 ----------
+// ---------- 下載進度 ----------
 function showBadge(text) { const b = $('dlBadge'); b.textContent = text; b.classList.remove('hidden'); }
 function hideBadge() { $('dlBadge').classList.add('hidden'); }
 
-// 預先下載快取（設定連結後在背景準備，點擊時即可秒播）
+// 在背景預先下載媒體，減少正式播放時的等待。
 async function prefetch(kind) {
   const label = kind === 'video' ? '敬拜影片' : '背景音樂';
   const url = kind === 'video' ? cfg.worshipUrl : cfg.musicUrl;
   if (!url) return;
-  const s = await window.api.mediaStatus(url, kind);
+  const s = await window.api.mediaStatus(url, kind, cfg.videoQuality);
   if (s.cached) return;
-  showBadge(label + ' 準備中…');
+  showBadge(label + '下載中...');
   const r = await window.api.ensureMedia(url, kind, cfg.videoQuality);
   hideBadge();
-  if (!r.ok) { toast(label + '下載失敗：' + r.error, 4000); return; }
-  toast('✓ ' + label + ' 已下載完成', 3000); // 下載完成通知，停留 3 秒
+  if (!r.ok) {
+    const hint = kind === 'video' ? '，可以換一個連結加入常用敬拜影片' : '';
+    toast(label + '下載失敗' + hint + '：' + r.error, 5200);
+    return;
+  }
+  toast(label + '已準備好', 3000);
 }
 
 // ---------- 背景音樂 ----------
 async function resolveAndPlayMusic() {
-  if (!cfg.musicUrl) { toast('請先在設定貼上背景音樂 YouTube 連結'); openSettings(); return; }
+  if (!isMainCover()) return;
+  if (!cfg.musicUrl) { musicDesired = false; setMusicSwitchState(false); toast('請先設定背景音樂 YouTube 連結'); openSettings(); return; }
+  const requestedUrl = cfg.musicUrl;
+  const requestToken = ++musicRequestToken;
+  musicDesired = true;
+  setMusicSwitchState(true);
   const a = $('bgAudio');
-  const st = await window.api.mediaStatus(cfg.musicUrl, 'audio');
+  const st = await window.api.mediaStatus(requestedUrl, 'audio');
+  if (requestToken !== musicRequestToken || cfg.musicUrl !== requestedUrl || !isMainCover()) return;
   const needDownload = !st.cached;
-  showBadge('背景音樂 準備中…');
-  const r = await window.api.ensureMedia(cfg.musicUrl, 'audio');
+  showBadge('背景音樂下載中...');
+  const r = await window.api.ensureMedia(requestedUrl, 'audio');
   hideBadge();
-  if (!r.ok) { toast('背景音樂下載失敗：' + r.error, 4000); return; }
-  // 只有在音源不同（換歌或首次）時才重設 src；同一首則保留播放進度續播
-  if (a.src !== r.path) a.src = r.path;
+  if (requestToken !== musicRequestToken || cfg.musicUrl !== requestedUrl || !musicDesired || !isMainCover()) return;
+  if (!r.ok) { musicDesired = false; setMusicSwitchState(false); toast('背景音樂下載失敗：' + r.error, 4000); return; }
+  const resolvedSrc = normalizeMediaUrl(r.path);
+  if (normalizeMediaUrl(a.src) !== resolvedSrc) a.src = resolvedSrc;
   a.volume = cfg.musicVolume;
-  try { await a.play(); } catch (e) { toast('播放失敗：' + e.message, 3000); return; }
+  try { await a.play(); } catch (e) { musicDesired = false; setMusicSwitchState(false); toast('播放失敗：' + e.message, 3000); return; }
+  if (requestToken !== musicRequestToken || !musicDesired || !isMainCover()) { a.pause(); return; }
   musicPlaying = true;
-  $('btnMusic').classList.add('active');
-  if (needDownload) toast('✓ 背景音樂已下載完成，開始播放', 3000); // 下載完成通知，停留 3 秒
+  setMusicSwitchState(true);
+  if (needDownload) toast('背景音樂已準備好，開始播放', 3000);
+}
+
+function normalizeMediaUrl(value) {
+  if (!value) return '';
+  try { return new URL(value, window.location.href).href; }
+  catch { return String(value); }
 }
 
 function fadeOutMusic(done) {
+  musicDesired = false;
+  musicRequestToken++;
   const a = $('bgAudio');
   const start = a.volume;
   let v = start;
-  const step = setInterval(() => {
+  if (musicFadeTimer) clearInterval(musicFadeTimer);
+  musicFadeTimer = setInterval(() => {
     v -= start / 12;
     if (v <= 0) {
-      clearInterval(step);
+      clearInterval(musicFadeTimer);
+      musicFadeTimer = null;
       a.pause();
       a.volume = cfg.musicVolume;
       musicPlaying = false;
-      $('btnMusic').classList.remove('active');
+      setMusicSwitchState(false);
       if (done) done();
     } else {
       a.volume = Math.max(0, v);
@@ -385,58 +734,1083 @@ function fadeOutMusic(done) {
   }, 40);
 }
 
-function toggleMusic() {
-  if (musicPlaying) fadeOutMusic();
-  else resolveAndPlayMusic();
+function isMainCover() {
+  return flowStep === 'cover' && !worshipActive && $('flowScreen').classList.contains('hidden');
 }
 
-// 空白鍵用：單純暫停/繼續（不淡出、不重新下載）
-function toggleMusicPlayPause() {
+function pauseMusicForFlow() {
+  musicResumeOnCover = musicResumeOnCover || musicDesired || musicPlaying;
+  musicRequestToken++;
+  musicDesired = false;
+  setMusicSwitchState(false);
+  if (musicPlaying && !musicFadeTimer) fadeOutMusic();
+}
+
+function resumeMusicOnCover() {
+  if (flowReachedUtmost) {
+    flowReachedUtmost = false;
+    musicResumeOnCover = false;
+    musicDesired = false;
+    musicRequestToken++;
+    const a = $('bgAudio');
+    if (musicFadeTimer) {
+      clearInterval(musicFadeTimer);
+      musicFadeTimer = null;
+    }
+    a.pause();
+    a.volume = cfg.musicVolume;
+    musicPlaying = false;
+    setMusicSwitchState(false);
+    return;
+  }
+  const shouldResume = musicResumeOnCover || cfg.autoPlayMusic;
+  musicResumeOnCover = false;
+  if (!shouldResume || !cfg.musicUrl) return;
   const a = $('bgAudio');
-  if (!a.src) { resolveAndPlayMusic(); return; } // 尚未載入 → 載入並播放
-  if (a.paused) { a.play(); musicPlaying = true; $('btnMusic').classList.add('active'); }
-  else { a.pause(); musicPlaying = false; $('btnMusic').classList.remove('active'); }
+  if (musicFadeTimer) {
+    clearInterval(musicFadeTimer);
+    musicFadeTimer = null;
+    a.volume = cfg.musicVolume;
+    if (!a.paused) {
+      musicDesired = true;
+      musicPlaying = true;
+      setMusicSwitchState(true);
+      return;
+    }
+  }
+  if (!musicPlaying) resolveAndPlayMusic();
+}
+
+function setMusicSwitchState(on) {
+  const btn = $('btnMusic');
+  btn.classList.toggle('active', !!on);
+  const label = btn.querySelector('i');
+  if (label) label.textContent = on ? 'ON' : 'OFF';
+}
+
+function toggleMusic() {
+  if (flowTransitioning || !isMainCover()) return;
+  if (musicDesired || musicPlaying) {
+    musicResumeOnCover = false;
+    musicDesired = false;
+    musicRequestToken++;
+    setMusicSwitchState(false);
+    if (musicPlaying) fadeOutMusic();
+  } else {
+    if (!cfg.musicUrl) {
+      resolveAndPlayMusic();
+      return;
+    }
+    musicDesired = true;
+    setMusicSwitchState(true);
+    resolveAndPlayMusic();
+  }
+}
+
+// 空白鍵切換背景音樂播放狀態。
+function toggleMusicPlayPause() {
+  if (flowTransitioning || !isMainCover()) return;
+  const a = $('bgAudio');
+  if (!a.src) { resolveAndPlayMusic(); return; }
+  if (a.paused) {
+    musicDesired = true;
+    setMusicSwitchState(true);
+    a.play().then(() => { musicPlaying = true; }).catch((e) => {
+      musicDesired = false;
+      musicPlaying = false;
+      setMusicSwitchState(false);
+      toast('播放失敗：' + e.message, 3000);
+    });
+  }
+  else { musicDesired = false; setMusicSwitchState(false); a.pause(); musicPlaying = false; }
+}
+
+// ---------- 閱讀流程 ----------
+function setFlowVisible(visible) {
+  if (!visible) hideUtmostFooterImmediately();
+  $('flowScreen').classList.toggle('hidden', !visible);
+  $('bgBlur').classList.toggle('hidden', visible);
+  $('bgImage').classList.toggle('hidden', visible);
+  document.querySelector('.overlay-top').classList.toggle('hidden', visible);
+  document.querySelector('.overlay-bottom').classList.toggle('hidden', visible);
+}
+
+function hideUtmostFooterImmediately() {
+  const screen = $('flowScreen');
+  const footer = document.querySelector('.flow-footer');
+  if (
+    footer &&
+    footer.contains(document.activeElement) &&
+    document.activeElement &&
+    typeof document.activeElement.blur === 'function'
+  ) document.activeElement.blur();
+  if (utmostFooterHideTimer) clearTimeout(utmostFooterHideTimer);
+  utmostFooterHideTimer = null;
+  if (screen) screen.classList.remove('footer-visible');
+  if (footer) footer.classList.remove('footer-visible');
+}
+
+function revealUtmostFooter() {
+  if (utmostFooterHideTimer) clearTimeout(utmostFooterHideTimer);
+  utmostFooterHideTimer = null;
+  if (flowStep !== 'utmost') return;
+  const screen = $('flowScreen');
+  if (screen && screen.dataset.step === 'utmost') screen.classList.add('footer-visible');
+}
+
+function scheduleUtmostFooterHide() {
+  if (utmostFooterHideTimer) clearTimeout(utmostFooterHideTimer);
+  if (flowStep !== 'utmost') {
+    hideUtmostFooterImmediately();
+    return;
+  }
+  utmostFooterHideTimer = setTimeout(() => {
+    utmostFooterHideTimer = null;
+    const footer = document.querySelector('.flow-footer');
+    const hotzone = document.getElementById('flowFooterHotzone');
+    const footerHovered = footer && footer.matches(':hover');
+    const hotzoneHovered = hotzone && hotzone.matches(':hover');
+    const footerFocused = footer && footer.contains(document.activeElement);
+    if (flowStep === 'utmost' && (footerHovered || hotzoneHovered || footerFocused)) {
+      revealUtmostFooter();
+      return;
+    }
+    hideUtmostFooterImmediately();
+  }, 1000);
+}
+
+function setupUtmostFooterReveal() {
+  const footer = document.querySelector('.flow-footer');
+  const hotzone = document.getElementById('flowFooterHotzone');
+  hideUtmostFooterImmediately();
+
+  [hotzone, footer].filter(Boolean).forEach((element) => {
+    element.addEventListener('mouseenter', revealUtmostFooter);
+    element.addEventListener('mouseleave', scheduleUtmostFooterHide);
+  });
+  if (!footer) return;
+  footer.addEventListener('focusin', revealUtmostFooter);
+  footer.addEventListener('focusout', (event) => {
+    if (event.relatedTarget && footer.contains(event.relatedTarget)) return;
+    scheduleUtmostFooterHide();
+  });
+}
+
+function nextPaint() {
+  return new Promise((resolve) => {
+    let settled = false;
+    let fallbackTimer = null;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+      resolve();
+    };
+    requestAnimationFrame(finish);
+    fallbackTimer = setTimeout(finish, 50);
+  });
+}
+
+const SCRIPTURE_MIN_VERSES_PER_PAGE = 4;
+const SCRIPTURE_MAX_VERSES_PER_PAGE = 6;
+const UTMOST_MIN_REGULAR_SCALE = 0.48;
+
+function textPage(text) {
+  return { type: 'text', text: String(text || '') };
+}
+
+function parseScriptureVerses(text, ref = currentRefPayload()) {
+  const lines = String(text || '')
+    .replace(/\r/g, '')
+    .split(/\n+/)
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  const startChapter = Math.max(1, Number(ref.startCh) || 1);
+  const endChapter = Math.max(startChapter, Number(ref.endCh) || startChapter);
+  const book = Array.isArray(window.BIBLE) ? window.BIBLE.find((item) => item.n === ref.book) : null;
+  const expected = [];
+  if (book && Array.isArray(book.v)) {
+    for (let expectedChapter = startChapter; expectedChapter <= endChapter; expectedChapter++) {
+      const firstVerse = expectedChapter === startChapter ? Math.max(1, Number(ref.startV) || 1) : 1;
+      const chapterLast = Number(book.v[expectedChapter - 1]) || 0;
+      const lastVerse = expectedChapter === endChapter
+        ? Math.min(chapterLast, Math.max(1, Number(ref.endV) || chapterLast))
+        : chapterLast;
+      for (let expectedVerse = firstVerse; expectedVerse <= lastVerse; expectedVerse++) {
+        expected.push({ chapter: expectedChapter, number: expectedVerse });
+      }
+    }
+  }
+  const verses = [];
+  let chapter = startChapter;
+  let previousNumber = null;
+  let expectedIndex = 0;
+  let current = null;
+
+  const pushCurrent = () => {
+    if (!current || !current.text) return;
+    current.text = current.text.trim();
+    current.key = `${current.chapter}:${current.number}:${verses.length}`;
+    verses.push(current);
+  };
+
+  lines.forEach((line) => {
+    const match = line.match(/^(\d+)\s*[.)、]?\s*(.+)$/);
+    if (!match) {
+      if (current) current.text += ` ${line}`;
+      return;
+    }
+
+    pushCurrent();
+    const number = Number(match[1]);
+    let expectedLocation = null;
+    for (let index = expectedIndex; index < expected.length; index++) {
+      if (expected[index].number !== number) continue;
+      expectedLocation = expected[index];
+      expectedIndex = index + 1;
+      break;
+    }
+    const fallbackReset = !expectedLocation && previousNumber !== null && number === 1 && previousNumber > 1 && chapter < endChapter;
+    const nextChapter = expectedLocation ? expectedLocation.chapter : (fallbackReset ? chapter + 1 : chapter);
+    const chapterReset = nextChapter !== chapter;
+    chapter = nextChapter;
+    if (chapterReset && verses.length) {
+      const previousVerse = verses[verses.length - 1];
+      previousVerse.text = previousVerse.text.replace(new RegExp(`\\s+${chapter}\\s*$`), '').trimEnd();
+    }
+    current = {
+      chapter,
+      number,
+      text: match[2].trim(),
+      continuation: false,
+      startsChapter: chapterReset
+    };
+    previousNumber = number;
+  });
+  pushCurrent();
+
+  if (!verses.length && lines.length) {
+    verses.push({
+      chapter: startChapter,
+      number: '',
+      text: lines.join(' '),
+      continuation: false,
+      startsChapter: false,
+      key: `${startChapter}:fallback:0`
+    });
+  }
+  return verses;
+}
+
+function createScripturePageElement(page) {
+  const root = document.createElement('section');
+  root.className = 'scripture-page';
+  let renderedChapter = null;
+
+  (page.verses || []).forEach((verse) => {
+    if (verse.startsChapter && verse.chapter !== renderedChapter) {
+      const chapter = document.createElement('div');
+      chapter.className = 'scripture-chapter';
+      chapter.textContent = `第 ${verse.chapter} 章`;
+      root.appendChild(chapter);
+      renderedChapter = verse.chapter;
+    }
+
+    const row = document.createElement('article');
+    row.className = 'scripture-verse';
+
+    const number = document.createElement('div');
+    number.className = 'scripture-verse-number';
+    number.textContent = String(verse.number || '—');
+
+    const verseText = document.createElement('div');
+    verseText.className = 'scripture-verse-text';
+    if (verse.continuation) {
+      const continuation = document.createElement('span');
+      continuation.className = 'scripture-continuation';
+      continuation.textContent = '續';
+      verseText.appendChild(continuation);
+      verseText.appendChild(document.createTextNode(verse.text || ''));
+    } else {
+      verseText.textContent = verse.text || '';
+    }
+    row.append(number, verseText);
+    root.appendChild(row);
+  });
+  return root;
+}
+
+function createUtmostPage(data) {
+  const paragraphs = String(data.body || '')
+    .replace(/\r/g, '')
+    .split(/\n+/)
+    .map((paragraph) => paragraph.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  return {
+    type: 'utmost',
+    date: String(data.date || systemDateChinese()).trim(),
+    title: String(data.title || '竭誠獻上').trim(),
+    verse: String(data.verse || '').replace(/\s+/g, ' ').trim(),
+    paragraphs: paragraphs.length ? paragraphs : ['今天暫時沒有正文內容。']
+  };
+}
+
+function createUtmostPageElement(page) {
+  const sheet = document.createElement('article');
+  sheet.className = 'utmost-sheet';
+  const regularScale = Number.isFinite(page.regularScale) ? Math.max(UTMOST_MIN_REGULAR_SCALE, Math.min(1, page.regularScale)) : 1;
+  const extremeScale = Number.isFinite(page.extremeScale) ? Math.max(0.0001, Math.min(1, page.extremeScale)) : 1;
+  sheet.style.setProperty('--utmost-scale', String(regularScale));
+  if (extremeScale < 1) {
+    sheet.classList.add('is-extreme');
+    sheet.style.transform = `scale(${extremeScale})`;
+  }
+
+  const heading = document.createElement('header');
+  heading.className = 'utmost-heading';
+  const kicker = document.createElement('div');
+  kicker.className = 'utmost-kicker';
+  kicker.textContent = ['《竭誠獻上》', page.date].filter(Boolean).join(' · ');
+  const title = document.createElement('h2');
+  title.className = 'utmost-title';
+  title.textContent = page.title || '竭誠獻上';
+  heading.append(kicker, title);
+  sheet.appendChild(heading);
+
+  const verseCard = document.createElement('section');
+  verseCard.className = 'utmost-verse-card';
+  const verseLabel = document.createElement('div');
+  verseLabel.className = 'utmost-section-label';
+  verseLabel.textContent = '今日經文';
+  const verseText = document.createElement('div');
+  verseText.className = 'utmost-verse-text';
+  verseText.textContent = page.verse || '—';
+  verseCard.append(verseLabel, verseText);
+  sheet.appendChild(verseCard);
+
+  const body = document.createElement('section');
+  body.className = 'utmost-body';
+  const bodyLabel = document.createElement('div');
+  bodyLabel.className = 'utmost-section-label';
+  bodyLabel.textContent = '正文';
+  body.appendChild(bodyLabel);
+  (page.paragraphs || []).forEach((paragraph) => {
+    const p = document.createElement('p');
+    p.className = 'utmost-paragraph';
+    p.textContent = paragraph;
+    body.appendChild(p);
+  });
+  sheet.appendChild(body);
+  return sheet;
+}
+
+function renderFlowPageContent(page) {
+  const content = $('flowContent');
+  content.replaceChildren();
+  content.removeAttribute('data-fit-mode');
+  const normalizedPage = page && typeof page === 'object' ? page : textPage(page);
+  if (normalizedPage.type === 'scripture') content.appendChild(createScripturePageElement(normalizedPage));
+  else if (normalizedPage.type === 'utmost') content.appendChild(createUtmostPageElement(normalizedPage));
+  else content.textContent = normalizedPage.text || '';
+}
+
+function flowContentOverflows() {
+  const content = $('flowContent');
+  return content.scrollHeight > content.clientHeight + 2 || content.scrollWidth > content.clientWidth + 2;
+}
+
+function scripturePageFits(verses) {
+  $('flowScreen').style.setProperty('--flow-font-scale', '1');
+  renderFlowPageContent({ type: 'scripture', verses });
+  return !flowContentOverflows();
+}
+
+function scriptureSentenceTokens(text) {
+  return String(text || '').match(/[^。！？!?；;，,：:\n]+(?:[。！？!?；;，,：:]+|$)|\n+/g) || [String(text || '')];
+}
+
+function largestFittingVersePrefix(verse, text, continuation, fits = scripturePageFits) {
+  const chars = Array.from(text);
+  let low = 1;
+  let high = chars.length;
+  let best = 0;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const candidate = chars.slice(0, mid).join('').trim();
+    const candidateFits = candidate && fits([{ ...verse, text: candidate, continuation, startsChapter: verse.startsChapter && !continuation }]);
+    if (candidateFits) {
+      best = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return chars.slice(0, Math.max(best, 1)).join('');
+}
+
+function splitOversizedScriptureVerse(verse, fits = scripturePageFits) {
+  if (fits([verse])) return [verse];
+  const parts = [];
+  let remaining = String(verse.text || '').trim();
+  let continuation = Boolean(verse.continuation);
+
+  while (remaining) {
+    if (fits([{ ...verse, text: remaining, continuation, startsChapter: verse.startsChapter && parts.length === 0 }])) {
+      parts.push({ ...verse, text: remaining, continuation, startsChapter: verse.startsChapter && parts.length === 0 });
+      break;
+    }
+
+    let rawPrefix = '';
+    for (const token of scriptureSentenceTokens(remaining)) {
+      const candidateRaw = rawPrefix + token;
+      const candidate = candidateRaw.trim();
+      if (!candidate || fits([{ ...verse, text: candidate, continuation, startsChapter: verse.startsChapter && parts.length === 0 }])) {
+        rawPrefix = candidateRaw;
+      } else {
+        break;
+      }
+    }
+    if (!rawPrefix.trim()) rawPrefix = largestFittingVersePrefix(verse, remaining, continuation, fits);
+
+    const chunk = rawPrefix;
+    parts.push({
+      ...verse,
+      text: chunk,
+      continuation,
+      startsChapter: verse.startsChapter && parts.length === 0
+    });
+    remaining = remaining.slice(rawPrefix.length);
+    continuation = true;
+  }
+  return parts;
+}
+
+function logicalVerseCount(verses) {
+  return new Set(verses.map((verse) => verse.key)).size;
+}
+
+function lastLogicalVerseGroup(verses) {
+  if (!verses.length) return [];
+  const key = verses[verses.length - 1].key;
+  let start = verses.length - 1;
+  while (start > 0 && verses[start - 1].key === key) start--;
+  return verses.slice(start);
+}
+
+function rebalanceScriptureTail(pages, fits = scripturePageFits) {
+  if (pages.length < 2) return pages;
+  const keyPages = new Map();
+  pages.forEach((page, pageIndex) => {
+    new Set(page.verses.map((verse) => verse.key)).forEach((key) => {
+      if (!keyPages.has(key)) keyPages.set(key, []);
+      keyPages.get(key).push(pageIndex);
+    });
+  });
+  // A split long verse can legitimately occupy several pages. Its fragments
+  // must stay where they fit instead of being treated as ordinary verse rows.
+  if ([...keyPages.values()].some((indices) => indices.length > 1)) return pages;
+
+  let balanced = pages.map((page) => ({ ...page, verses: [...page.verses] }));
+  const total = balanced.reduce((sum, page) => sum + logicalVerseCount(page.verses), 0);
+  const base = Math.floor(total / balanced.length);
+  const extra = total % balanced.length;
+  const targets = balanced.map((_page, index) => base + (index < extra ? 1 : 0));
+
+  for (let targetIndex = balanced.length - 1; targetIndex > 0; targetIndex--) {
+    while (logicalVerseCount(balanced[targetIndex].verses) < targets[targetIndex]) {
+      let shifted = false;
+      for (let donorIndex = targetIndex - 1; donorIndex >= 0 && !shifted; donorIndex--) {
+        if (logicalVerseCount(balanced[donorIndex].verses) <= targets[donorIndex]) continue;
+        const trial = balanced.map((page) => ({ ...page, verses: [...page.verses] }));
+        let valid = true;
+        for (let boundary = targetIndex - 1; boundary >= donorIndex; boundary--) {
+          const moved = lastLogicalVerseGroup(trial[boundary].verses);
+          const candidate = [...moved, ...trial[boundary + 1].verses];
+          if (
+            !moved.length ||
+            logicalVerseCount(candidate) > SCRIPTURE_MAX_VERSES_PER_PAGE ||
+            !fits(candidate)
+          ) {
+            valid = false;
+            break;
+          }
+          trial[boundary].verses.splice(trial[boundary].verses.length - moved.length, moved.length);
+          trial[boundary + 1].verses.unshift(...moved);
+        }
+        if (valid) {
+          balanced = trial;
+          shifted = true;
+        }
+      }
+      if (!shifted) break;
+    }
+  }
+  return balanced;
+}
+
+function buildScripturePagesByFit(verses, fits = scripturePageFits) {
+  const expanded = verses.flatMap((verse) => splitOversizedScriptureVerse(verse, fits));
+  const pages = [];
+  let current = [];
+
+  expanded.forEach((verse) => {
+    const candidate = [...current, verse];
+    const withinVerseLimit = logicalVerseCount(candidate) <= SCRIPTURE_MAX_VERSES_PER_PAGE;
+    if (!current.length || (withinVerseLimit && fits(candidate))) {
+      current = candidate;
+      return;
+    }
+    pages.push({ type: 'scripture', verses: current });
+    current = [verse];
+  });
+  if (current.length) pages.push({ type: 'scripture', verses: current });
+  return rebalanceScriptureTail(pages.length ? pages : [{ type: 'scripture', verses: [] }], fits);
+}
+
+function renderFlowPage() {
+  resetUtmostFinishConfirmation();
+  const page = flowPages[flowPageIndex] || textPage('');
+  flowPageRenderToken++;
+  $('flowScreen').style.setProperty('--flow-font-scale', String(flowPageScales[flowPageIndex] || 1));
+  renderFlowPageContent(page);
+  $('flowPageInfo').textContent = '';
+  $('flowPrevPage').disabled = flowPageIndex <= 0 && flowStep !== 'scripture' && flowStep !== 'utmost';
+  const isLastPage = flowPageIndex >= flowPages.length - 1;
+  const isLastStep = flowStep === FLOW_ORDER[FLOW_ORDER.length - 1];
+  $('flowNextPage').textContent = isLastPage && isLastStep ? '完成' : (isLastPage ? '下一段' : '下一頁');
+  $('flowNextPage').disabled = false;
+}
+
+function setFlowContent({ eyebrow, title, meta, pages, scales }) {
+  $('flowEyebrow').textContent = eyebrow;
+  $('flowTitle').textContent = title;
+  $('flowMeta').textContent = meta || '';
+  flowPages = Array.isArray(pages) && pages.length ? pages : [textPage('')];
+  flowPageScales = scales || flowPages.map(() => 1);
+  flowPageIndex = 0;
+  setFlowVisible(true);
+  renderFlowPage();
+}
+
+async function fitCurrentFlowPageToScreen(
+  minScale = UTMOST_MIN_REGULAR_SCALE,
+  navigationToken = flowNavigationToken,
+  pageRenderToken = flowPageRenderToken
+) {
+  try {
+    if (document.fonts && document.fonts.ready) await document.fonts.ready;
+  } catch { /* 使用後備字型繼續排版。 */ }
+  if (navigationToken !== flowNavigationToken || pageRenderToken !== flowPageRenderToken) return false;
+  await nextPaint();
+  if (navigationToken !== flowNavigationToken || pageRenderToken !== flowPageRenderToken) return false;
+  await nextPaint();
+  if (navigationToken !== flowNavigationToken || pageRenderToken !== flowPageRenderToken) return false;
+
+  const content = $('flowContent');
+  const page = flowPages[flowPageIndex];
+  if (!page || page.type !== 'utmost') return true;
+  const sheet = content.querySelector('.utmost-sheet');
+  if (!sheet) return true;
+
+  page.regularScale = 1;
+  page.extremeScale = 1;
+  sheet.style.removeProperty('transform');
+  sheet.style.removeProperty('transform-origin');
+  sheet.style.removeProperty('--utmost-scale');
+  sheet.classList.remove('is-extreme');
+  content.removeAttribute('data-fit-mode');
+  let scale = 1;
+  sheet.style.setProperty('--utmost-scale', String(scale));
+  while (scale > minScale && flowContentOverflows()) {
+    scale = Math.max(minScale, scale - 0.02);
+    sheet.style.setProperty('--utmost-scale', scale.toFixed(2));
+  }
+  page.regularScale = scale;
+
+  if (flowContentOverflows()) {
+    sheet.classList.add('is-extreme');
+    const contentStyle = getComputedStyle(content);
+    const paddingLeft = Number.parseFloat(contentStyle.paddingLeft) || 0;
+    const paddingRight = Number.parseFloat(contentStyle.paddingRight) || 0;
+    const paddingTop = Number.parseFloat(contentStyle.paddingTop) || 0;
+    const paddingBottom = Number.parseFloat(contentStyle.paddingBottom) || 0;
+    const innerWidth = Math.max(1, content.clientWidth - paddingLeft - paddingRight);
+    const innerHeight = Math.max(1, content.clientHeight - paddingTop - paddingBottom);
+    const sheetWidth = Math.max(1, sheet.scrollWidth);
+    const sheetHeight = Math.max(1, sheet.scrollHeight);
+    if (flowContentOverflows()) {
+      let transformScale = Math.max(0.0001, Math.min(1, innerWidth / sheetWidth, innerHeight / sheetHeight) * 0.995);
+      sheet.style.transformOrigin = 'top center';
+      for (let attempt = 0; attempt < 4; attempt++) {
+        sheet.style.transform = `scale(${transformScale})`;
+        const contentRect = content.getBoundingClientRect();
+        const sheetRect = sheet.getBoundingClientRect();
+        const availableBottom = contentRect.bottom - paddingBottom;
+        const availableRight = contentRect.right - paddingRight;
+        const availableLeft = contentRect.left + paddingLeft;
+        const heightCorrection = sheetRect.bottom > availableBottom + 0.5
+          ? Math.max(0.0001, (availableBottom - sheetRect.top) / Math.max(1, sheetRect.height))
+          : 1;
+        const widthCorrection = sheetRect.right > availableRight + 0.5 || sheetRect.left < availableLeft - 0.5
+          ? Math.max(0.0001, innerWidth / Math.max(1, sheetRect.width))
+          : 1;
+        const correction = Math.min(heightCorrection, widthCorrection);
+        if (correction >= 1) break;
+        transformScale = Math.max(0.0001, transformScale * correction * 0.995);
+      }
+      page.extremeScale = transformScale;
+      content.dataset.fitMode = 'extreme';
+    }
+  }
+  return navigationToken === flowNavigationToken && pageRenderToken === flowPageRenderToken;
+}
+
+async function waitForFlowLayout(navigationToken) {
+  try {
+    if (document.fonts && document.fonts.ready) await document.fonts.ready;
+  } catch { /* 使用後備字型繼續排版。 */ }
+  if (navigationToken !== flowNavigationToken) return false;
+  const screen = $('flowScreen');
+  let lastWidth = -1;
+  let lastHeight = -1;
+  let stableFrames = 0;
+  for (let frame = 0; frame < 30; frame++) {
+    await nextPaint();
+    if (navigationToken !== flowNavigationToken) return false;
+    if (!screen || screen.classList.contains('hidden')) {
+      if (frame >= 1) break;
+      continue;
+    }
+    const rect = screen.getBoundingClientRect();
+    if (Math.abs(rect.width - lastWidth) < 0.5 && Math.abs(rect.height - lastHeight) < 0.5) stableFrames++;
+    else stableFrames = 0;
+    lastWidth = rect.width;
+    lastHeight = rect.height;
+    if (frame >= 4 && stableFrames >= 3) break;
+  }
+  return navigationToken === flowNavigationToken;
+}
+
+function scheduleFlowLayoutRefresh() {
+  if (flowResizeTimer) clearTimeout(flowResizeTimer);
+  const navigationToken = flowNavigationToken;
+  flowResizeTimer = setTimeout(async () => {
+    flowResizeTimer = null;
+    if (
+      navigationToken !== flowNavigationToken ||
+      flowLoading ||
+      flowTransitioning ||
+      $('flowScreen').classList.contains('hidden')
+    ) return;
+
+    if (flowStep === 'utmost') {
+      renderFlowPage();
+      const pageRenderToken = flowPageRenderToken;
+      await fitCurrentFlowPageToScreen(UTMOST_MIN_REGULAR_SCALE, navigationToken, pageRenderToken);
+      return;
+    }
+
+    if (flowStep !== 'scripture' || !cachedBible) return;
+    const anchorKey = flowPages[flowPageIndex] && flowPages[flowPageIndex].verses &&
+      flowPages[flowPageIndex].verses[0] && flowPages[flowPageIndex].verses[0].key;
+    if (!await waitForFlowLayout(navigationToken) || flowStep !== 'scripture') return;
+    const verses = parseScriptureVerses(cachedBible.body || '', currentRefPayload());
+    const pages = buildScripturePagesByFit(verses);
+    if (navigationToken !== flowNavigationToken || flowStep !== 'scripture') return;
+    flowPages = pages;
+    flowPageScales = pages.map(() => 1);
+    const anchoredPage = anchorKey
+      ? pages.findIndex((page) => page.verses.some((verse) => verse.key === anchorKey))
+      : -1;
+    flowPageIndex = anchoredPage >= 0 ? anchoredPage : Math.min(flowPageIndex, pages.length - 1);
+    renderFlowPage();
+  }, 180);
+}
+
+function scriptureRefKey(ref = currentRefPayload()) {
+  return [ref.book, ref.startCh, ref.startV, ref.endCh, ref.endV].join(':');
+}
+
+function invalidateScriptureData() {
+  cachedBible = null;
+  cachedBibleKey = '';
+  scriptureRequest = null;
+  scriptureRequestToken++;
+}
+
+async function ensureScriptureData() {
+  const ref = currentRefPayload();
+  const key = scriptureRefKey(ref);
+  if (cachedBible && cachedBibleKey === key) return cachedBible;
+  if (scriptureRequest && scriptureRequest.key === key) return scriptureRequest.promise;
+
+  const requestToken = scriptureRequestToken;
+  const promise = (async () => {
+    let result;
+    try { result = await window.api.biblePassage(ref); }
+    catch (e) { result = { ok: false, error: e.message }; }
+    if (requestToken !== scriptureRequestToken || key !== scriptureRefKey()) {
+      return ensureScriptureData();
+    }
+    cachedBible = result && result.ok ? result : {
+      ok: false,
+      title: formatScriptureShort(),
+      body: '目前無法抓取經文，請稍後再試。\n\n' + ((result && result.error) || '')
+    };
+    cachedBibleKey = key;
+    return cachedBible;
+  })();
+  scriptureRequest = { key, promise };
+  try { return await promise; }
+  finally {
+    if (scriptureRequest && scriptureRequest.promise === promise) scriptureRequest = null;
+  }
+}
+
+async function ensureUtmostData() {
+  if (cachedUtmost) return cachedUtmost;
+  let result;
+  try { result = await window.api.utmostToday(); }
+  catch (e) { result = { ok: false, error: e.message }; }
+  cachedUtmost = result && result.ok ? result : {
+    ok: false,
+    date: systemDateMD(),
+    title: '竭誠獻上',
+    verse: '',
+    body: '目前無法抓取竭誠獻上，請稍後再試。\n\n' + ((result && result.error) || '')
+  };
+  return cachedUtmost;
+}
+
+async function refreshDailyReadingData() {
+  invalidateScriptureData();
+  cachedUtmost = null;
+  let scheduleOk = true;
+  if (cfg.scheduleEnabled && cfg.scheduleUrl) scheduleOk = await applySchedule(false);
+  const results = await Promise.allSettled([ensureScriptureData(), ensureUtmostData()]);
+  return scheduleOk && results.every((result) => result.status === 'fulfilled' && result.value && result.value.ok);
+}
+
+function scheduleDailyReadingRefresh() {
+  const scheduleNext = () => {
+    const now = new Date();
+    const next = new Date(now);
+    next.setHours(8, 0, 0, 0);
+    if (next <= now) next.setDate(next.getDate() + 1);
+    setTimeout(async () => {
+      try {
+        await refreshDailyReadingData();
+      } finally {
+        scheduleNext();
+      }
+    }, next.getTime() - now.getTime());
+  };
+  scheduleNext();
+}
+
+async function showScriptureFlow(navigationToken) {
+  if (flowLoading) return;
+  flowLoading = true;
+  setFlowContent({ eyebrow: '', title: '載入中...', meta: '', pages: [textPage('正在抓取今天的經文內容...')] });
+  try {
+    const data = await ensureScriptureData();
+    if (navigationToken !== flowNavigationToken) return false;
+    setFlowContent({
+      eyebrow: '',
+      title: formatScriptureBookTitle(),
+      meta: '',
+      pages: [textPage('')]
+    });
+    if (!await waitForFlowLayout(navigationToken)) return false;
+    const verses = parseScriptureVerses(data.body || '', currentRefPayload());
+    const pages = buildScripturePagesByFit(verses);
+    if (navigationToken !== flowNavigationToken) return false;
+    flowLoading = false;
+    setFlowContent({
+      eyebrow: '',
+      title: formatScriptureBookTitle(),
+      meta: '',
+      pages
+    });
+    return true;
+  } finally {
+    if (navigationToken === flowNavigationToken) flowLoading = false;
+  }
+}
+
+async function showUtmostFlow(navigationToken) {
+  if (flowLoading) return;
+  hideUtmostFooterImmediately();
+  flowLoading = true;
+  $('flowScreen').dataset.step = 'utmost';
+  setFlowContent({
+    eyebrow: '',
+    title: '',
+    meta: '',
+    pages: [createUtmostPage({ title: '載入中…', verse: '', body: '正在抓取今天竭誠獻上的內容…' })]
+  });
+  try {
+    const data = await ensureUtmostData();
+    if (navigationToken !== flowNavigationToken) return false;
+    flowLoading = false;
+    setFlowContent({ eyebrow: '', title: '', meta: '', pages: [createUtmostPage(data)], scales: [1] });
+    const pageRenderToken = flowPageRenderToken;
+    if (!await waitForFlowLayout(navigationToken) || pageRenderToken !== flowPageRenderToken) return false;
+    return await fitCurrentFlowPageToScreen(UTMOST_MIN_REGULAR_SCALE, navigationToken, pageRenderToken);
+  } finally {
+    if (navigationToken === flowNavigationToken) flowLoading = false;
+  }
+}
+
+function showEndScreen() {
+  hideUtmostFooterImmediately();
+  flowStep = 'end';
+  $('flowScreen').dataset.step = 'end';
+  setFlowContent({
+    eyebrow: '',
+    title: '',
+    meta: '',
+    pages: ['今天的流程完成了']
+  });
+}
+
+async function goFlowStep(step) {
+  if (flowTransitioning) return false;
+  resetUtmostFinishConfirmation();
+  if (flowStep === 'cover' && step !== 'cover') flowReachedUtmost = false;
+  if (flowStep === 'utmost' || step === 'utmost') hideUtmostFooterImmediately();
+  const navigationToken = ++flowNavigationToken;
+  flowTransitioning = true;
+  try {
+    if (step !== 'worship' && worshipActive) stopWorshipPlayback();
+    if (step === 'cover') {
+      flowStep = 'cover';
+      setFlowVisible(false);
+      await window.api.setWindowMode('wide');
+      if (navigationToken !== flowNavigationToken) return false;
+      showToolbar();
+      resumeMusicOnCover();
+      return true;
+    }
+    if (step === 'worship') {
+      pauseMusicForFlow();
+      flowStep = 'worship';
+      setFlowVisible(false);
+      await window.api.setWindowMode('wide');
+      if (navigationToken !== flowNavigationToken) return false;
+      return await startWorship();
+    }
+    flowStep = step;
+    pauseMusicForFlow();
+    if (step === 'utmost') flowReachedUtmost = true;
+    $('toolbar').classList.remove('show');
+    $('worshipControls').classList.remove('show');
+    $('flowScreen').dataset.step = step;
+    await window.api.setWindowMode(step === 'scripture' || step === 'utmost' ? 'mobile' : 'wide');
+    if (navigationToken !== flowNavigationToken) return false;
+    if (!await waitForFlowLayout(navigationToken)) return false;
+    if (step === 'scripture') return await showScriptureFlow(navigationToken);
+    if (step === 'utmost') return await showUtmostFlow(navigationToken);
+    return true;
+  } finally {
+    if (navigationToken === flowNavigationToken) flowTransitioning = false;
+  }
+}
+
+async function returnToMainCover() {
+  resetUtmostFinishConfirmation();
+  hideUtmostFooterImmediately();
+  const navigationToken = ++flowNavigationToken;
+  flowTransitioning = true;
+  flowLoading = false;
+  if (worshipActive) stopWorshipPlayback();
+  flowStep = 'cover';
+  setFlowVisible(false);
+  try { await window.api.setWindowMode('wide'); }
+  finally {
+    if (navigationToken === flowNavigationToken) {
+      flowTransitioning = false;
+      showToolbar();
+      resumeMusicOnCover();
+    }
+  }
+}
+
+function nextFlowStep() {
+  if (flowTransitioning) return;
+  const idx = FLOW_ORDER.indexOf(flowStep);
+  if (idx >= FLOW_ORDER.length - 1) return;
+  goFlowStep(FLOW_ORDER[Math.min(idx + 1, FLOW_ORDER.length - 1)] || 'cover');
+}
+
+function prevFlowStep() {
+  if (flowTransitioning) return;
+  const idx = FLOW_ORDER.indexOf(flowStep);
+  goFlowStep(FLOW_ORDER[Math.max(idx - 1, 0)] || 'cover');
+}
+
+function isUtmostFinalPage() {
+  return flowStep === 'utmost' &&
+    !$('flowScreen').classList.contains('hidden') &&
+    flowPageIndex >= flowPages.length - 1;
+}
+
+function resetUtmostFinishConfirmation() {
+  const wasArmed = utmostFinishConfirmUntil > Date.now();
+  if (utmostFinishConfirmTimer) clearTimeout(utmostFinishConfirmTimer);
+  utmostFinishConfirmTimer = null;
+  utmostFinishConfirmUntil = 0;
+  if (isUtmostFinalPage()) $('flowNextPage').textContent = '完成';
+  return wasArmed;
+}
+
+function requestUtmostFinishConfirmation() {
+  const now = Date.now();
+  if (utmostFinishConfirmUntil > now) {
+    resetUtmostFinishConfirmation();
+    return true;
+  }
+
+  resetUtmostFinishConfirmation();
+  utmostFinishConfirmUntil = now + UTMOST_FINISH_CONFIRM_MS;
+  $('flowNextPage').textContent = '再按一次完成';
+  revealUtmostFooter();
+  toast('請再按一次，以確認回到主畫面', 3000);
+  utmostFinishConfirmTimer = setTimeout(() => {
+    utmostFinishConfirmTimer = null;
+    utmostFinishConfirmUntil = 0;
+    if (isUtmostFinalPage()) $('flowNextPage').textContent = '完成';
+  }, UTMOST_FINISH_CONFIRM_MS);
+  return false;
+}
+
+function requestFlowReturnToCover(source = 'button') {
+  if (isUtmostFinalPage()) {
+    if (source === 'wheel') {
+      revealUtmostFooter();
+      toast('請按「完成」或右方向鍵回到主畫面', 2600);
+      return false;
+    }
+    if (!requestUtmostFinishConfirmation()) return false;
+  }
+  returnToMainCover();
+  return true;
+}
+
+function nextFlowPageOrStep(source = 'button') {
+  if (flowTransitioning) return;
+  if (flowStep === 'end') {
+    return;
+  }
+  if ($('flowScreen').classList.contains('hidden')) { nextFlowStep(); return; }
+  if (flowPageIndex < flowPages.length - 1) {
+    flowPageIndex++;
+    renderFlowPage();
+  } else {
+    if (flowStep === FLOW_ORDER[FLOW_ORDER.length - 1]) {
+      requestFlowReturnToCover(source);
+      return;
+    }
+    nextFlowStep();
+  }
+}
+
+function prevFlowPageOrStep() {
+  if (flowTransitioning) return;
+  if (resetUtmostFinishConfirmation()) {
+    revealUtmostFooter();
+    return;
+  }
+  if ($('flowScreen').classList.contains('hidden')) { prevFlowStep(); return; }
+  if (flowPageIndex > 0) {
+    flowPageIndex--;
+    renderFlowPage();
+  } else if (flowStep === 'utmost') {
+    goFlowStep('scripture').then((ok) => {
+      if (!ok || flowStep !== 'scripture') return;
+      flowPageIndex = Math.max(flowPages.length - 1, 0);
+      renderFlowPage();
+    });
+  } else if (flowStep === 'scripture') {
+    goFlowStep('worship');
+  }
 }
 
 // ---------- 敬拜影片 ----------
 async function startWorship() {
-  if (!cfg.worshipUrl) { toast('請先在設定貼上敬拜 YouTube 連結'); openSettings(); return; }
+  if (!cfg.worshipUrl) {
+    flowStep = 'cover';
+    toast('請先設定敬拜影片 YouTube 連結');
+    openSettings();
+    resumeMusicOnCover();
+    return false;
+  }
+  const requestedUrl = cfg.worshipUrl;
+  const requestedQuality = cfg.videoQuality;
+  const requestToken = ++worshipRequestToken;
   const layer = $('worshipLayer');
-  const video = $('worshipVideo');
   worshipActive = true;
-  $('toolbar').classList.remove('show'); // 敬拜時改用影片控制條
+  $('toolbar').classList.remove('show');
   $('wSeek').value = '0';
   $('wCur').textContent = '0:00';
+  $('wDur').textContent = '0:00';
   layer.classList.remove('hidden');
+  $('worshipLoading').textContent = '敬拜影片載入中...';
   $('worshipLoading').classList.remove('hidden');
   $('btnWorship').classList.add('hidden');
   $('btnBack').classList.remove('hidden');
+  setWorshipReturnButton(flowStep === 'worship');
+  setWorshipPlayState(false);
   showToolbar();
 
-  musicResumeAfterWorship = musicPlaying;
-  if (musicPlaying) fadeOutMusic();
+  pauseMusicForFlow();
 
-  const r = await window.api.ensureMedia(cfg.worshipUrl, 'video', cfg.videoQuality);
-  if (!worshipActive) return;                 // 下載期間若已返回封面則不繼續
-  if (!r.ok) { toast('敬拜影片載入失敗：' + r.error, 4000); backToCover(); return; }
-  playWorshipVideo(r.path, false);
+  const r = await window.api.ensureMedia(requestedUrl, 'video', requestedQuality);
+  if (requestToken !== worshipRequestToken || !worshipActive) return false;
+  if (cfg.worshipUrl !== requestedUrl || cfg.videoQuality !== requestedQuality) {
+    stopWorshipPlayback();
+    return false;
+  }
+  if (!r.ok) {
+    toast('敬拜影片載入失敗：' + r.error, 4000);
+    await backToCover();
+    return false;
+  }
+  playWorshipVideo(r.path, false, requestToken);
+  return true;
 }
 
-// 播放敬拜影片：設來源後「明確 load()」再 play；若被拒自動重試一次（修正閒置久後首次黑屏）
-function playWorshipVideo(src, retried) {
+// 明確 load 後播放；首次失敗會重試一次，再提示使用者手動播放。
+function playWorshipVideo(src, retried, requestToken = worshipRequestToken) {
   const video = $('worshipVideo');
+  if (worshipPlayRetryTimer) clearTimeout(worshipPlayRetryTimer);
+  worshipPlayRetryTimer = null;
   video.pause();
   video.src = src;
   video.load();
   video.volume = 1;
   video.play().then(() => {
+    if (requestToken !== worshipRequestToken || !worshipActive) return;
     $('worshipLoading').classList.add('hidden');
   }).catch(() => {
-    if (!retried && worshipActive) setTimeout(() => playWorshipVideo(src, true), 300);
+    if (requestToken !== worshipRequestToken || !worshipActive) return;
+    if (!retried && worshipActive && requestToken === worshipRequestToken) {
+      worshipPlayRetryTimer = setTimeout(() => playWorshipVideo(src, true, requestToken), 300);
+      return;
+    }
+    if (worshipActive) {
+      $('worshipLoading').textContent = '無法自動播放，請按下播放鍵';
+      $('worshipLoading').classList.remove('hidden');
+      setWorshipPlayState(false);
+      showToolbar();
+    }
   });
 }
 
-function backToCover() {
+function stopWorshipPlayback() {
+  worshipRequestToken++;
+  if (worshipPlayRetryTimer) clearTimeout(worshipPlayRetryTimer);
+  worshipPlayRetryTimer = null;
   const video = $('worshipVideo');
   video.pause();
   video.removeAttribute('src');
@@ -446,13 +1820,126 @@ function backToCover() {
   $('worshipLayer').classList.add('hidden');
   $('worshipLoading').classList.add('hidden');
   $('btnBack').classList.add('hidden');
-  $('btnWorship').classList.remove('hidden');
-  showToolbar(); // 返回封面後立即顯示工具列
-  // 返回封面（含敬拜播畢自動返回、中途手動返回）一律自動開啟背景音樂
-  if (cfg.musicUrl && !musicPlaying) resolveAndPlayMusic();
+  $('btnWorship').classList.add('hidden');
+  setWorshipPlayState(false);
 }
 
-// ---------- 背景圖：拖放與選取 ----------
+async function backToCover(options = {}) {
+  const shouldContinueToScripture = flowStep === 'worship' && options.nextAfterWorship;
+  stopWorshipPlayback();
+  if (shouldContinueToScripture) {
+    flowNavigationToken++;
+    flowTransitioning = false;
+    flowLoading = false;
+    $('toolbar').classList.remove('show');
+    await goFlowStep('scripture');
+  } else {
+    await returnToMainCover();
+  }
+}
+
+function isEditableFlowNavigationTarget(target) {
+  const tag = target && target.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'VIDEO') return true;
+  if (target && target.isContentEditable) return true;
+  return !!(
+    target &&
+    typeof target.closest === 'function' &&
+    target.closest('[contenteditable="true"], [role="textbox"], [role="slider"]')
+  );
+}
+
+function resetFlowWheelGesture() {
+  if (flowWheelResetTimer) clearTimeout(flowWheelResetTimer);
+  flowWheelResetTimer = null;
+  flowWheelDelta = 0;
+  flowWheelGestureLocked = false;
+}
+
+function normalizedFlowWheelDelta(value, deltaMode) {
+  const delta = Number(value) || 0;
+  if (deltaMode === 1) return delta * 16;
+  if (deltaMode === 2) return delta * Math.max(Number(window.innerHeight) || 0, 1);
+  return delta;
+}
+
+function handleFlowWheelNavigation(event) {
+  if (!event || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return false;
+  if (flowStep !== 'scripture' && flowStep !== 'utmost') return false;
+  if (
+    $('flowScreen').classList.contains('hidden') ||
+    !$('settingsPanel').classList.contains('hidden') ||
+    worshipActive ||
+    isEditableFlowNavigationTarget(event.target)
+  ) return false;
+
+  const deltaMode = Number(event.deltaMode) || 0;
+  const deltaY = normalizedFlowWheelDelta(event.deltaY, deltaMode);
+  const deltaX = normalizedFlowWheelDelta(event.deltaX, deltaMode);
+  if (!deltaY || Math.abs(deltaY) <= Math.abs(deltaX)) return false;
+
+  event.preventDefault();
+  if (flowWheelResetTimer) clearTimeout(flowWheelResetTimer);
+  flowWheelResetTimer = setTimeout(resetFlowWheelGesture, FLOW_WHEEL_IDLE_MS);
+  if (flowTransitioning || flowLoading) {
+    flowWheelGestureLocked = true;
+    flowWheelDelta = 0;
+    return true;
+  }
+  if (flowWheelGestureLocked) return true;
+  if (flowWheelDelta && Math.sign(flowWheelDelta) !== Math.sign(deltaY)) flowWheelDelta = 0;
+  flowWheelDelta += deltaY;
+  if (Math.abs(flowWheelDelta) < FLOW_WHEEL_THRESHOLD) return true;
+
+  const forwards = flowWheelDelta > 0;
+  flowWheelDelta = 0;
+  flowWheelGestureLocked = true;
+  if (forwards) nextFlowPageOrStep('wheel');
+  else prevFlowPageOrStep();
+  return true;
+}
+
+function handleFlowArrowNavigation(event) {
+  if (!event || (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')) return false;
+  if (
+    event.repeat ||
+    event.isComposing ||
+    event.altKey ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.shiftKey
+  ) return false;
+  if (flowStep !== 'scripture' && flowStep !== 'utmost') return false;
+  if (
+    $('flowScreen').classList.contains('hidden') ||
+    !$('settingsPanel').classList.contains('hidden') ||
+    worshipActive ||
+    flowTransitioning ||
+    flowLoading ||
+    isEditableFlowNavigationTarget(event.target)
+  ) return false;
+
+  event.preventDefault();
+  if (event.key === 'ArrowRight') nextFlowPageOrStep('keyboard');
+  else prevFlowPageOrStep();
+  return true;
+}
+
+function handleEscapeNavigation(event) {
+  if (!event || event.key !== 'Escape' || event.repeat || event.isComposing) return false;
+  if (!$('settingsPanel').classList.contains('hidden')) {
+    closeSettings();
+    return true;
+  }
+  if (worshipActive || flowStep !== 'cover' || !$('flowScreen').classList.contains('hidden')) {
+    event.preventDefault();
+    requestFlowReturnToCover('escape');
+    return true;
+  }
+  return false;
+}
+
+// ---------- 背景圖片 ----------
 async function useImagePath(srcPath) {
   if (!srcPath) return;
   const r = await window.api.saveBackground(srcPath);
@@ -461,11 +1948,16 @@ async function useImagePath(srcPath) {
 
 function setupDragDrop() {
   const canvas = $('canvas');
-  window.addEventListener('dragover', (e) => { e.preventDefault(); canvas.classList.add('dragging'); });
+  window.addEventListener('dragover', (e) => {
+    if (!Array.from(e.dataTransfer.types || []).includes('Files')) return;
+    e.preventDefault();
+    canvas.classList.add('dragging');
+  });
   window.addEventListener('dragleave', (e) => {
     if (e.relatedTarget === null) canvas.classList.remove('dragging');
   });
   window.addEventListener('drop', async (e) => {
+    if (!Array.from(e.dataTransfer.types || []).includes('Files')) return;
     e.preventDefault();
     canvas.classList.remove('dragging');
     const file = e.dataTransfer.files && e.dataTransfer.files[0];
@@ -473,13 +1965,19 @@ function setupDragDrop() {
     if (!file.type.startsWith('image/')) { toast('請拖入圖片檔'); return; }
     const p = window.api.pathForFile(file);
     if (p) useImagePath(p);
-    else toast('無法讀取檔案路徑');
+    else toast('無法讀取圖片');
   });
 }
 
-// ---------- 工具條自動隱藏（敬拜時顯示影片控制條） ----------
+// ---------- 自動顯示與隱藏工具列 ----------
 let hideTimer = null;
 function showToolbar() {
+  if (!worshipActive && !$('flowScreen').classList.contains('hidden')) {
+    $('toolbar').classList.remove('show');
+    $('worshipControls').classList.remove('show');
+    clearTimeout(hideTimer);
+    return;
+  }
   const bar = worshipActive ? $('worshipControls') : $('toolbar');
   bar.classList.add('show');
   clearTimeout(hideTimer);
@@ -496,6 +1994,22 @@ function fmtTime(s) {
   return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 }
 
+function setWorshipPlayState(isPlaying) {
+  const btn = $('wPlay');
+  btn.classList.toggle('playing', !!isPlaying);
+  btn.title = isPlaying ? '暫停' : '播放';
+  btn.setAttribute('aria-label', isPlaying ? '暫停' : '播放');
+}
+
+function setWorshipReturnButton(nextToScripture) {
+  const btn = $('wReturn');
+  btn.classList.toggle('next-to-scripture', !!nextToScripture);
+  btn.title = nextToScripture ? '前往經文' : '回到封面';
+  btn.innerHTML = nextToScripture
+    ? '<span>前往今日經文</span>'
+    : '<span>回封面</span>';
+}
+
 function setupWorshipControls() {
   const v = $('worshipVideo');
   const seek = $('wSeek');
@@ -504,116 +2018,164 @@ function setupWorshipControls() {
     if (v.duration) seek.value = String((v.currentTime / v.duration) * 1000);
     $('wCur').textContent = fmtTime(v.currentTime);
   });
-  v.addEventListener('play', () => { $('wPlay').textContent = '⏸'; });
-  v.addEventListener('pause', () => { $('wPlay').textContent = '▶'; });
-  v.addEventListener('ended', backToCover); // 影片播畢自動返回封面
+  v.addEventListener('play', () => setWorshipPlayState(true));
+  v.addEventListener('playing', () => $('worshipLoading').classList.add('hidden'));
+  v.addEventListener('pause', () => setWorshipPlayState(false));
+  v.addEventListener('error', () => {
+    if (!worshipActive) return;
+    $('worshipLoading').textContent = '影片播放失敗，請返回後再試一次';
+    $('worshipLoading').classList.remove('hidden');
+    showToolbar();
+  });
+  v.addEventListener('ended', () => backToCover());
   seek.addEventListener('input', () => {
     if (v.duration) v.currentTime = (parseFloat(seek.value) / 1000) * v.duration;
   });
-  $('wPlay').addEventListener('click', () => { if (v.paused) v.play(); else v.pause(); });
-  $('wReturn').addEventListener('click', backToCover);
-  $('wMin').addEventListener('click', () => window.api.minimizeWindow());
-  $('wClose').addEventListener('click', () => window.api.closeWindow());
+  $('wPlay').addEventListener('click', async () => {
+    if (!v.paused) { v.pause(); return; }
+    try {
+      await v.play();
+      $('worshipLoading').classList.add('hidden');
+    } catch (e) {
+      $('worshipLoading').textContent = '播放失敗，請稍後再試';
+      $('worshipLoading').classList.remove('hidden');
+      toast('影片播放失敗：' + e.message, 3200);
+    }
+  });
+  $('wBackTop').addEventListener('click', () => backToCover());
+  $('wReturn').addEventListener('click', () => backToCover({ nextAfterWorship: true }));
 }
 
-// ---------- 設定開關 ----------
+// ---------- 設定面板 ----------
 function openSettings() {
   fillSettings();
   $('settingsPanel').classList.remove('hidden');
   $('settingsBackdrop').classList.remove('hidden');
   $('toolbar').classList.add('show');
-  refreshYtDlpVersion();
 }
 function closeSettings() {
   $('settingsPanel').classList.add('hidden');
   $('settingsBackdrop').classList.add('hidden');
 }
 
-async function refreshYtDlpVersion() {
-  const v = await window.api.ytDlpVersion();
-  $('ytdlpVer').textContent = v || '未安裝（請確認 yt-dlp）';
-}
-
 // ---------- App 自動更新 ----------
 function setupAppUpdater() {
-  // 顯示目前版本
-  window.api.appVersion().then((v) => { $('appVer').textContent = v || '—'; });
+  const appVerEl = $('appVer');
+  const updateButton = $('btnAppUpdate');
+  const updateMessage = $('appUpdateMsg');
+  const updateProgress = $('appUpdateProgress');
+  const updatePercent = $('appUpdatePct');
+  const installButton = $('btnAppInstall');
+  const banner = $('updateBanner');
+  const bannerText = $('updateBannerText');
+  const bannerDownload = $('btnUpdateDownload');
+  const bannerDismiss = $('btnUpdateDismiss');
 
-  // 「檢查軟體更新」按鈕
-  $('btnAppUpdate').addEventListener('click', async () => {
-    $('appUpdateMsg').textContent = '檢查中…';
-    $('btnAppUpdate').disabled = true;
-    const r = await window.api.checkAppUpdate();
-    $('btnAppUpdate').disabled = false;
-    if (!r.ok) { $('appUpdateMsg').textContent = r.error || '檢查失敗'; return; }
-    if (r.available) {
-      $('appUpdateMsg').textContent = `發現新版本 ${r.version}，開始下載…`;
-      $('appUpdateProgress').classList.remove('hidden');
+  const openManualUpdate = async (result) => {
+    updateProgress.classList.add('hidden');
+    if (!result || !result.url) {
+      updateMessage.textContent = (result && result.error) || '請到下載頁手動更新';
+      return false;
+    }
+    updateMessage.textContent = '已開啟下載頁，請下載後手動安裝';
+    await window.api.openExternal(result.url);
+    return true;
+  };
+
+  window.api.appVersion().then((v) => { appVerEl.textContent = v || '--'; })
+    .catch(() => { appVerEl.textContent = '--'; });
+
+  updateButton.addEventListener('click', async () => {
+    updateMessage.textContent = '檢查中...';
+    updateButton.disabled = true;
+    try {
+      const r = await window.api.checkAppUpdate();
+      if (r && r.manual) {
+        if (r.available === false) updateMessage.textContent = '目前已是最新版本';
+        else await openManualUpdate(r);
+        return;
+      }
+      if (!r || !r.ok) { updateMessage.textContent = (r && r.error) || '檢查失敗'; return; }
+      if (!r.available) { updateMessage.textContent = '目前已是最新版本'; return; }
+      updateMessage.textContent = '發現新版本 ' + r.version + '，下載中...';
+      updateProgress.classList.remove('hidden');
       const d = await window.api.downloadAppUpdate();
-      if (!d.ok) $('appUpdateMsg').textContent = '下載失敗：' + d.error;
-    } else {
-      $('appUpdateMsg').textContent = '已是最新版本';
+      if (d && d.manual) { await openManualUpdate(d); return; }
+      if (!d || !d.ok) {
+        updateProgress.classList.add('hidden');
+        updateMessage.textContent = '下載失敗：' + ((d && d.error) || '未知錯誤');
+      }
+    } catch (e) {
+      updateProgress.classList.add('hidden');
+      updateMessage.textContent = '更新失敗：' + e.message;
+    } finally {
+      updateButton.disabled = false;
     }
   });
 
-  // 「重新啟動以安裝」按鈕
-  $('btnAppInstall').addEventListener('click', () => window.api.quitAndInstall());
+  installButton.addEventListener('click', () => window.api.quitAndInstall());
 
-  // 主進程推來的更新事件
   window.api.onUpdateAvailable((d) => {
-    toast(`發現新版本 ${d.version}，可到設定更新`, 4000);
-    $('appUpdateMsg').textContent = `發現新版本 ${d.version}`;
+    toast('發現新版本 ' + d.version, 4000);
+    updateMessage.textContent = '發現新版本 ' + d.version;
   });
   window.api.onUpdateProgress((d) => {
-    $('appUpdateProgress').classList.remove('hidden');
-    $('appUpdatePct').textContent = Math.round(d.percent || 0);
+    updateProgress.classList.remove('hidden');
+    updatePercent.textContent = Math.round(d.percent || 0);
   });
   window.api.onUpdateDownloaded((d) => {
-    $('appUpdateProgress').classList.add('hidden');
-    $('appUpdateMsg').textContent = `新版本 ${d.version} 已下載完成`;
-    $('btnAppInstall').classList.remove('hidden');
-    toast('更新已下載，按「重新啟動以安裝更新」即可完成', 5000);
+    updateProgress.classList.add('hidden');
+    updateMessage.textContent = '版本 ' + d.version + ' 已下載完成';
+    installButton.classList.remove('hidden');
+    toast('更新已下載完成，可以重新啟動安裝', 5000);
   });
-  window.api.onUpdateError((d) => { $('appUpdateMsg').textContent = '更新錯誤：' + d.error; });
-  window.api.onUpdateNone(() => { $('appUpdateMsg').textContent = '已是最新版本'; });
+  window.api.onUpdateError((d) => { updateMessage.textContent = '更新錯誤：' + d.error; });
+  window.api.onUpdateNone(() => { updateMessage.textContent = '目前已是最新版本'; });
 
-  // 開機檢查到新版本 → 顯示頂端橫幅
   const isWin = window.api.platform === 'win32';
   let newVersionUrl = '';
+  let newVersion = '';
   let winUpdating = false;
   window.api.onNewVersion(({ version, url }) => {
+    if (version && version === cfg.skippedVersion) return;
+    newVersion = version || '';
     newVersionUrl = url;
-    $('updateBannerText').textContent = `🔔 有新版本 v${version} 可用`;
-    $('btnUpdateDownload').textContent = isWin ? '立即更新' : '前往下載更新';
-    $('updateBanner').classList.remove('hidden');
+    bannerText.textContent = '新版本 v' + version + ' 可下載';
+    bannerDownload.textContent = isWin ? '下載更新' : '前往下載';
+    banner.classList.remove('hidden');
   });
-  $('btnUpdateDownload').addEventListener('click', async () => {
+  bannerDownload.addEventListener('click', async () => {
     if (isWin) {
-      // Windows：一鍵自動下載並安裝（不開瀏覽器）
       winUpdating = true;
-      $('btnUpdateDownload').disabled = true;
-      $('updateBannerText').textContent = '下載更新中… 0%';
+      bannerDownload.disabled = true;
+      bannerText.textContent = '下載更新中 0%';
       const r = await window.api.downloadAppUpdate();
-      if (!r.ok) {
+      if (r && r.manual) {
         winUpdating = false;
-        $('btnUpdateDownload').disabled = false;
-        $('updateBannerText').textContent = '更新失敗，請稍後再試';
+        bannerDownload.disabled = false;
+        await openManualUpdate(r);
+      } else if (!r || !r.ok) {
+        winUpdating = false;
+        bannerDownload.disabled = false;
+        bannerText.textContent = '下載失敗，請稍後再試';
       }
-      // 下載完成由 onUpdateDownloaded 自動重啟安裝
     } else if (newVersionUrl) {
-      // Mac：開啟下載頁，手動下載安裝包
       window.api.openExternal(newVersionUrl);
     }
   });
-  $('btnUpdateDismiss').addEventListener('click', () => $('updateBanner').classList.add('hidden'));
-
-  // Windows 橫幅自動更新的下載進度與完成後自動安裝
+  bannerDismiss.addEventListener('click', () => {
+    if (newVersion) {
+      cfg.skippedVersion = newVersion;
+      window.api.setConfig(cfg);
+    }
+    banner.classList.add('hidden');
+  });
   window.api.onUpdateProgress((d) => {
-    if (winUpdating) $('updateBannerText').textContent = `下載更新中… ${Math.round(d.percent || 0)}%`;
+    if (winUpdating) bannerText.textContent = '下載更新中 ' + Math.round(d.percent || 0) + '%';
   });
   window.api.onUpdateDownloaded(() => {
     if (winUpdating) {
-      $('updateBannerText').textContent = '更新完成，即將重新啟動…';
+      bannerText.textContent = '下載完成，準備重新啟動...';
       setTimeout(() => window.api.quitAndInstall(), 900);
     }
   });
@@ -632,22 +2194,79 @@ async function refreshCacheSize() {
 function setupCache() {
   refreshCacheSize();
   $('btnCleanCache').addEventListener('click', async () => {
-    $('cacheMsg').textContent = '清理中…';
-    const r = await window.api.cleanCache(0); // 0 = 清全部（仍保留使用中的）
-    $('cacheMsg').textContent = `已清理 ${r.removed} 個檔案，釋放 ${fmtBytes(r.freed)}`;
+    $('cacheMsg').textContent = '清理中...';
+    const r = await window.api.cleanCache(0); // 0 表示清除所有未使用的快取。
+    $('cacheMsg').textContent = `已移除 ${r.removed} 個檔案，釋放 ${fmtBytes(r.freed)}`;
     refreshCacheSize();
+  });
+}
+
+function setupCustomWorshipList() {
+  const list = $('customWorshipList');
+  if (!list) return;
+  let dragIndex = -1;
+
+  list.addEventListener('dragstart', (e) => {
+    const row = e.target.closest('.custom-worship-item');
+    if (!row) return;
+    dragIndex = Number(row.dataset.index);
+    row.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', row.dataset.index);
+  });
+
+  list.addEventListener('dragend', (e) => {
+    const row = e.target.closest('.custom-worship-item');
+    if (row) row.classList.remove('dragging');
+    dragIndex = -1;
+  });
+
+  list.addEventListener('dragover', (e) => {
+    if (dragIndex < 0) return;
+    e.preventDefault();
+    const row = e.target.closest('.custom-worship-item');
+    list.querySelectorAll('.custom-worship-item.over').forEach((item) => item.classList.remove('over'));
+    if (row) row.classList.add('over');
+  });
+
+  list.addEventListener('dragleave', (e) => {
+    const row = e.target.closest('.custom-worship-item');
+    if (row) row.classList.remove('over');
+  });
+
+  list.addEventListener('drop', async (e) => {
+    if (dragIndex < 0) return;
+    e.preventDefault();
+    const row = e.target.closest('.custom-worship-item');
+    list.querySelectorAll('.custom-worship-item.over').forEach((item) => item.classList.remove('over'));
+    if (!row) return;
+    await saveCustomWorshipOrder(dragIndex, Number(row.dataset.index));
+  });
+
+  list.addEventListener('click', async (e) => {
+    const deleteButton = e.target.closest('.custom-delete-btn');
+    if (!deleteButton) return;
+    const row = deleteButton.closest('.custom-worship-item');
+    if (!row) return;
+    await deleteCustomWorshipPreset(Number(row.dataset.index));
   });
 }
 
 // ---------- 初始化 ----------
 async function init() {
-  // 依平台套用不同介面風格：Mac = Liquid Glass、Windows = Fluent
+  // 依平台套用原生風格字型與外觀。
   document.body.classList.add(window.api.platform === 'darwin' ? 'plat-mac' : 'plat-win');
   const { cfg: loaded, backgroundUrl } = await window.api.getConfig();
   cfg = loaded;
+  cfg.fillMode = 'blur';
+  const scriptureConfigChanged = normalizeScriptureConfig();
   applyCover(backgroundUrl);
+  if (scriptureConfigChanged) {
+    try { await window.api.setConfig(cfg); }
+    catch (e) { console.warn('無法儲存校正後的經文範圍：', e); }
+  }
 
-  // 工具條
+  // 主工具列。
   $('btnSettings').addEventListener('click', () => {
     const hidden = $('settingsPanel').classList.contains('hidden');
     if (hidden) openSettings(); else closeSettings();
@@ -656,64 +2275,70 @@ async function init() {
   $('btnMusic').addEventListener('click', toggleMusic);
   $('btnWorship').addEventListener('click', startWorship);
   $('btnBack').addEventListener('click', backToCover);
+  $('btnFlowNext').addEventListener('click', nextFlowStep);
+  $('flowPrevPage').addEventListener('click', (e) => { e.stopPropagation(); prevFlowPageOrStep(); });
+  $('flowNextPage').addEventListener('click', (e) => { e.stopPropagation(); nextFlowPageOrStep('button'); });
+  $('flowHomeButton').addEventListener('click', (e) => { e.stopPropagation(); requestFlowReturnToCover('home'); });
+  $('flowScreen').addEventListener('click', () => {
+    if (flowStep === 'end') returnToMainCover();
+  });
+  setupUtmostFooterReveal();
   $('btnMin').addEventListener('click', () => window.api.minimizeWindow());
   $('btnClose').addEventListener('click', () => window.api.closeWindow());
   $('btnPasteMusic').addEventListener('click', () => pasteInto('inMusicUrl'));
   $('btnPasteWorship').addEventListener('click', () => pasteInto('inWorshipUrl'));
-  $('btnPasteZoom').addEventListener('click', () => pasteInto('inZoomUrl'));
-  $('btnPasteSchedule').addEventListener('click', () => pasteInto('inScheduleUrl'));
-  $('btnScheduleNow').addEventListener('click', () => applySchedule(true));
+  $('btnPasteCustomWorship').addEventListener('click', () => pasteInto('inCustomWorshipUrl'));
+  $('btnAddWorshipPreset').addEventListener('click', addCustomWorshipPreset);
+  $('btnScheduleNow').addEventListener('click', async () => {
+    const ok = await refreshDailyReadingData();
+    toast(ok ? '經文與竭誠獻上已更新' : '更新失敗，請稍後再試', ok ? 2600 : 3600);
+  });
   $('btnZoom').addEventListener('click', () => {
-    if (cfg.zoomUrl) window.api.openExternal(zoomLaunchUrl(cfg.zoomUrl));
-    else { toast('請先在設定貼上 Zoom 會議連結'); openSettings(); }
+    const launchUrl = zoomLaunchUrl(cfg.zoomUrl);
+    if (launchUrl) window.api.openExternal(launchUrl);
+    else { toast('請設定有效的 Zoom 連結'); openSettings(); }
   });
   $('btnPickImage').addEventListener('click', async () => {
     const p = await window.api.pickImage();
     if (p) useImagePath(p);
   });
-  $('btnUpdate').addEventListener('click', async () => {
-    $('updateMsg').textContent = '檢查中…';
-    const r = await window.api.updateYtDlp();
-    if (r.updated) $('updateMsg').textContent = `已更新至 ${r.to}`;
-    else if (r.error) $('updateMsg').textContent = '更新失敗：' + r.error;
-    else $('updateMsg').textContent = '已是最新版本 (' + (r.current || '?') + ')';
-    refreshYtDlpVersion();
-  });
 
-  // 設定即時變更
-  ['fillMode','dateAuto','dateManual','inTitle1','inTitle2','inTitle3',
-   'inScriptureLabel','inReading','inMusicUrl','inWorshipUrl','inZoomUrl','musicVolume','autoPlayMusic',
+  ['dateAuto','dateDay','inReading','inMusicUrl','inWorshipUrl','inCustomWorshipUrl','musicVolume','autoPlayMusic',
    'useWorshipPreset','worshipPreset','cacheKeepDays','scheduleEnabled','inScheduleUrl']
     .forEach((id) => {
       const el = $(id);
+      if (!el) return;
       el.addEventListener('input', onSettingsChanged);
       el.addEventListener('change', onSettingsChanged);
     });
+  $('dateMonth').addEventListener('change', () => {
+    syncDateDayOptions(+$('dateDay').value);
+    onSettingsChanged();
+  });
 
-  // 勾選「使用常用敬拜音樂歌單」→ 切換顯示下拉/連結欄，並套用來源
+  // 切換常用敬拜影片與手動網址時，同步設定並預先下載。
   $('useWorshipPreset').addEventListener('change', () => {
     applyWorshipMode();
     collectSettings();
     if (cfg.worshipUrl) prefetch('video');
   });
-  // 下拉選了常用敬拜音樂 → 立即套用並背景快取
+  // 更換常用影片後，預先準備新選項。
   $('worshipPreset').addEventListener('change', () => {
     collectSettings();
     if (cfg.useWorshipPreset && cfg.worshipUrl) prefetch('video');
   });
 
-  // URL 變更時在背景預先下載快取
-  // 換背景音樂連結：下載新的並「自動播放新音樂」（取代舊的）
+  // 網址輸入完成後更新媒體來源。
   $('inMusicUrl').addEventListener('change', () => { collectSettings(); if (cfg.musicUrl) resolveAndPlayMusic(); });
   $('inWorshipUrl').addEventListener('change', () => { collectSettings(); prefetch('video'); });
 
-  // 下載進度
+  // 媒體下載進度。
   window.api.onMediaProgress(({ kind, percent }) => {
     const label = kind === 'video' ? '敬拜影片' : '背景音樂';
-    const txt = `${label} 下載中 ${percent.toFixed(0)}%`;
+    const txt = `${label}下載中 ${percent.toFixed(0)}%`;
     showBadge(txt);
     if (kind === 'video' && !$('worshipLayer').classList.contains('hidden'))
-      $('worshipLoading').textContent = `敬拜影片載入中… ${percent.toFixed(0)}%`;
+      $('worshipLoading').textContent = `敬拜影片載入中 ${percent.toFixed(0)}%`;
     if (percent >= 100) setTimeout(hideBadge, 800);
   });
 
@@ -721,8 +2346,9 @@ async function init() {
   setupWorshipControls();
   setupAppUpdater();
   setupCache();
+  setupCustomWorshipList();
 
-  // 本日經文下拉
+  // 經文範圍選單。
   fillBookSelect();
   $('bkBook').addEventListener('change', () => onScriptureChange('book'));
   $('bkStartCh').addEventListener('change', () => onScriptureChange('startCh'));
@@ -730,51 +2356,61 @@ async function init() {
   $('bkEndCh').addEventListener('change', () => onScriptureChange('endCh'));
   $('bkEndV').addEventListener('change', () => onScriptureChange('endV'));
 
-  // 點透明捕捉層（設定面板以外的空白處）→ 關閉設定
+  // 點擊遮罩時關閉設定面板。
   $('settingsBackdrop').addEventListener('click', closeSettings);
 
-  // 點其他按鈕（工具列等非拖動元件）→ 自動關閉設定
+  // 點擊設定面板以外的區域時關閉面板。
   document.addEventListener('click', (e) => {
     const panel = $('settingsPanel');
     if (panel.classList.contains('hidden')) return;
-    if (panel.contains(e.target)) return;      // 點面板內部不關
-    if (e.target.closest('#btnSettings')) return; // 齒輪自己負責切換
+    if (panel.contains(e.target)) return;
+    if (e.target.closest('#btnSettings')) return;
     closeSettings();
   });
 
-  // 自動隱藏工具條
+  // 滑鼠、滾輪與 Escape 鍵導覽。
   window.addEventListener('mousemove', showToolbar);
-  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('settingsPanel').classList.contains('hidden')) closeSettings(); });
+  window.addEventListener('resize', scheduleFlowLayoutRefresh);
+  window.addEventListener('wheel', handleFlowWheelNavigation, { passive: false });
+  window.addEventListener('keydown', handleFlowArrowNavigation);
+  window.addEventListener('keydown', handleEscapeNavigation);
 
-  // 空白鍵：暫停/播放（敬拜播放中→控制敬拜影片；否則→控制背景音樂）
+  // 空白鍵切換目前可見媒體的播放狀態。
   window.addEventListener('keydown', (e) => {
+    if (flowStep === 'end') return;
     if (e.code !== 'Space') return;
     const tag = e.target && e.target.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;        // 編輯中不攔截
-    if (!$('settingsPanel').classList.contains('hidden')) return;                 // 設定開啟時不攔截
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    if (!$('settingsPanel').classList.contains('hidden')) return;
     e.preventDefault();
     if (worshipActive) {
       const v = $('worshipVideo');
-      if (v.paused) v.play(); else v.pause();
+      if (v.paused) {
+        v.play().catch((error) => {
+          $('worshipLoading').textContent = '播放失敗，請稍後再試';
+          $('worshipLoading').classList.remove('hidden');
+          toast('影片播放失敗：' + error.message, 3200);
+        });
+      } else v.pause();
     } else {
       toggleMusicPlayPause();
     }
   });
   showToolbar();
 
-  // 每分鐘更新日期（跨午夜自動換日）
+  // 自動日期每分鐘校正一次。
   setInterval(() => { if (cfg.dateAuto) $('dateText').textContent = systemDateMD(); }, 60000);
 
-  // 啟動時：先自動播放背景音樂（單一下載）；敬拜影片延後 8 秒才背景預抓，
-  // 避免開機同時兩個下載（deno 解 JS 很吃 CPU）把介面卡住、按鈕點不動
+  // 啟動後準備背景音樂，並延後預抓敬拜影片以減少啟動負載。
   if (cfg.autoPlayMusic && cfg.musicUrl) resolveAndPlayMusic();
   else prefetch('audio');
   setTimeout(() => prefetch('video'), 8000);
 
-  // 開機依今天日期，自動從 Google 試算表抓取並套用經文
-  if (cfg.scheduleEnabled && cfg.scheduleUrl) applySchedule(false);
+  // 啟動後更新一次每日內容，之後每天上午八點再更新。
+  setTimeout(() => refreshDailyReadingData().catch(() => {}), 1500);
+  scheduleDailyReadingRefresh();
 
-  // ---------- 早靈修班公告：一鍵複製 ----------
+  // 公告複製。
   $('btnAnnounce').addEventListener('click', copyAnnounce);
 }
 

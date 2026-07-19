@@ -10,10 +10,19 @@ directories:
 files:
   - src/**/*
   - "!**/*.map"
+  # Keep only the three font files referenced by the renderer stylesheet.
+  - "!src/renderer/fonts/TW-Kai.ttf"
+  - "!src/renderer/fonts/SourceHanSansTC-Regular.otf"
+  - "!src/renderer/fonts/SourceHanSansTC-Medium.otf"
+  - "!src/renderer/fonts/SourceHanSerifTC-Regular.otf"
+  - "!src/renderer/fonts/SourceHanSerifTC-Medium.otf"
+  - "!src/renderer/fonts/SourceHanSerifTC-Heavy.otf"
 win:
   target:
     - nsis
-  signAndEditExecutable: false
+  # Preserve app name/version/icon resources while intentionally skipping
+  # Authenticode until a Windows signing certificate is configured.
+  signExecutable: false
   artifactName: ${productName}-${version}-setup.${ext}
   extraResources:
     - from: resources/bin/win
@@ -26,10 +35,22 @@ nsis:
   createDesktopShortcut: true
 mac:
   target:
-    - dmg
-    - zip
+    - target: dmg
+      arch:
+        - universal
+    - target: zip
+      arch:
+        - universal
   category: public.app-category.productivity
+  minimumSystemVersion: "12.0"
   artifactName: Lingxiu-Cover-${version}-${arch}.${ext}   # 純 ASCII，避免 CJK 檔名上傳失敗
+  # electron-builder re-signs these nested Mach-O helpers with the Developer
+  # ID identity when CSC_LINK/CSC_KEY_PASSWORD are available.
+  binaries:
+    - Contents/Resources/bin/yt-dlp_macos
+    - Contents/Resources/bin/deno
+    - Contents/Resources/bin/ffmpeg
+    - Contents/Resources/bin/ffprobe
   extraResources:
     - from: resources/bin/mac
       to: bin

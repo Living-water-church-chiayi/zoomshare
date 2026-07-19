@@ -1,8 +1,7 @@
-name: Build macOS (.dmg)
+name: Build macOS universal (.dmg + .zip)
 
-# 沒有 Mac 也能打包：用 GitHub 的雲端 macOS 幫你 build 出 .dmg 並上傳到 Release。
-# 觸發方式：Actions 分頁 → 左側選此工作流程 → 右上「Run workflow」（在 main 上跑）。
-# 也會在有新 Release 發佈時自動補上 mac 版。
+# A published Windows release triggers the matching universal Mac build.
+# Manual runs are still available; duplicate assets are detected before work starts.
 on:
   workflow_dispatch: {}
   release:
@@ -11,21 +10,114 @@ on:
 permissions:
   contents: write
 
+# Serialize every Mac publisher run. This also prevents a manual run racing the
+# release event for the same version; the queued run then exits at preflight.
+concurrency:
+  group: build-macos-release
+  cancel-in-progress: false
+
 jobs:
   build-mac:
     runs-on: macos-latest
     env:
-      MAC_ARCH: x86_64                        # x64：Intel 原生 + Apple Silicon 走 Rosetta，涵蓋所有 Mac
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # 發佈用（上傳到 Release）
-      CSC_IDENTITY_AUTO_DISCOVERY: 'false'    # 不簽章（未簽名 App 首次開啟需右鍵→打開）
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-      - name: 安裝相依套件
-        run: npm install
-      - name: 下載 mac 用的 yt-dlp / deno / ffmpeg
+          node-version: 22
+          cache: npm
+
+      - name: Check release version and duplicate assets
+        id: preflight
+        shell: bash
+        env:
+          RELEASE_EVENT_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          tag="v$version"
+          if [[ -n "${RELEASE_EVENT_TAG:-}" && "$RELEASE_EVENT_TAG" != "$tag" ]]; then
+            echo "Release tag $RELEASE_EVENT_TAG does not match package version $version" >&2
+            exit 1
+          fi
+
+          expected_assets=(
+            "Lingxiu-Cover-$version-universal.dmg"
+            "Lingxiu-Cover-$version-universal.dmg.blockmap"
+            "Lingxiu-Cover-$version-universal.zip"
+            "Lingxiu-Cover-$version-universal.zip.blockmap"
+            "latest-mac.yml"
+          )
+
+          if ! remote_assets="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null)"; then
+            echo "No existing $tag release; electron-builder will create it."
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          found=0
+          for asset in "${expected_assets[@]}"; do
+            if grep -Fxq "$asset" <<< "$remote_assets"; then
+              found=$((found + 1))
+            fi
+          done
+
+          if [[ "$found" -eq 0 ]]; then
+            echo "Release $tag has no universal Mac assets yet."
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$found" -eq "${#expected_assets[@]}" ]]; then
+            echo "Release $tag already has every universal Mac asset; skipping duplicate publish."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Release $tag has a partial universal Mac asset set ($found/${#expected_assets[@]})." >&2
+            echo "Resolve the partial release manually instead of overwriting assets." >&2
+            exit 1
+          fi
+
+      - name: Install dependencies
+        if: steps.preflight.outputs.should_build == 'true'
+        run: npm ci
+
+      - name: Run static and semantic tests
+        if: steps.preflight.outputs.should_build == 'true'
+        run: npm test
+
+      - name: Prepare pinned universal media helpers
+        if: steps.preflight.outputs.should_build == 'true'
         run: bash scripts/setup-mac.sh
-      - name: 打包並發佈 mac .dmg（版號取自 package.json）
-        run: npx electron-builder --mac --x64 --publish always
+
+      - name: Build and publish universal macOS artifacts
+        if: steps.preflight.outputs.should_build == 'true'
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          args=(--mac --universal --publish always)
+          signing_enabled=false
+          if [[ -n "${CSC_LINK:-}" && -n "${CSC_KEY_PASSWORD:-}" ]]; then
+            signing_enabled=true
+          else
+            # Avoid handing electron-builder a half-configured certificate.
+            unset CSC_LINK CSC_KEY_PASSWORD
+          fi
+
+          if [[ "$signing_enabled" == true \
+                && -n "${APPLE_ID:-}" && -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" \
+                && -n "${APPLE_TEAM_ID:-}" ]]; then
+            echo "Developer ID signing and Apple notarization are enabled."
+            args+=(-c.mac.notarize=true)
+          elif [[ "$signing_enabled" == true ]]; then
+            echo "Developer ID signing is enabled; notarization secrets are incomplete."
+            args+=(-c.mac.notarize=false)
+          else
+            echo "Signing secrets are incomplete; publishing an unsigned build for manual updates only."
+            args+=(-c.mac.notarize=false)
+          fi
+          npx electron-builder "${args[@]}"

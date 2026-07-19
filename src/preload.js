@@ -11,7 +11,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // 媒體：必要時下載並快取，回傳本地檔 URL（無廣告、流暢）
   ensureMedia: (url, kind, quality) => ipcRenderer.invoke('media:ensure', { url, kind, quality }),
-  mediaStatus: (url, kind) => ipcRenderer.invoke('media:status', { url, kind }),
+  mediaStatus: (url, kind, quality) => ipcRenderer.invoke('media:status', { url, kind, quality }),
   onMediaProgress: (cb) => ipcRenderer.on('media:progress', (_e, d) => cb(d)),
   cacheSize: () => ipcRenderer.invoke('cache:size'),
   cleanCache: (keepDays) => ipcRenderer.invoke('cache:clean', keepDays),
@@ -33,6 +33,9 @@ contextBridge.exposeInMainWorld('api', {
 
   openExternal: (url) => ipcRenderer.invoke('open:external', url),
   scheduleToday: (url) => ipcRenderer.invoke('schedule:today', url),
+  utmostToday: () => ipcRenderer.invoke('utmost:today'),
+  biblePassage: (ref) => ipcRenderer.invoke('bible:passage', ref),
+  setWindowMode: (mode) => ipcRenderer.invoke('win:mode', mode),
   minimizeWindow: () => ipcRenderer.invoke('win:minimize'),
   closeWindow: () => ipcRenderer.invoke('win:close'),
   readClipboard: () => ipcRenderer.invoke('clipboard:read'),

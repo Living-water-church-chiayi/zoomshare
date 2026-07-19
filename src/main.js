@@ -1,33 +1,47 @@
-'use strict';
+﻿'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const https = require('https');
 const crypto = require('crypto');
+const { Transform } = require('stream');
+const { pipeline } = require('stream/promises');
+const { fileURLToPath, pathToFileURL } = require('url');
 const { execFile, spawn } = require('child_process');
 const { promisify } = require('util');
 const execFileP = promisify(execFile);
 const { autoUpdater } = require('electron-updater');
 
-// 允許音/視訊在無使用者互動下自動播放（背景音樂 / 敬拜）
+// 允許背景音樂與敬拜影片在沒有使用者手勢時自動播放。
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+
+const singleInstanceLock = app.requestSingleInstanceLock();
+if (!singleInstanceLock) {
+  app.exit(0);
+}
 
 const USER_DATA = () => app.getPath('userData');
 const CONFIG_PATH = () => path.join(USER_DATA(), 'config.json');
 const BG_DIR = () => path.join(USER_DATA(), 'backgrounds');
-const CACHE_DIR = () => path.join(USER_DATA(), 'media'); // 不可用 "cache"：Windows 大小寫不分，會和 Electron 的 Cache 目錄衝突
+const CACHE_DIR = () => path.join(USER_DATA(), 'media'); // 避免使用 cache，以免在 Windows 與 Electron 的 Cache 目錄衝突。
+
+const HTTP_TIMEOUT_MS = 20_000;
+const HTTP_MAX_REDIRECTS = 5;
+const HTTP_MAX_JSON_BYTES = 2 * 1024 * 1024;
+const HTTP_MAX_TEXT_BYTES = 8 * 1024 * 1024;
+const HTTP_MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024;
 
 const DEFAULT_CONFIG = {
   title1: '靈修班即將開始',
   title2: '歡迎聖靈與我們同在',
-  title3: '讓我們一起預備《聖經》',
+  title3: '讓我們一起預備聖經',
   scriptureLabel: '本日經文：',
-  scriptureBook: '歌羅西書',
-  scriptureStartCh: 3, scriptureStartV: 12,
-  scriptureEndCh: 3, scriptureEndV: 25,
-  readingExtra: '《竭誠獻上》《靈命日糧》',
+  scriptureBook: '提摩太前書',
+  scriptureStartCh: 5, scriptureStartV: 1,
+  scriptureEndCh: 5, scriptureEndV: 25,
+  readingExtra: '竭誠獻上',
   dateAuto: true,
   dateManual: '',
   backgroundFile: '',
@@ -36,19 +50,20 @@ const DEFAULT_CONFIG = {
   worshipUrl: '',
   useWorshipPreset: false,
   worshipPreset: '',
+  customWorshipPresets: [],
   musicVolume: 0.8,
   autoPlayMusic: true,
   videoQuality: 1080,
   cacheKeepDays: 30,
   fontFamily: 'sans-bold',
   zoomUrl: 'https://us06web.zoom.us/j/77730692079?pwd=EbYm30dRERJb8FI3GRHadpkqdNLfE4.1',
-  // 開機自動依日期抓取經文的 Google 試算表（日期,書卷,章起,節起,章迄,節迄）
+  // 開機自動依日期抓取經文的 Google 試算表。
   scheduleEnabled: true,
   scheduleUrl: 'https://docs.google.com/spreadsheets/d/11O0As3DWpT45otcL5T7BadMpPVWcWKAoiZ5OUPocMpA/edit?usp=sharing',
-  skippedVersion: '' // 使用者按「略過此次更新」記住的版本
+  skippedVersion: '' // 使用者選擇略過的版本。
 };
 
-// ---------- 二進位位置（yt-dlp / deno / ffmpeg） ----------
+// ---------- 二進位工具位置（yt-dlp / deno / ffmpeg） ----------
 function ytDlpBinName() {
   return process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp_macos';
 }
@@ -67,57 +82,138 @@ function resolveYtDlpPath() {
   if (fs.existsSync(bundled)) return bundled;
   return process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
 }
-// 讓 yt-dlp 找得到 deno（解 JS 挑戰）與 ffmpeg（合併/轉檔）
 function spawnEnv() {
   const sep = process.platform === 'win32' ? ';' : ':';
-  // NO_COLOR：關閉 yt-dlp 進度行的 ANSI 色碼（macOS 預設會上色，導致百分比解析失敗）
+  // 關閉 ANSI 顏色，並讓 yt-dlp 找得到內附的 deno 與 ffmpeg。
   return { ...process.env, NO_COLOR: '1', PATH: bundledBinDir() + sep + (process.env.PATH || '') };
 }
 
 // ---------- yt-dlp 自動更新 ----------
 async function ensureWritableYtDlp() {
   const userCopy = userBinPath();
-  if (fs.existsSync(userCopy)) return;
+  await fsp.mkdir(USER_DATA(), { recursive: true });
+  if (fs.existsSync(userCopy)) {
+    if (process.platform !== 'win32') await fsp.chmod(userCopy, 0o755).catch(() => {});
+    return;
+  }
+  const backup = userCopy + '.old';
+  if (fs.existsSync(backup)) {
+    try {
+      await fsp.rename(backup, userCopy);
+      if (process.platform !== 'win32') await fsp.chmod(userCopy, 0o755);
+      return;
+    } catch {}
+  }
   const bundled = path.join(bundledBinDir(), ytDlpBinName());
   if (fs.existsSync(bundled)) {
     try {
       await fsp.copyFile(bundled, userCopy);
       if (process.platform !== 'win32') await fsp.chmod(userCopy, 0o755);
-    } catch (e) { console.warn('複製 yt-dlp 失敗:', e.message); }
+    } catch (e) { console.warn('複製 yt-dlp 失敗：', e.message); }
   }
 }
-function httpGetJson(url) {
-  return new Promise((resolve, reject) => {
-    https.get(url, { headers: { 'User-Agent': 'lingxiu-cover' } }, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location)
-        return resolve(httpGetJson(res.headers.location));
-      let data = '';
-      res.on('data', (c) => (data += c));
-      res.on('end', () => { try { resolve(JSON.parse(data)); } catch (e) { reject(e); } });
-    }).on('error', reject);
-  });
+
+function parseHttpsUrl(value, base) {
+  let parsed;
+  try { parsed = new URL(String(value), base); }
+  catch { throw new Error('無效的網址'); }
+  if (parsed.protocol !== 'https:') throw new Error('只允許 HTTPS 網址');
+  if (parsed.username || parsed.password) throw new Error('網址不可包含帳號或密碼');
+  return parsed;
 }
-// 取回純文字（跟隨轉址；用於 Google 試算表 CSV）
-function httpGetText(url) {
+
+function getHttpsResponse(url, headers, redirectCount = 0) {
+  const target = parseHttpsUrl(url);
   return new Promise((resolve, reject) => {
-    https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0 lingxiu-cover' } }, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location)
-        return resolve(httpGetText(res.headers.location));
-      if (res.statusCode !== 200) { res.resume(); return reject(new Error('HTTP ' + res.statusCode)); }
-      let data = ''; res.setEncoding('utf8');
-      res.on('data', (c) => (data += c));
-      res.on('end', () => resolve(data));
-    }).on('error', reject);
+    let settled = false;
+    const finishReject = (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    const request = https.get(target, { headers }, (response) => {
+      const status = Number(response.statusCode || 0);
+      if (status >= 300 && status < 400) {
+        const location = response.headers.location;
+        response.resume();
+        if (!location) return finishReject(new Error(`HTTP ${status} 未提供轉址位置`));
+        if (redirectCount >= HTTP_MAX_REDIRECTS) return finishReject(new Error('HTTP 轉址次數過多'));
+        let next;
+        try { next = parseHttpsUrl(location, target); }
+        catch (error) { return finishReject(error); }
+        settled = true;
+        getHttpsResponse(next, headers, redirectCount + 1).then(resolve, reject);
+        return;
+      }
+      if (status < 200 || status >= 300) {
+        response.resume();
+        return finishReject(new Error(`HTTP ${status || '錯誤'}`));
+      }
+      settled = true;
+      resolve(response);
+    });
+    request.setTimeout(HTTP_TIMEOUT_MS, () => request.destroy(new Error(`連線逾時（${HTTP_TIMEOUT_MS / 1000} 秒）`)));
+    request.on('error', finishReject);
   });
 }
 
+async function readHttpsBody(url, headers, maxBytes) {
+  const response = await getHttpsResponse(url, headers);
+  const declaredLength = Number(response.headers['content-length'] || 0);
+  if (declaredLength > maxBytes) {
+    response.destroy();
+    throw new Error('伺服器回應超過允許大小');
+  }
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    let settled = false;
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      response.destroy();
+      reject(error);
+    };
+    response.on('data', (chunk) => {
+      total += chunk.length;
+      if (total > maxBytes) return fail(new Error('伺服器回應超過允許大小'));
+      chunks.push(chunk);
+    });
+    response.on('aborted', () => fail(new Error('伺服器中斷連線')));
+    response.on('error', fail);
+    response.on('end', () => {
+      if (settled) return;
+      settled = true;
+      resolve(Buffer.concat(chunks, total).toString('utf8'));
+    });
+  });
+}
+
+async function httpGetJson(url) {
+  const text = await readHttpsBody(url, {
+    'User-Agent': 'lingxiu-cover',
+    Accept: 'application/vnd.github+json, application/json'
+  }, HTTP_MAX_JSON_BYTES);
+  try { return JSON.parse(text); }
+  catch { throw new Error('伺服器回傳的 JSON 格式不正確'); }
+}
+
+function httpGetText(url) {
+  return readHttpsBody(url, {
+    'User-Agent': 'Mozilla/5.0 lingxiu-cover',
+    'Accept-Encoding': 'identity',
+    'Cache-Control': 'no-cache, no-store, max-age=0',
+    Pragma: 'no-cache'
+  }, HTTP_MAX_TEXT_BYTES);
+}
+
 // ---------- 依日期自動抓取經文（Google 試算表 CSV） ----------
-// 中文數字轉阿拉伯數字（章用中文如「四」「十六」「一百五十」；節可能是阿拉伯或中文）
+// 中文數字轉阿拉伯數字，支援章節常見的一、十、百位寫法。
 function cnToNum(str) {
   str = String(str || '').trim();
   if (str === '') return NaN;
   if (/^\d+$/.test(str)) return parseInt(str, 10);
-  const d = { 零: 0, 〇: 0, 一: 1, 二: 2, 兩: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  const d = { 零: 0, 〇: 0, 一: 1, 二: 2, 兩: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
   const u = { 十: 10, 百: 100 };
   let total = 0, cur = 0;
   for (const ch of str) {
@@ -138,62 +234,309 @@ function parseCsvLine(line) {
   }
   out.push(cur); return out;
 }
+
+function decodeHtml(s) {
+  return String(s || '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#(\d+);/g, (_m, n) => String.fromCharCode(parseInt(n, 10)))
+    .replace(/&#x([0-9a-f]+);/gi, (_m, n) => String.fromCharCode(parseInt(n, 16)));
+}
+function htmlToText(html) {
+  return decodeHtml(String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<sup[^>]*class="[^"]*versenum[^"]*"[^>]*>\s*(\d+)\s*<\/sup>/gi, '\n$1')
+    .replace(/<span[^>]*class="[^"]*chapternum[^"]*"[^>]*>\s*(\d+)\s*<\/span>/gi, '\n$1')
+    .replace(/<h[1-6][^>]*>/gi, '\n')
+    .replace(/<\/p>|<br\s*\/?>|<\/div>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim());
+}
+
+function trimBetween(text, startRe, endRe) {
+  const start = text.search(startRe);
+  if (start < 0) return '';
+  const rest = text.slice(start);
+  const end = rest.search(endRe);
+  return end > 0 ? rest.slice(0, end).trim() : rest.trim();
+}
+
+function cleanBibleText(text, ref) {
+  return cleanBibleTextV2(text, ref);
+}
+
+function cleanBibleTextV2(text, ref) {
+  const navRe = /^(menu|account|read|study|plus|Bible Gateway|Available Versions|Audio Bibles|Reading Plans|Advanced Search|Read full chapter|Next|Previous|Prev)$/i;
+  const stopRe = /^(?:Footnotes?|Cross references?|Crossrefs?|腳註|註腳|串珠|交叉參照|交叉引用)(?:\b|$|[:：])/i;
+  const headingRe = /^[^\d，。；：！？、,.!?"'「」『』（）()]{2,24}$/;
+  const lines = String(text || '')
+    .split(/\n+/)
+    .map((line) => line.replace(/\[[a-z]\]/gi, '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  const verses = [];
+  let cur = '';
+  for (const line of lines) {
+    if (stopRe.test(line)) break;
+    if (navRe.test(line)) continue;
+    if (/^\d+\s*\S/.test(line)) {
+      if (cur) verses.push(cur);
+      cur = line;
+    } else if (cur && !headingRe.test(line)) {
+      cur += ' ' + line;
+    }
+  }
+  if (cur) verses.push(cur);
+  return verses.join('\n').trim();
+}
+
+const BIBLE_GATEWAY_BOOKS = {
+  創世記: 'Genesis', 出埃及記: 'Exodus', 利未記: 'Leviticus', 民數記: 'Numbers', 申命記: 'Deuteronomy',
+  約書亞記: 'Joshua', 士師記: 'Judges', 路得記: 'Ruth', 撒母耳記上: '1 Samuel', 撒母耳記下: '2 Samuel',
+  列王紀上: '1 Kings', 列王紀下: '2 Kings', 歷代志上: '1 Chronicles', 歷代志下: '2 Chronicles',
+  以斯拉記: 'Ezra', 尼希米記: 'Nehemiah', 以斯帖記: 'Esther', 約伯記: 'Job', 詩篇: 'Psalm',
+  箴言: 'Proverbs', 傳道書: 'Ecclesiastes', 雅歌: 'Song of Songs', 以賽亞書: 'Isaiah', 耶利米書: 'Jeremiah',
+  耶利米哀歌: 'Lamentations', 以西結書: 'Ezekiel', 但以理書: 'Daniel', 何西阿書: 'Hosea', 約珥書: 'Joel',
+  阿摩司書: 'Amos', 俄巴底亞書: 'Obadiah', 約拿書: 'Jonah', 彌迦書: 'Micah', 那鴻書: 'Nahum',
+  哈巴谷書: 'Habakkuk', 西番雅書: 'Zephaniah', 哈該書: 'Haggai', 撒迦利亞書: 'Zechariah', 瑪拉基書: 'Malachi',
+  馬太福音: 'Matthew', 馬可福音: 'Mark', 路加福音: 'Luke', 約翰福音: 'John', 使徒行傳: 'Acts',
+  羅馬書: 'Romans', 哥林多前書: '1 Corinthians', 哥林多後書: '2 Corinthians', 加拉太書: 'Galatians',
+  以弗所書: 'Ephesians', 腓立比書: 'Philippians', 歌羅西書: 'Colossians',
+  帖撒羅尼迦前書: '1 Thessalonians', 帖撒羅尼迦後書: '2 Thessalonians',
+  提摩太前書: '1 Timothy', 提摩太後書: '2 Timothy', 提多書: 'Titus', 腓利門書: 'Philemon',
+  希伯來書: 'Hebrews', 雅各書: 'James', 彼得前書: '1 Peter', 彼得後書: '2 Peter',
+  約翰一書: '1 John', 約翰二書: '2 John', 約翰三書: '3 John', 猶大書: 'Jude', 啟示錄: 'Revelation'
+};
+function todayChineseDate() {
+  const now = new Date();
+  return `${now.getMonth() + 1}月${now.getDate()}日`;
+}
+
+function parseUtmostHtml(html, source) {
+  const dateMatch = html.match(/class=['"]calendar-toggle['"][^>]*>([\s\S]*?)<span/i);
+  const titleMatch = html.match(/<h2[^>]*class=["'][^"']*entry-title[^"']*["'][^>]*>[\s\S]*?<span>([\s\S]*?)<\/span>\s*<\/h2>/i);
+  const readingMatch = html.match(/id=["']bible-in-a-year-box["'][^>]*>([\s\S]*?)<\/p>/i);
+  const verseMatch = html.match(/id=["']key-verse-box["'][^>]*>[\s\S]*?<h4>([\s\S]*?)<\/h4>/i);
+  const contentMatch = html.match(/<section[^>]*class=["'][^"']*entry-content[^"']*["'][^>]*>([\s\S]*?)<\/section>/i);
+  if (dateMatch || titleMatch || verseMatch || contentMatch) {
+    const date = htmlToText(dateMatch ? dateMatch[1] : '').trim();
+    const title = htmlToText(titleMatch ? titleMatch[1] : '').trim();
+    const reading = htmlToText(readingMatch ? readingMatch[1] : '').replace(/^全年讀經：\s*/, '').trim();
+    const verse = htmlToText(verseMatch ? verseMatch[1] : '').trim();
+    const contentHtml = (contentMatch ? contentMatch[1] : '').split(/<div[^>]*class=["'][^"']*wisdom-wrapper/i)[0];
+    const body = htmlToText(contentHtml)
+      .replace(/^反思與禱告[\s\S]*$/m, '')
+      .replace(/Twitter|Facebook|Telegram|LINE|Email/gi, '')
+      .replace(/-->\s*$/g, '')
+      .trim();
+    return { ok: !!body, date, title, reading, verse, body, source, error: body ? '' : '今天的竭誠獻上內容還沒有抓到' };
+  }
+
+  const text = htmlToText(html);
+  const lines = text.split(/\n+/).map((line) => line.replace(/^#+\s*/, '').trim()).filter(Boolean);
+  const dateIndex = lines.findIndex((line) => /^\d{1,2}月\d{1,2}日$/.test(line));
+  const date = dateIndex >= 0 ? lines[dateIndex] : '';
+  const title = lines.slice(Math.max(dateIndex + 1, 0)).find((line) =>
+    line.length <= 24 &&
+    !/^(日|一|二|三|四|五|六|全年讀經|國語|廣東話|下載MP3|Facebook|Twitter|電子郵件|列印)$/.test(line) &&
+    !/^約|^\d{1,2}月|^Today|竭誠獻上/.test(line)
+  ) || '';
+  const reading = ((text.match(/全年讀經：\s*([^\n]+)/) || [,''])[1] || '').trim();
+  const verseIndex = lines.findIndex((line) => /[—-].+\d+章\d+節/.test(line));
+  if (verseIndex < 0) {
+    return { ok: false, date, title, reading, verse: '', body: '', source, error: '今天的竭誠獻上內容還沒有抓到' };
+  }
+  const verse = verseIndex >= 0 ? lines[verseIndex] : '';
+  const bodyLines = [];
+  for (const line of lines.slice(verseIndex + 1)) {
+    if (/^(反思與禱告|與朋友分享今日的靈修|每日接收智慧的話語|My Utmost for His Highest|©|Loading|You must be|登入|使用者帳號|密碼|訂閱|地區|Δ)$/.test(line)) break;
+    if (/^(Facebook|Twitter|電子郵件|列印|\*)$/.test(line)) continue;
+    bodyLines.push(line);
+  }
+  const cleanBody = bodyLines
+    .join('\n\n')
+    .replace(/Twitter|Facebook|Telegram|LINE|Email/gi, '')
+    .replace(/-->\s*$/g, '')
+    .trim();
+  return { ok: !!cleanBody, date, title, reading, verse, body: cleanBody, source, error: cleanBody ? '' : '今天的竭誠獻上內容還沒有抓到' };
+}
+
+async function fetchUtmostToday() {
+  const base = 'https://traditional-utmost.org/';
+  const stamp = Date.now();
+  const urls = [
+    `${base}?today=${encodeURIComponent(todayChineseDate())}&t=${stamp}`,
+    `${base}?t=${stamp}`,
+    base
+  ];
+  let best = null;
+  let lastError = null;
+  for (const url of urls) {
+    try {
+      const parsed = parseUtmostHtml(await httpGetText(url), base);
+      if (parsed.ok && parsed.date === todayChineseDate()) return parsed;
+      if (!best || (parsed.body || '').length > (best.body || '').length) best = parsed;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  return best || {
+    ok: false, date: '', title: '', reading: '', verse: '', body: '', source: base,
+    error: lastError ? `讀取竭誠獻上失敗：${lastError.message}` : '今天的竭誠獻上內容還沒有抓到'
+  };
+}
+async function fetchBiblePassage(ref) {
+  ref = normalizeBibleRef(ref);
+  const book = BIBLE_GATEWAY_BOOKS[ref.book] || ref.book;
+  const endRef = ref.startCh === ref.endCh ? String(ref.endV) : `${ref.endCh}:${ref.endV}`;
+  const query = `${book} ${ref.startCh}:${ref.startV}-${endRef}`;
+  const displayRef = `${ref.book} ${ref.startCh}:${ref.startV}-${endRef}`;
+  const url = 'https://www.biblegateway.com/passage/?search=' + encodeURIComponent(query) + '&version=CUVMPT';
+  const html = await httpGetText(url);
+  const passageMatch = html.match(/<div[^>]*class="[^"]*passage-text[^"]*"[^>]*>([\s\S]*?)<div[^>]*class="[^"]*publisher-info-bottom/);
+  const passageHtml = String(passageMatch ? passageMatch[1] : html)
+    .replace(/<sup[^>]*(?:footnote|crossreference)[^>]*>[\s\S]*?<\/sup>/gi, '')
+    .replace(/<a[^>]*(?:footnote|crossreference)[^>]*>[\s\S]*?<\/a>/gi, '')
+    .replace(/<(?:div|section)[^>]*(?:footnotes?|crossrefs?|cross-references?)[^>]*>[\s\S]*$/gi, '');
+  let body = htmlToText(passageHtml);
+  body = body
+    .replace(/^.*Bible Gateway\s*/is, '')
+    .replace(/^[\s\S]*?Update\s*/i, '')
+    .replace(/(?:Footnotes?|Cross references?|Crossrefs?|腳註|註腳|串珠|交叉參照|交叉引用)[\s\S]*$/i, '')
+    .replace(/Chinese Union Version.*$/gis, '')
+    .replace(/Read full chapter.*$/gis, '')
+    .replace(/\bdropdown\b.*$/gis, '')
+    .replace(/^\s*[\u3400-\u9fff，。：「」『』；！？、（）\s]{2,40}\n(?=\s*\d+\s*\S)/, '')
+    .trim();
+  body = cleanBibleTextV2(body, ref);
+  if (!body) return { ok: false, title: displayRef, query, body: '', source: url, error: '無法取得指定的經文內容' };
+  return { ok: true, title: displayRef, query, body, source: url };
+}
 function sheetCsvUrl(url) {
   const m = String(url || '').match(/\/spreadsheets\/d\/([a-zA-Z0-9\-_]+)/);
   if (!m) return null;
   const g = String(url).match(/[#&?]gid=(\d+)/);
   return `https://docs.google.com/spreadsheets/d/${m[1]}/export?format=csv&gid=${g ? g[1] : '0'}`;
 }
-// 讀試算表，找出「今天日期（月/日）」那一列，回傳 {book,startCh,startV,endCh,endV}
+// 讀取試算表並找出今天的列，回傳書卷與起訖章節。
 async function fetchScheduleToday(url) {
   const csvUrl = sheetCsvUrl(url);
-  if (!csvUrl) return { ok: false, error: '無效的試算表連結' };
+  if (!csvUrl) return { ok: false, error: '無法解析試算表連結' };
   let text;
   try { text = await httpGetText(csvUrl); } catch (e) { return { ok: false, error: e.message }; }
-  const now = new Date(), ty = now.getFullYear(), tm = now.getMonth() + 1, td = now.getDate();
+  const now = new Date();
+  const ty = now.getFullYear();
+  const tm = now.getMonth() + 1;
+  const td = now.getDate();
   const mkRow = (c) => ({ book: c[1], startCh: cnToNum(c[2]), startV: cnToNum(c[3]), endCh: cnToNum(c[4]), endV: cnToNum(c[5]) });
-  let exact = null, loose = null; // exact：日期含年份且=今年今天；loose：只有月/日相符（每年重複）
+  let exact = null;
+  let loose = null;
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
     const cols = parseCsvLine(line).map((s) => s.trim());
     if (cols.length < 6) continue;
-    // 耐格式解析：抓出 4 位數當年份，其餘兩個依序為「月、日」（支援 2026/07/08、2026-7-8、07/08…）
     const parts = cols[0].split(/[\/\-.]/).map((s) => parseInt(s, 10)).filter((n) => !isNaN(n));
-    if (parts.length < 2) continue; // 表頭或非日期列
-    let yr = null; const md = [];
+    if (parts.length < 2) continue;
+    let yr = null;
+    const md = [];
     for (const p of parts) { if (p >= 1000 && yr === null) yr = p; else md.push(p); }
     if (md.length < 2) continue;
-    const mo = md[0], da = md[1];
-    if (yr !== null) {                          // 含年份 → 需精確到今年今天（跨年不會誤抓）
+    const mo = md[0];
+    const da = md[1];
+    if (yr !== null) {
       if (yr === ty && mo === tm && da === td && !exact) exact = mkRow(cols);
-    } else if (mo === tm && da === td && !loose) {  // 無年份 → 月日相符即可（每年重複）
+    } else if (mo === tm && da === td && !loose) {
       loose = mkRow(cols);
     }
   }
-  const row = exact || loose; // 有年份的精確列優先於「每年重複」列
+  const row = exact || loose;
   return row ? { ok: true, found: true, row } : { ok: true, found: false };
 }
-function downloadTo(url, dest) {
-  return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(dest);
-    https.get(url, { headers: { 'User-Agent': 'lingxiu-cover' } }, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        file.close();
-        return resolve(downloadTo(res.headers.location, dest));
-      }
-      if (res.statusCode !== 200) { file.close(); return reject(new Error('HTTP ' + res.statusCode)); }
-      res.pipe(file);
-      file.on('finish', () => file.close(() => resolve()));
-    }).on('error', (e) => { file.close(); reject(e); });
+function sizeLimitTransform(maxBytes) {
+  let total = 0;
+  return new Transform({
+    transform(chunk, _encoding, callback) {
+      total += chunk.length;
+      if (total > maxBytes) callback(new Error('下載檔案超過允許大小'));
+      else callback(null, chunk);
+    }
   });
 }
+
+async function downloadTo(url, dest, maxBytes = HTTP_MAX_DOWNLOAD_BYTES) {
+  await fsp.mkdir(path.dirname(dest), { recursive: true });
+  const response = await getHttpsResponse(url, { 'User-Agent': 'lingxiu-cover' });
+  const declaredLength = Number(response.headers['content-length'] || 0);
+  if (declaredLength > maxBytes) {
+    response.destroy();
+    throw new Error('下載檔案超過允許大小');
+  }
+  try {
+    await pipeline(response, sizeLimitTransform(maxBytes), fs.createWriteStream(dest, { flags: 'w' }));
+    const stat = await fsp.stat(dest);
+    if (!stat.isFile() || stat.size === 0) throw new Error('下載到的檔案是空的');
+  } catch (error) {
+    await fsp.unlink(dest).catch(() => {});
+    throw error;
+  }
+}
+
+function sha256File(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256');
+    const input = fs.createReadStream(filePath);
+    input.on('error', reject);
+    input.on('data', (chunk) => hash.update(chunk));
+    input.on('end', () => resolve(hash.digest('hex')));
+  });
+}
+
+async function replaceFileSafely(tempPath, destinationPath, backupSuffix = '.old') {
+  try {
+    await fsp.rename(tempPath, destinationPath);
+    return;
+  } catch (error) {
+    if (process.platform !== 'win32' || !['EACCES', 'EEXIST', 'ENOTEMPTY', 'EPERM'].includes(error.code)) throw error;
+  }
+
+  // Windows 有時無法直接覆蓋既有檔案；保留備份，失敗時立即還原。
+  const backupPath = destinationPath + backupSuffix;
+  await fsp.unlink(backupPath).catch((error) => { if (error.code !== 'ENOENT') throw error; });
+  let movedExisting = false;
+  try {
+    await fsp.rename(destinationPath, backupPath);
+    movedExisting = true;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  try {
+    await fsp.rename(tempPath, destinationPath);
+  } catch (error) {
+    if (movedExisting) await fsp.rename(backupPath, destinationPath).catch(() => {});
+    throw error;
+  }
+  if (movedExisting) await fsp.unlink(backupPath).catch(() => {});
+}
+
 async function localYtDlpVersion() {
   try {
     const { stdout } = await execFileP(resolveYtDlpPath(), ['--version'], { windowsHide: true, env: spawnEnv() });
     return stdout.trim();
   } catch { return null; }
 }
-async function autoUpdateYtDlp() {
+
+let ytDlpUpdatePromise = null;
+
+async function performAutoUpdateYtDlp() {
+  const tmp = process.platform === 'win32'
+    ? `${userBinPath()}.download-${process.pid}.exe`
+    : `${userBinPath()}.download-${process.pid}`;
   try {
     const release = await httpGetJson('https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest');
     const latest = ((release && release.tag_name) || '').trim();
@@ -202,30 +545,107 @@ async function autoUpdateYtDlp() {
     if (current && current === latest) return { updated: false, current };
     const asset = (release.assets || []).find((a) => a.name === ytDlpBinName());
     if (!asset) return { updated: false, reason: 'no-asset' };
-    const tmp = userBinPath() + '.download';
+    const digestMatch = String(asset.digest || '').match(/^sha256:([a-f0-9]{64})$/i);
+    if (!digestMatch) throw new Error('yt-dlp 發行檔缺少 SHA-256 驗證碼');
     await downloadTo(asset.browser_download_url, tmp);
+    const actualDigest = await sha256File(tmp);
+    if (actualDigest.toLowerCase() !== digestMatch[1].toLowerCase()) {
+      throw new Error('yt-dlp 下載檔案的 SHA-256 驗證失敗');
+    }
     if (process.platform !== 'win32') await fsp.chmod(tmp, 0o755);
-    await fsp.rename(tmp, userBinPath());
+    const stat = await fsp.stat(tmp);
+    if (!stat.isFile() || stat.size < 100_000) throw new Error('下載的 yt-dlp 檔案不完整');
+    const { stdout } = await execFileP(tmp, ['--version'], { windowsHide: true, env: spawnEnv() });
+    if (!String(stdout || '').trim()) throw new Error('下載的 yt-dlp 無法執行');
+    await replaceFileSafely(tmp, userBinPath(), '.old');
     return { updated: true, from: current, to: latest };
-  } catch (e) { return { updated: false, error: e.message }; }
+  } catch (e) {
+    return { updated: false, error: e.message };
+  } finally {
+    await fsp.unlink(tmp).catch(() => {});
+  }
 }
 
-// ---------- 媒體下載與快取（無廣告 + 流暢） ----------
-function cacheKey(url, kind) {
-  const h = crypto.createHash('sha1').update(url).digest('hex').slice(0, 16);
-  return `${kind}_${h}`;
+function autoUpdateYtDlp() {
+  if (!ytDlpUpdatePromise) {
+    ytDlpUpdatePromise = performAutoUpdateYtDlp().finally(() => { ytDlpUpdatePromise = null; });
+  }
+  return ytDlpUpdatePromise;
 }
-// 依 cacheKey 前綴找出已快取的檔（音訊副檔名不固定：m4a/webm…）
-function findCachedFile(url, kind) {
-  const base = cacheKey(url, kind) + '.';
+
+// ---------- 媒體下載與快取 ----------
+function cacheKey(url, kind, quality) {
+  const h = crypto.createHash('sha1').update(url).digest('hex').slice(0, 16);
+  const qualitySuffix = kind === 'video' ? `_q${quality || 1080}` : '';
+  return `${kind}_${h}${qualitySuffix}`;
+}
+
+const FINAL_MEDIA_EXTENSIONS = new Set([
+  '.aac', '.flac', '.m4a', '.mkv', '.mov', '.mp3', '.mp4', '.ogg', '.opus', '.wav', '.webm'
+]);
+
+function normalizeMediaRequest(url, kind, quality) {
+  if (kind !== 'audio' && kind !== 'video') throw new Error('媒體類型必須是 audio 或 video');
+  if (typeof url !== 'string' || url.length === 0 || url.length > 4096) throw new Error('請輸入有效的 YouTube 網址');
+  let parsed;
+  try { parsed = new URL(url.trim()); }
+  catch { throw new Error('請輸入有效的 YouTube 網址'); }
+  const host = parsed.hostname.toLowerCase();
+  const isYouTube = host === 'youtu.be' || host === 'youtube.com' || host.endsWith('.youtube.com') ||
+    host === 'youtube-nocookie.com' || host.endsWith('.youtube-nocookie.com');
+  if (parsed.protocol !== 'https:' || !isYouTube || parsed.username || parsed.password) {
+    throw new Error('請輸入有效的 HTTPS YouTube 網址');
+  }
+  let normalizedQuality = 1080;
+  if (kind === 'video' && quality != null) {
+    normalizedQuality = Number(quality);
+    if (!Number.isFinite(normalizedQuality) || !Number.isInteger(normalizedQuality) || normalizedQuality < 144 || normalizedQuality > 2160) {
+      throw new Error('影片畫質必須是 144 到 2160 的整數');
+    }
+  }
+  return { url: parsed.href, kind, quality: normalizedQuality };
+}
+
+function isIncompleteCacheName(name) {
+  return /\.(?:part|ytdl|tmp|temp|download)(?:\.|$)/i.test(name) || /\.f\d+\.[^.]+(?:\.part)?$/i.test(name);
+}
+
+// 只回傳非空的最終媒體檔；順便移除中斷下載留下的片段。
+function findCachedFile(url, kind, quality) {
+  const base = cacheKey(url, kind, quality) + '.';
   try {
-    const f = fs.readdirSync(CACHE_DIR()).find((n) => n.startsWith(base));
-    return f ? path.join(CACHE_DIR(), f) : null;
+    const completed = [];
+    for (const name of fs.readdirSync(CACHE_DIR())) {
+      if (!name.startsWith(base)) continue;
+      const filePath = path.join(CACHE_DIR(), name);
+      let stat;
+      try { stat = fs.statSync(filePath); } catch { continue; }
+      const valid = stat.isFile() && stat.size > 0 && !isIncompleteCacheName(name) && FINAL_MEDIA_EXTENSIONS.has(path.extname(name).toLowerCase());
+      if (!valid) continue;
+      completed.push({ filePath, mtimeMs: stat.mtimeMs });
+    }
+    completed.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    return completed.length ? completed[0].filePath : null;
   } catch { return null; }
 }
-function fileUrl(p) { return 'file://' + p.replace(/\\/g, '/'); }
+function fileUrl(p) { return pathToFileURL(p).href; }
 
 const inflight = new Map(); // cacheKey -> Promise<path>
+
+function cleanIncompleteFilesForKey(key) {
+  const prefix = key + '.';
+  try {
+    for (const name of fs.readdirSync(CACHE_DIR())) {
+      if (!name.startsWith(prefix)) continue;
+      const filePath = path.join(CACHE_DIR(), name);
+      let stat;
+      try { stat = fs.statSync(filePath); } catch { continue; }
+      if (stat.isFile() && (stat.size === 0 || isIncompleteCacheName(name) || !FINAL_MEDIA_EXTENSIONS.has(path.extname(name).toLowerCase()))) {
+        try { fs.unlinkSync(filePath); } catch {}
+      }
+    }
+  } catch {}
+}
 
 function sendProgress(kind, percent, phase) {
   if (mainWindow && !mainWindow.isDestroyed())
@@ -234,65 +654,76 @@ function sendProgress(kind, percent, phase) {
 
 function downloadMedia(url, kind, quality) {
   return new Promise((resolve, reject) => {
-    const tmpl = path.join(CACHE_DIR(), `${cacheKey(url, kind)}.%(ext)s`);
-    // 音訊：直接下載原生格式（m4a，Chromium 可直接播），不轉檔 → 大幅加快（長音樂尤其明顯）
-    // 多重試：YouTube 直鏈偶發 403，重試可自動恢復（macOS 較常見）
+    const key = cacheKey(url, kind, quality);
+    const tmpl = path.join(CACHE_DIR(), `${key}.%(ext)s`);
+    // 多次重試可降低 YouTube 暫時性 403 對長影片下載的影響。
     const retry = ['--retries', '20', '--fragment-retries', '20', '--extractor-retries', '3'];
+    const ffmpegName = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
+    const ffmpegArgs = fs.existsSync(path.join(bundledBinDir(), ffmpegName)) ? ['--ffmpeg-location', bundledBinDir()] : [];
     const args = kind === 'video'
       ? ['-f', `bestvideo[height<=${quality || 1080}]+bestaudio/best`,
          '--merge-output-format', 'mp4', '--no-playlist', '--newline', ...retry,
-         '--ffmpeg-location', bundledBinDir(), '-o', tmpl, url]
+         ...ffmpegArgs, '-o', tmpl, url]
       : ['-f', 'bestaudio[ext=m4a]/bestaudio', '--no-playlist', '--newline', ...retry, '-o', tmpl, url];
 
     const child = spawn(resolveYtDlpPath(), args, { windowsHide: true, env: spawnEnv() });
     let stderr = '';
-    let destCount = 0; // 已開始下載的檔數（影片=影像+聲音兩檔）
+    let destCount = 0;
+    let settled = false;
     const onLine = (buf) => {
-      const text = String(buf).replace(/\x1B\[[0-9;]*[A-Za-z]/g, ''); // 去除 ANSI 色碼
+      const text = String(buf).replace(/\x1B\[[0-9;]*[A-Za-z]/g, ''); // 移除 ANSI 色碼。
       const dests = text.match(/\[download\]\s+Destination:/g);
       if (dests) destCount += dests.length;
-      const pcts = text.match(/\[download\]\s+([\d.]+)%/g); // 這批的所有百分比
+      const pcts = text.match(/\[download\]\s+([\d.]+)%/g);
       if (pcts && pcts.length) {
-        const pm = pcts[pcts.length - 1].match(/([\d.]+)%/); // 取最新的一個
+        const pm = pcts[pcts.length - 1].match(/([\d.]+)%/);
         if (pm) {
           let pct = parseFloat(pm[1]);
-          if (kind === 'video') { // 兩段：影像→0-50、聲音→50-100
+          if (kind === 'video') { // 影片與音訊分別使用 0-50、50-100 的進度區間。
             const phase = Math.min(Math.max(destCount, 1), 2);
             pct = (phase - 1) * 50 + pct / 2;
           }
           if (!isNaN(pct)) sendProgress(kind, pct);
         }
       }
-      if (/\[Merger\]|\[ExtractAudio\]/.test(text)) sendProgress(kind, 99); // 合併/轉檔中
+      if (/\[Merger\]|\[ExtractAudio\]/.test(text)) sendProgress(kind, 99);
     };
     child.stdout.on('data', onLine);
-    child.stderr.on('data', (d) => { stderr += d; onLine(d); });
-    child.on('error', reject);
+    child.stderr.on('data', (d) => { stderr = (stderr + String(d)).slice(-64 * 1024); onLine(d); });
+    child.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      cleanIncompleteFilesForKey(key);
+      reject(error);
+    });
     child.on('close', (code) => {
-      const out = findCachedFile(url, kind);
+      if (settled) return;
+      settled = true;
+      cleanIncompleteFilesForKey(key);
+      const out = findCachedFile(url, kind, quality);
       if (code === 0 && out) { sendProgress(kind, 100); resolve(out); }
-      else reject(new Error(stderr.split('\n').filter(Boolean).pop() || ('yt-dlp 結束碼 ' + code)));
+      else reject(new Error(stderr.split(/\r?\n/).filter(Boolean).pop() || (`yt-dlp 下載失敗（代碼 ${code}）`)));
     });
   });
 }
 
 async function ensureMedia(url, kind, quality) {
-  if (!url || !/^https?:\/\//i.test(url)) throw new Error('請貼上有效的 YouTube 連結');
+  ({ url, kind, quality } = normalizeMediaRequest(url, kind, quality));
   await fsp.mkdir(CACHE_DIR(), { recursive: true });
-  const out = findCachedFile(url, kind);
+  const key = cacheKey(url, kind, quality);
+  if (inflight.has(key)) return inflight.get(key);
+  const out = findCachedFile(url, kind, quality);
   if (out) {
-    fsp.utimes(out, new Date(), new Date()).catch(() => {}); // 觸碰：更新最後使用時間，避免被當成舊快取清掉
+    fsp.utimes(out, new Date(), new Date()).catch(() => {}); // 以 mtime 記錄最後使用時間。
     return out;
   }
-  const key = cacheKey(url, kind);
-  if (inflight.has(key)) return inflight.get(key);
+  cleanIncompleteFilesForKey(key);
   const p = downloadMedia(url, kind, quality).finally(() => inflight.delete(key));
   inflight.set(key, p);
   return p;
 }
 
-// ---------- 快取清理 ----------
-// 計算 media/ 目前佔用大小（bytes）
+// ---------- 快取管理 ----------
 async function cacheSize() {
   try {
     const files = await fsp.readdir(CACHE_DIR());
@@ -303,25 +734,37 @@ async function cacheSize() {
     return total;
   } catch { return 0; }
 }
-// 清理快取。keepDays<=0 表示清全部（仍保留目前設定在用的背景音樂/敬拜音樂）
 async function cleanCache(keepDays) {
   const result = { removed: 0, freed: 0 };
   let files;
   try { files = await fsp.readdir(CACHE_DIR()); } catch { return result; }
-  // 目前設定正在用的檔，永不刪
   const cfg = await readConfig();
   const keepPrefixes = [];
-  if (cfg.musicUrl) keepPrefixes.push(cacheKey(cfg.musicUrl, 'audio') + '.');
-  if (cfg.worshipUrl) keepPrefixes.push(cacheKey(cfg.worshipUrl, 'video') + '.');
+  if (cfg.musicUrl) {
+    try { keepPrefixes.push(cacheKey(normalizeMediaRequest(cfg.musicUrl, 'audio').url, 'audio') + '.'); } catch {}
+  }
+  if (cfg.worshipUrl) {
+    try {
+      const request = normalizeMediaRequest(cfg.worshipUrl, 'video', cfg.videoQuality);
+      keepPrefixes.push(cacheKey(request.url, request.kind, request.quality) + '.');
+    } catch {}
+  }
   const now = Date.now();
-  const cutoff = keepDays > 0 ? now - keepDays * 86400000 : now + 1; // keepDays<=0 → 全數過期
+  const cutoff = keepDays > 0 ? now - keepDays * 86400000 : now + 1; // keepDays <= 0 代表全部過期。
   for (const f of files) {
-    if (keepPrefixes.some((p) => f.startsWith(p))) continue;
     const fp = path.join(CACHE_DIR(), f);
     try {
       const st = await fsp.stat(fp);
       if (!st.isFile()) continue;
-      const lastUsed = st.mtimeMs; // 觸碰機制讓 mtime = 最後使用時間
+      if ([...inflight.keys()].some((key) => f.startsWith(key + '.'))) continue;
+      if (isIncompleteCacheName(f) || st.size === 0 || !FINAL_MEDIA_EXTENSIONS.has(path.extname(f).toLowerCase())) {
+        await fsp.unlink(fp);
+        result.removed++;
+        result.freed += st.size;
+        continue;
+      }
+      if (keepPrefixes.some((p) => f.startsWith(p))) continue;
+      const lastUsed = st.mtimeMs;
       if (lastUsed < cutoff) {
         await fsp.unlink(fp);
         result.removed++;
@@ -333,108 +776,446 @@ async function cleanCache(keepDays) {
 }
 
 // ---------- 設定 ----------
-async function readConfig() {
-  try {
-    return { ...DEFAULT_CONFIG, ...JSON.parse(await fsp.readFile(CONFIG_PATH(), 'utf-8')) };
-  } catch { return { ...DEFAULT_CONFIG }; }
+function isPlainObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === null || Object.prototype.toString.call(value) === '[object Object]';
 }
+
+function boundedString(value, fallback, maxLength) {
+  return typeof value === 'string' ? value.slice(0, maxLength) : fallback;
+}
+
+function boundedInteger(value, fallback, min, max) {
+  const number = Number(value);
+  return Number.isInteger(number) ? Math.min(max, Math.max(min, number)) : fallback;
+}
+
+const BACKGROUND_EXTENSIONS = new Set(['.bmp', '.gif', '.jpeg', '.jpg', '.png', '.webp']);
+
+function isSafeBackgroundFileName(fileName) {
+  return typeof fileName === 'string' && fileName.length <= 128 && path.basename(fileName) === fileName &&
+    /^bg_\d+(?:_[a-f0-9]{8})?\.[a-z0-9]+$/i.test(fileName) && BACKGROUND_EXTENSIONS.has(path.extname(fileName).toLowerCase());
+}
+
+function safeBackgroundPath(fileName) {
+  if (!isSafeBackgroundFileName(fileName)) return null;
+  const directory = path.resolve(BG_DIR());
+  const candidate = path.resolve(directory, fileName);
+  const sameDirectory = process.platform === 'win32'
+    ? path.dirname(candidate).toLowerCase() === directory.toLowerCase()
+    : path.dirname(candidate) === directory;
+  return sameDirectory ? candidate : null;
+}
+
+function sanitizeConfig(input) {
+  if (!isPlainObject(input)) throw new Error('設定格式不正確');
+  const value = { ...DEFAULT_CONFIG, ...input };
+  const startCh = boundedInteger(value.scriptureStartCh, DEFAULT_CONFIG.scriptureStartCh, 1, 200);
+  const startV = boundedInteger(value.scriptureStartV, DEFAULT_CONFIG.scriptureStartV, 1, 200);
+  let endCh = boundedInteger(value.scriptureEndCh, DEFAULT_CONFIG.scriptureEndCh, 1, 200);
+  let endV = boundedInteger(value.scriptureEndV, DEFAULT_CONFIG.scriptureEndV, 1, 200);
+  if (endCh < startCh || (endCh === startCh && endV < startV)) {
+    endCh = startCh;
+    endV = startV;
+  }
+  const presets = Array.isArray(value.customWorshipPresets) ? value.customWorshipPresets.slice(0, 50).flatMap((item) => {
+    if (!isPlainObject(item)) return [];
+    try {
+      const normalized = normalizeMediaRequest(boundedString(item.url, '', 4096), 'video').url;
+      return [{ title: boundedString(item.title, '自訂敬拜影片', 128), url: normalized }];
+    } catch { return []; }
+  }) : [];
+  const backgroundFile = isSafeBackgroundFileName(value.backgroundFile) ? value.backgroundFile : '';
+  const book = Object.prototype.hasOwnProperty.call(BIBLE_GATEWAY_BOOKS, value.scriptureBook)
+    ? value.scriptureBook : DEFAULT_CONFIG.scriptureBook;
+  const volume = Number(value.musicVolume);
+  const videoQuality = boundedInteger(value.videoQuality, DEFAULT_CONFIG.videoQuality, 144, 2160);
+  const fillMode = ['blur', 'contain', 'cover'].includes(value.fillMode) ? value.fillMode : DEFAULT_CONFIG.fillMode;
+  return {
+    title1: boundedString(value.title1, DEFAULT_CONFIG.title1, 200),
+    title2: boundedString(value.title2, DEFAULT_CONFIG.title2, 200),
+    title3: boundedString(value.title3, DEFAULT_CONFIG.title3, 200),
+    scriptureLabel: boundedString(value.scriptureLabel, DEFAULT_CONFIG.scriptureLabel, 100),
+    scriptureBook: book,
+    scriptureStartCh: startCh,
+    scriptureStartV: startV,
+    scriptureEndCh: endCh,
+    scriptureEndV: endV,
+    readingExtra: boundedString(value.readingExtra, DEFAULT_CONFIG.readingExtra, 8000),
+    dateAuto: value.dateAuto !== false,
+    dateManual: boundedString(value.dateManual, '', 32),
+    backgroundFile,
+    fillMode,
+    musicUrl: boundedString(value.musicUrl, '', 4096),
+    worshipUrl: boundedString(value.worshipUrl, '', 4096),
+    useWorshipPreset: value.useWorshipPreset === true,
+    worshipPreset: boundedString(value.worshipPreset, '', 4096),
+    customWorshipPresets: presets,
+    musicVolume: Number.isFinite(volume) ? Math.min(1, Math.max(0, volume)) : DEFAULT_CONFIG.musicVolume,
+    autoPlayMusic: value.autoPlayMusic !== false,
+    videoQuality,
+    cacheKeepDays: boundedInteger(value.cacheKeepDays, DEFAULT_CONFIG.cacheKeepDays, 0, 3650),
+    fontFamily: boundedString(value.fontFamily, DEFAULT_CONFIG.fontFamily, 100),
+    zoomUrl: boundedString(value.zoomUrl, DEFAULT_CONFIG.zoomUrl, 4096),
+    scheduleEnabled: value.scheduleEnabled !== false,
+    scheduleUrl: boundedString(value.scheduleUrl, DEFAULT_CONFIG.scheduleUrl, 4096),
+    skippedVersion: boundedString(value.skippedVersion, '', 64)
+  };
+}
+
+function normalizeBibleRef(value) {
+  if (!isPlainObject(value)) throw new Error('經文範圍格式不正確');
+  const book = boundedString(value.book, '', 32);
+  if (!Object.prototype.hasOwnProperty.call(BIBLE_GATEWAY_BOOKS, book)) throw new Error('不支援的聖經書卷');
+  const startCh = boundedInteger(value.startCh, NaN, 1, 200);
+  const startV = boundedInteger(value.startV, NaN, 1, 200);
+  const endCh = boundedInteger(value.endCh, NaN, 1, 200);
+  const endV = boundedInteger(value.endV, NaN, 1, 200);
+  if (![startCh, startV, endCh, endV].every(Number.isFinite)) throw new Error('經文章節必須是 1 到 200 的整數');
+  if (endCh < startCh || (endCh === startCh && endV < startV)) throw new Error('經文結束位置不可早於開始位置');
+  return { book, startCh, startV, endCh, endV };
+}
+
+function normalizeScheduleUrl(value) {
+  if (typeof value !== 'string' || value.length > 4096) throw new Error('試算表網址格式不正確');
+  const parsed = parseHttpsUrl(value);
+  if (parsed.hostname.toLowerCase() !== 'docs.google.com' || !sheetCsvUrl(parsed.href)) throw new Error('請使用 Google 試算表網址');
+  return parsed.href;
+}
+
+async function readConfig() {
+  for (const filePath of [CONFIG_PATH(), CONFIG_PATH() + '.bak']) {
+    try { return sanitizeConfig(JSON.parse(await fsp.readFile(filePath, 'utf-8'))); }
+    catch {}
+  }
+  return sanitizeConfig({ ...DEFAULT_CONFIG });
+}
+
+let configWriteQueue = Promise.resolve();
+
 async function writeConfig(cfg) {
-  await fsp.mkdir(USER_DATA(), { recursive: true });
-  await fsp.writeFile(CONFIG_PATH(), JSON.stringify(cfg, null, 2), 'utf-8');
+  const sanitized = sanitizeConfig(cfg);
+  const serialized = JSON.stringify(sanitized, null, 2);
+  if (Buffer.byteLength(serialized, 'utf8') > 512 * 1024) throw new Error('設定內容過大');
+  const operation = configWriteQueue.catch(() => {}).then(async () => {
+    await fsp.mkdir(USER_DATA(), { recursive: true });
+    const tempPath = CONFIG_PATH() + `.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+    let handle;
+    try {
+      handle = await fsp.open(tempPath, 'w', 0o600);
+      await handle.writeFile(serialized, 'utf8');
+      await handle.sync();
+      await handle.close();
+      handle = null;
+      await replaceFileSafely(tempPath, CONFIG_PATH(), '.bak');
+      await fsp.unlink(CONFIG_PATH() + '.bak').catch(() => {});
+    } finally {
+      if (handle) await handle.close().catch(() => {});
+      await fsp.unlink(tempPath).catch(() => {});
+    }
+  });
+  configWriteQueue = operation.catch(() => {});
+  return operation;
 }
 function bgFileUrl(fileName) {
-  if (!fileName) return '';
-  const p = path.join(BG_DIR(), fileName);
-  if (!fs.existsSync(p)) return '';
-  return fileUrl(p) + '?t=' + Date.now();
+  const filePath = safeBackgroundPath(fileName);
+  if (!filePath || !fs.existsSync(filePath)) return '';
+  const url = pathToFileURL(filePath);
+  url.searchParams.set('t', String(Date.now()));
+  return url.href;
 }
 
 // ---------- IPC ----------
+const RENDERER_ENTRY_PATH = path.resolve(__dirname, 'renderer', 'index.html');
+
+function sameFilePath(a, b) {
+  const left = path.resolve(a);
+  const right = path.resolve(b);
+  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+function isTrustedRendererUrl(value) {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'file:' && sameFilePath(fileURLToPath(parsed), RENDERER_ENTRY_PATH);
+  } catch { return false; }
+}
+
+function isTrustedIpcSender(event) {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) return false;
+  if (!event.senderFrame || event.senderFrame !== event.sender.mainFrame) return false;
+  return isTrustedRendererUrl(event.senderFrame.url);
+}
+
+function trustedHandle(channel, handler) {
+  ipcMain.handle(channel, (event, ...args) => {
+    if (!isTrustedIpcSender(event)) throw new Error('拒絕不受信任的 IPC 呼叫');
+    return handler(...args);
+  });
+}
+
+function normalizeExternalUrl(value) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 4096) throw new Error('外部網址格式不正確');
+  let parsed;
+  try { parsed = new URL(value); }
+  catch { throw new Error('外部網址格式不正確'); }
+  if (!['https:', 'zoommtg:'].includes(parsed.protocol)) throw new Error('只允許開啟 HTTPS 或 Zoom 連結');
+  if (parsed.username || parsed.password) throw new Error('外部網址不可包含帳號或密碼');
+  if (parsed.protocol === 'zoommtg:') {
+    const host = parsed.hostname.toLowerCase();
+    if (host !== 'zoom.us' && !host.endsWith('.zoom.us')) throw new Error('Zoom 連結網域不正確');
+  }
+  return parsed.href;
+}
+
+async function openApprovedExternal(value) {
+  const href = normalizeExternalUrl(value);
+  await shell.openExternal(href);
+  return href;
+}
+
+function fitAspectSize(maxWidth, maxHeight, aspect, preferredWidth) {
+  const safeMaxWidth = Math.max(1, Math.floor(maxWidth));
+  const safeMaxHeight = Math.max(1, Math.floor(maxHeight));
+  let width = Math.min(safeMaxWidth, Math.max(1, Math.floor(preferredWidth || safeMaxWidth)));
+  let height = Math.max(1, Math.round(width / aspect));
+  if (height > safeMaxHeight) {
+    height = safeMaxHeight;
+    width = Math.max(1, Math.min(safeMaxWidth, Math.round(height * aspect)));
+  }
+  return { width, height };
+}
+
+function centeredBounds(area, currentBounds, width, height) {
+  const centerX = currentBounds.x + currentBounds.width / 2;
+  const centerY = currentBounds.y + currentBounds.height / 2;
+  const maxX = area.x + area.width - width;
+  const maxY = area.y + area.height - height;
+  return {
+    x: Math.min(Math.max(Math.round(centerX - width / 2), area.x), Math.max(area.x, maxX)),
+    y: Math.min(Math.max(Math.round(centerY - height / 2), area.y), Math.max(area.y, maxY)),
+    width,
+    height
+  };
+}
+
+function setWindowMode(mode) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mode !== 'mobile' && mode !== 'wide') throw new Error('視窗模式必須是 mobile 或 wide');
+  const bounds = mainWindow.getBounds();
+  const area = screen.getDisplayMatching(bounds).workArea;
+  if (mode === 'mobile') {
+    if (bounds.width > bounds.height) lastWideBounds = bounds;
+    const size = fitAspectSize(area.width, area.height, 9 / 16, Math.round(area.height * 9 / 16));
+    mainWindow.setMinimumSize(1, 1);
+    mainWindow.setAspectRatio(9 / 16);
+    mainWindow.setBounds(centeredBounds(area, bounds, size.width, size.height), process.platform === 'darwin');
+    mainWindow.setMinimumSize(Math.min(320, size.width), Math.min(560, size.height));
+    return;
+  }
+
+  const margin = Math.max(0, Math.min(40, Math.floor(area.width * 0.05), Math.floor(area.height * 0.05)));
+  const maxWidth = Math.max(1, area.width - margin * 2);
+  const maxHeight = Math.max(1, area.height - margin * 2);
+  const preferredWidth = lastWideBounds ? lastWideBounds.width : Math.max(bounds.width, 640);
+  const size = fitAspectSize(maxWidth, maxHeight, 16 / 9, preferredWidth);
+  mainWindow.setMinimumSize(1, 1);
+  mainWindow.setAspectRatio(16 / 9);
+  mainWindow.setBounds(centeredBounds(area, bounds, size.width, size.height), process.platform === 'darwin');
+  mainWindow.setMinimumSize(Math.min(640, size.width), Math.min(360, size.height));
+}
+
 function registerIpc() {
-  ipcMain.handle('config:get', async () => {
+  trustedHandle('config:get', async () => {
     const cfg = await readConfig();
     return { cfg, backgroundUrl: bgFileUrl(cfg.backgroundFile) };
   });
-  ipcMain.handle('config:set', async (_e, cfg) => { await writeConfig(cfg); return { ok: true }; });
+  trustedHandle('config:set', async (cfg) => {
+    if (!isPlainObject(cfg)) throw new Error('設定格式不正確');
+    let serialized;
+    try { serialized = JSON.stringify(cfg); } catch { throw new Error('設定格式不正確'); }
+    if (Buffer.byteLength(serialized, 'utf8') > 512 * 1024) throw new Error('設定內容過大');
+    await writeConfig(cfg);
+    return { ok: true };
+  });
 
-  ipcMain.handle('bg:save', async (_e, srcPath) => {
+  trustedHandle('bg:save', async (srcPath) => {
+    if (typeof srcPath !== 'string' || srcPath.length === 0 || srcPath.length > 32_768 || !path.isAbsolute(srcPath)) {
+      throw new Error('背景圖片路徑不正確');
+    }
+    const source = await fsp.realpath(srcPath);
+    const stat = await fsp.stat(source);
+    const ext = path.extname(source).toLowerCase();
+    if (!stat.isFile() || stat.size === 0 || stat.size > 50 * 1024 * 1024 || !BACKGROUND_EXTENSIONS.has(ext)) {
+      throw new Error('背景圖片格式或大小不符合限制');
+    }
     await fsp.mkdir(BG_DIR(), { recursive: true });
-    const ext = (path.extname(srcPath) || '.png').toLowerCase();
-    const name = 'bg_' + Date.now() + ext;
-    await fsp.copyFile(srcPath, path.join(BG_DIR(), name));
+    const name = `bg_${Date.now()}_${crypto.randomBytes(4).toString('hex')}${ext}`;
+    const destination = safeBackgroundPath(name);
+    if (!destination) throw new Error('無法建立安全的背景圖片路徑');
+    await fsp.copyFile(source, destination);
     const cfg = await readConfig();
+    const previousBackground = cfg.backgroundFile;
     cfg.backgroundFile = name;
     await writeConfig(cfg);
+    if (previousBackground && previousBackground !== name) {
+      const previousPath = safeBackgroundPath(previousBackground);
+      if (previousPath) await fsp.unlink(previousPath).catch(() => {});
+    }
     return { fileName: name, url: bgFileUrl(name) };
   });
 
-  ipcMain.handle('dialog:pickImage', async () => {
-    const r = await dialog.showOpenDialog({
+  trustedHandle('dialog:pickImage', async () => {
+    const r = await dialog.showOpenDialog(mainWindow, {
       title: '選擇背景圖片', properties: ['openFile'],
       filters: [{ name: '圖片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }]
     });
     return (r.canceled || !r.filePaths.length) ? null : r.filePaths[0];
   });
 
-  // 取得（必要時下載）媒體快取，回傳本地檔 URL
-  ipcMain.handle('media:ensure', async (_e, { url, kind, quality }) => {
-    try { return { ok: true, path: fileUrl(await ensureMedia(url, kind, quality)) }; }
+  // 取得或下載媒體快取，回傳安全編碼的本機檔案 URL。
+  trustedHandle('media:ensure', async (request) => {
+    try {
+      if (!isPlainObject(request)) throw new Error('媒體要求格式不正確');
+      return { ok: true, path: fileUrl(await ensureMedia(request.url, request.kind, request.quality)) };
+    }
     catch (e) { return { ok: false, error: e.message }; }
   });
-  ipcMain.handle('media:status', async (_e, { url, kind }) => {
-    try { return { cached: !!url && !!findCachedFile(url, kind) }; }
+  trustedHandle('media:status', async (request) => {
+    try {
+      if (!isPlainObject(request)) throw new Error('媒體要求格式不正確');
+      const normalized = normalizeMediaRequest(request.url, request.kind, request.quality);
+      const key = cacheKey(normalized.url, normalized.kind, normalized.quality);
+      return {
+        cached: !inflight.has(key) && !!findCachedFile(normalized.url, normalized.kind, normalized.quality),
+        downloading: inflight.has(key)
+      };
+    }
     catch { return { cached: false }; }
   });
-  ipcMain.handle('cache:size', async () => cacheSize());
-  ipcMain.handle('cache:clean', async (_e, keepDays) => cleanCache(typeof keepDays === 'number' ? keepDays : 0));
+  trustedHandle('cache:size', async () => cacheSize());
+  trustedHandle('cache:clean', async (keepDays) => cleanCache(boundedInteger(keepDays, 0, 0, 3650)));
 
-  ipcMain.handle('ytdlp:update', async () => autoUpdateYtDlp());
-  ipcMain.handle('ytdlp:version', async () => localYtDlpVersion());
+  trustedHandle('ytdlp:update', async () => autoUpdateYtDlp());
+  trustedHandle('ytdlp:version', async () => localYtDlpVersion());
 
-  // ---------- App 自動更新（electron-updater / GitHub Releases） ----------
-  ipcMain.handle('app:version', () => app.getVersion());
-  ipcMain.handle('app:checkUpdate', async () => {
-    if (!app.isPackaged) return { ok: false, error: '開發模式不檢查更新（請用打包後的版本）' };
+  // ---------- 應用程式更新 ----------
+  trustedHandle('app:version', () => app.getVersion());
+  trustedHandle('app:checkUpdate', async () => {
+    if (!app.isPackaged) return { ok: false, error: '開發模式不檢查更新，請使用安裝版。' };
     try {
+      if (process.platform === 'darwin') {
+        const latest = await fetchLatestReleaseInfo();
+        return { ok: true, available: latest.available, version: latest.version, manual: true, url: RELEASES_PAGE };
+      }
       const r = await autoUpdater.checkForUpdates();
       const info = r && r.updateInfo;
-      const available = !!info && info.version !== app.getVersion();
+      const available = !!(r && r.isUpdateAvailable);
       return { ok: true, available, version: info ? info.version : app.getVersion() };
     } catch (e) { return { ok: false, error: e.message }; }
   });
-  ipcMain.handle('app:downloadUpdate', async () => {
-    try { await autoUpdater.downloadUpdate(); return { ok: true }; }
+  trustedHandle('app:downloadUpdate', async () => {
+    try {
+      if (!app.isPackaged) return { ok: false, error: '開發模式不下載更新。' };
+      if (process.platform === 'darwin') {
+        return { ok: true, manual: true, url: RELEASES_PAGE };
+      }
+      await autoUpdater.downloadUpdate();
+      return { ok: true };
+    }
     catch (e) { return { ok: false, error: e.message }; }
   });
-  ipcMain.handle('app:quitAndInstall', () => { autoUpdater.quitAndInstall(); });
+  trustedHandle('app:quitAndInstall', () => {
+    if (process.platform === 'darwin') return { ok: false, manual: true, error: 'macOS 請從 GitHub Releases 手動安裝更新。' };
+    autoUpdater.quitAndInstall();
+    return { ok: true };
+  });
 
-  ipcMain.handle('open:external', async (_e, url) => { shell.openExternal(url); });
-  ipcMain.handle('schedule:today', async (_e, url) => fetchScheduleToday(url));
+  trustedHandle('open:external', async (url) => {
+    try { return { ok: true, url: await openApprovedExternal(url) }; }
+    catch (e) { return { ok: false, error: e.message }; }
+  });
+  trustedHandle('schedule:today', async (url) => {
+    try { return await fetchScheduleToday(normalizeScheduleUrl(url)); }
+    catch (e) { return { ok: false, error: e.message }; }
+  });
+  trustedHandle('utmost:today', async () => {
+    try { return await fetchUtmostToday(); }
+    catch (e) { return { ok: false, error: e.message }; }
+  });
+  trustedHandle('bible:passage', async (ref) => {
+    try { return await fetchBiblePassage(ref); }
+    catch (e) { return { ok: false, error: e.message }; }
+  });
 
-  ipcMain.handle('win:minimize', () => { if (mainWindow) mainWindow.minimize(); });
-  ipcMain.handle('win:close', () => { if (mainWindow) mainWindow.close(); });
-  ipcMain.handle('clipboard:read', () => clipboard.readText());
-  ipcMain.handle('clipboard:write', (_e, text) => { clipboard.writeText(String(text == null ? '' : text)); return { ok: true }; });
+  trustedHandle('win:minimize', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.minimize();
+  });
+  trustedHandle('win:close', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+  });
+  trustedHandle('win:mode', (mode) => setWindowMode(mode));
+  trustedHandle('clipboard:read', () => clipboard.readText());
+  trustedHandle('clipboard:write', (text) => {
+    if (typeof text !== 'string' || text.length > 200_000) throw new Error('剪貼簿文字格式或大小不符合限制');
+    clipboard.writeText(text);
+    return { ok: true };
+  });
 }
 
 // ---------- 視窗 ----------
 let mainWindow = null;
+let lastWideBounds = null;
+app.on('second-instance', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    if (app.isReady()) createWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+});
+
 function createWindow() {
-  mainWindow = new BrowserWindow({
-    width: 1280, height: 720, minWidth: 640, minHeight: 360,
+  const area = screen.getPrimaryDisplay().workArea;
+  const margin = Math.max(0, Math.min(40, Math.floor(area.width * 0.05), Math.floor(area.height * 0.05)));
+  const size = fitAspectSize(area.width - margin * 2, area.height - margin * 2, 16 / 9, 1280);
+  const initialBounds = {
+    x: area.x + Math.max(0, Math.floor((area.width - size.width) / 2)),
+    y: area.y + Math.max(0, Math.floor((area.height - size.height) / 2)),
+    ...size
+  };
+  const window = new BrowserWindow({
+    ...initialBounds,
+    minWidth: Math.min(640, size.width), minHeight: Math.min(360, size.height),
     backgroundColor: '#000000', title: '靈修封面', autoHideMenuBar: true,
-    frame: false,            // 隱藏系統標題列（分享畫面更乾淨）
+    frame: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true, nodeIntegration: false, sandbox: false
+      contextIsolation: true, nodeIntegration: false, sandbox: true
     }
   });
-  mainWindow.setAspectRatio(16 / 9); // 鎖 16:9，可自由縮放
-  mainWindow.removeMenu();
-  mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  mainWindow = window;
+  window.setAspectRatio(16 / 9);
+  window.removeMenu();
 
-  // 右鍵複製/貼上選單（無邊框視窗預設沒有）
-  mainWindow.webContents.on('context-menu', (_e, params) => {
+  const guardNavigation = (event, targetUrl) => {
+    if (isTrustedRendererUrl(targetUrl)) return;
+    event.preventDefault();
+    try { openApprovedExternal(targetUrl).catch((error) => console.warn('開啟外部連結失敗：', error.message)); }
+    catch {}
+  };
+  window.webContents.on('will-navigate', guardNavigation);
+  window.webContents.on('will-redirect', guardNavigation);
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    try { openApprovedExternal(url).catch((error) => console.warn('開啟外部連結失敗：', error.message)); }
+    catch {}
+    return { action: 'deny' };
+  });
+  window.loadFile(RENDERER_ENTRY_PATH).catch((error) => console.error('載入主畫面失敗：', error));
+
+  window.webContents.on('context-menu', (_e, params) => {
     const tmpl = [];
     if (params.isEditable) {
       tmpl.push({ role: 'cut' }, { role: 'copy' }, { role: 'paste' },
@@ -442,21 +1223,23 @@ function createWindow() {
     } else if (params.selectionText) {
       tmpl.push({ role: 'copy' }, { type: 'separator' }, { role: 'selectAll' });
     }
-    if (tmpl.length) Menu.buildFromTemplate(tmpl).popup({ window: mainWindow });
+    if (tmpl.length && !window.isDestroyed()) Menu.buildFromTemplate(tmpl).popup({ window });
   });
 
-  // 視窗載入完成後，檢查是否有新版本（不經簽章，macOS 也適用）
-  mainWindow.webContents.once('did-finish-load', () => { checkLatestVersion(); });
+  window.webContents.once('did-finish-load', () => { checkLatestVersion(); });
+  window.on('closed', () => { if (mainWindow === window) mainWindow = null; });
 }
 
-// ---------- App 自動更新設定 ----------
+// ---------- 應用程式更新設定 ----------
 function sendUpdate(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed())
     mainWindow.webContents.send(channel, payload);
 }
 function setupAutoUpdater() {
-  autoUpdater.autoDownload = false;            // 由使用者按下載才下載
-  autoUpdater.autoInstallOnAppQuit = true;     // 下載後關閉 app 時自動安裝
+  // 未簽章的 macOS 應用程式不使用原生更新器，改由 GitHub Releases 手動安裝。
+  if (process.platform === 'darwin') return;
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.on('update-available', (info) => sendUpdate('update:available', { version: info.version }));
   autoUpdater.on('update-not-available', () => sendUpdate('update:none', {}));
   autoUpdater.on('error', (err) => sendUpdate('update:error', { error: String(err && err.message || err) }));
@@ -464,26 +1247,34 @@ function setupAutoUpdater() {
   autoUpdater.on('update-downloaded', (info) => sendUpdate('update:downloaded', { version: info.version }));
 }
 
-// ---------- 開機版本檢查（純比對版本號 + 給下載連結，不需簽章，macOS 也適用）----------
+// ---------- 啟動時比對 GitHub Releases 版本 ----------
 const RELEASES_API = 'https://api.github.com/repos/Living-water-church-chiayi/zoomshare/releases/latest';
 const RELEASES_PAGE = 'https://github.com/Living-water-church-chiayi/zoomshare/releases/latest';
-function isNewerVersion(a, b) { // a 是否比 b 新
-  const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0);
-  const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0);
+function versionParts(value) {
+  const match = String(value || '').trim().replace(/^v/i, '').match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-+][0-9A-Za-z.-]+)?$/);
+  return match ? match.slice(1, 4).map((part) => parseInt(part || '0', 10)) : null;
+}
+function isNewerVersion(candidate, current) {
+  const candidateParts = versionParts(candidate);
+  const currentParts = versionParts(current);
+  if (!candidateParts || !currentParts) return false;
   for (let i = 0; i < 3; i++) {
-    if ((pa[i] || 0) > (pb[i] || 0)) return true;
-    if ((pa[i] || 0) < (pb[i] || 0)) return false;
+    if (candidateParts[i] > currentParts[i]) return true;
+    if (candidateParts[i] < currentParts[i]) return false;
   }
   return false;
 }
+async function fetchLatestReleaseInfo() {
+  const release = await httpGetJson(RELEASES_API);
+  const version = String((release && release.tag_name) || '').replace(/^v/i, '').trim();
+  if (!versionParts(version)) throw new Error('GitHub Release 版本格式不正確');
+  return { version, available: isNewerVersion(version, app.getVersion()), url: RELEASES_PAGE };
+}
 async function checkLatestVersion() {
   try {
-    const rel = await httpGetJson(RELEASES_API);
-    const tag = ((rel && rel.tag_name) || '').replace(/^v/i, '').trim();
-    if (tag && isNewerVersion(tag, app.getVersion())) {
-      sendUpdate('app:new-version', { version: tag, url: RELEASES_PAGE });
-    }
-  } catch (e) { /* 靜默失敗，不打擾 */ }
+    const latest = await fetchLatestReleaseInfo();
+    if (latest.available) sendUpdate('app:new-version', latest);
+  } catch (e) { console.warn('檢查應用程式版本失敗：', e.message); }
 }
 
 app.whenReady().then(async () => {
@@ -492,15 +1283,13 @@ app.whenReady().then(async () => {
   createWindow();
   setupAutoUpdater();
   autoUpdateYtDlp().then((r) => { if (r && r.updated) console.log('yt-dlp 已更新至', r.to); });
-  // 開機自動清理過久沒用到的媒體快取（依設定的保留天數；保留目前在用的背景音樂/敬拜音樂）
   readConfig().then((cfg) => {
     const days = typeof cfg.cacheKeepDays === 'number' ? cfg.cacheKeepDays : 30;
     if (days > 0) cleanCache(days).then((r) => {
-      if (r.removed) console.log(`已清理 ${r.removed} 個舊快取，釋放 ${(r.freed / 1048576).toFixed(0)} MB`);
+      if (r.removed) console.log(`已清理 ${r.removed} 個快取，釋放 ${(r.freed / 1048576).toFixed(0)} MB`);
     });
   });
-  // 開機靜默檢查 App 更新（有新版時前端會收到 update:available 提示）
-  if (app.isPackaged) autoUpdater.checkForUpdates().catch(() => {});
+  if (app.isPackaged && process.platform !== 'darwin') autoUpdater.checkForUpdates().catch(() => {});
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

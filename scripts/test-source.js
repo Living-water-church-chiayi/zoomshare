@@ -1,0 +1,182 @@
+'use strict';
+
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+
+const root = path.join(__dirname, '..');
+const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
+
+const sourceFiles = [
+  'package.json',
+  'package-lock.json',
+  'electron-builder.yml',
+  'README.md',
+  '.github/workflows/ci.yml',
+  '.github/workflows/build-mac.yml',
+  'scripts/setup-win.sh',
+  'scripts/setup-mac.sh',
+  'scripts/test-announce.js',
+  'scripts/test-packaged-smoke.js',
+  'scripts/test-reading-layout.js',
+  'scripts/test-runtime.js',
+  'src/main.js',
+  'src/preload.js',
+  'src/renderer/app.js',
+  'src/renderer/bible.js',
+  'src/renderer/index.html',
+  'src/renderer/style.css'
+];
+
+// Replacement/private-use characters are reliable signs of a broken text decode.
+// Include a few common UTF-8-as-Latin-1 sequences without rejecting valid CJK text.
+const mojibake = /[\u0080-\u009F\uFFFD\uE000-\uF8FF]|(?:\u00C3[\u0080-\u00BF])|(?:\u00E2\u0080[\u0090-\u00BF])/u;
+for (const file of sourceFiles) {
+  const contents = read(file);
+  const badLine = contents.split(/\r?\n/).findIndex((line) => mojibake.test(line));
+  assert.strictEqual(badLine, -1, `${file}:${badLine + 1} contains probable mojibake`);
+}
+console.log('OK source encoding');
+
+const main = read('src/main.js');
+const renderer = read('src/renderer/app.js');
+assert.match(
+  main,
+  /^\s*app\.commandLine\.appendSwitch\('autoplay-policy'/m,
+  'autoplay policy must be executable code, not part of a comment'
+);
+assert.match(
+  main,
+  /^\s*const candidateParts\s*=/m,
+  'version comparison must define parsed candidate parts as executable code'
+);
+assert.match(
+  renderer,
+  /^\s*setTimeout\(\(\) => refreshDailyReadingData\(\)/m,
+  'initial data refresh must be executable code'
+);
+console.log('OK critical statements are executable');
+
+const section = (contents, start, end) => {
+  const startIndex = contents.indexOf(start);
+  const endIndex = contents.indexOf(end, startIndex + start.length);
+  assert.ok(startIndex >= 0 && endIndex > startIndex, `Cannot locate source section: ${start}`);
+  return contents.slice(startIndex, endIndex);
+};
+const ensureMediaSource = section(main, 'async function ensureMedia', '// ---------- 快取管理');
+assert.ok(
+  ensureMediaSource.indexOf('inflight.has(key)') < ensureMediaSource.indexOf('findCachedFile('),
+  'ensureMedia must reuse an active download before examining cache fragments'
+);
+const findCachedSource = section(main, 'function findCachedFile', 'function fileUrl');
+assert.doesNotMatch(findCachedSource, /unlinkSync/, 'cache lookup must not delete active download fragments');
+const cleanCacheSource = section(main, 'async function cleanCache', '// ---------- 設定');
+assert.match(cleanCacheSource, /inflight\.keys\(\)/, 'cache cleanup must skip active downloads');
+assert.match(main, /const available = !!\(r && r\.isUpdateAvailable\)/, 'updater must honor electron-updater eligibility');
+assert.match(renderer, /let scriptureRequestToken = 0;/, 'scripture requests need stale-response protection');
+assert.match(renderer, /let worshipRequestToken = 0;/, 'worship requests need stale-response protection');
+console.log('OK async race guards');
+
+assert.match(
+  renderer,
+  /window\.addEventListener\('keydown', handleFlowArrowNavigation\);/,
+  'reading flow must register its named arrow-key handler'
+);
+assert.match(
+  renderer,
+  /window\.addEventListener\('wheel', handleFlowWheelNavigation, \{ passive: false \}\);/,
+  'reading flow must register its gesture-aware wheel handler'
+);
+assert.match(
+  renderer,
+  /window\.addEventListener\('keydown', handleEscapeNavigation\);/,
+  'Escape completion safety must use its repeat-aware handler'
+);
+assert.match(
+  renderer,
+  /flowNextPage'\)\.addEventListener\('click',[^\n]+nextFlowPageOrStep\('button'\)/,
+  'the visible next/finish button must share the guarded advance path'
+);
+assert.match(renderer, /nextFlowPageOrStep\('wheel'\)/, 'wheel navigation must identify its input source');
+assert.match(
+  renderer,
+  /if \(step === 'utmost'\) flowReachedUtmost = true;/,
+  'entering Utmost must latch post-reading music suppression'
+);
+assert.match(
+  renderer,
+  /if \(flowReachedUtmost\) \{[\s\S]*?a\.pause\(\);[\s\S]*?setMusicSwitchState\(false\);/,
+  'returning from Utmost must settle the audio in a silent state'
+);
+console.log('OK reading keyboard and completion wiring');
+
+const html = read('src/renderer/index.html');
+assert.match(html, /Content-Security-Policy/, 'renderer must declare a Content Security Policy');
+assert.match(
+  html,
+  /7mrMh_2tXCI[^>]*data-announcement-title="讚美之泉（美好的創造）"[^>]*>美好的創造<\/option>/,
+  'the announcement sample worship song must be available as a named preset'
+);
+const ids = [...html.matchAll(/\bid=["']([^"']+)["']/g)].map((match) => match[1]);
+const idCounts = new Map();
+for (const id of ids) idCounts.set(id, (idCounts.get(id) || 0) + 1);
+assert.deepStrictEqual(
+  [...idCounts].filter(([, count]) => count > 1),
+  [],
+  'HTML contains duplicate ids'
+);
+
+const referencedIds = [...renderer.matchAll(/\$\(["']([^"']+)["']\)/g)].map((match) => match[1]);
+const missingIds = [...new Set(referencedIds.filter((id) => !idCounts.has(id)))].sort();
+assert.deepStrictEqual(missingIds, [], `app.js references missing HTML ids: ${missingIds.join(', ')}`);
+console.log('OK renderer DOM ids');
+
+const preload = read('src/preload.js');
+const apiCalls = [...renderer.matchAll(/window\.api\.([A-Za-z0-9_]+)/g)].map((match) => match[1]);
+const exposedApi = new Set(
+  [...preload.matchAll(/^\s{2}([A-Za-z0-9_]+)\s*:/gm)].map((match) => match[1])
+);
+const missingApi = [...new Set(apiCalls.filter((name) => !exposedApi.has(name)))].sort();
+assert.deepStrictEqual(missingApi, [], `preload is missing renderer APIs: ${missingApi.join(', ')}`);
+console.log('OK preload API coverage');
+
+const css = read('src/renderer/style.css');
+for (const selector of [
+  '.scripture-page',
+  '.scripture-verse-number',
+  '.scripture-continuation',
+  '.utmost-sheet',
+  '.utmost-verse-card',
+  '.utmost-paragraph'
+]) {
+  assert.ok(css.includes(selector), `Reading layout CSS is missing ${selector}`);
+}
+assert.match(renderer, /type:\s*'scripture'/, 'scripture pages must use structured page objects');
+assert.match(renderer, /type:\s*'utmost'/, 'Utmost must use a structured page object');
+assert.match(renderer, /const UTMOST_MIN_REGULAR_SCALE = 0\.48;/, 'Utmost regular scaling must stop at 48%');
+const cssDir = path.join(root, 'src', 'renderer');
+const missingAssets = [];
+for (const match of css.matchAll(/url\(\s*['"]?([^)'"\s]+)['"]?\s*\)/g)) {
+  const value = match[1];
+  if (/^(?:data:|https?:|file:|#|var\()/i.test(value)) continue;
+  const asset = path.resolve(cssDir, decodeURIComponent(value));
+  if (!fs.existsSync(asset)) missingAssets.push(value);
+}
+assert.deepStrictEqual(
+  [...new Set(missingAssets)].sort(),
+  [],
+  `CSS references missing local assets: ${missingAssets.join(', ')}`
+);
+console.log('OK CSS assets');
+
+const packageJson = JSON.parse(read('package.json'));
+const packageLock = JSON.parse(read('package-lock.json'));
+const ciWorkflow = read('.github/workflows/ci.yml');
+assert.equal(packageJson.version, packageLock.version, 'package and lockfile versions must match');
+assert.equal(packageJson.version, packageLock.packages[''].version, 'lockfile root version must match package');
+assert.equal(packageJson.scripts['test:layout'], 'electron scripts/test-reading-layout.js', 'layout smoke script is missing');
+assert.match(ciWorkflow, /npm run test:layout/, 'cross-platform CI must run the Electron reading layout test');
+assert.match(ciWorkflow, /test-packaged-smoke\.js/, 'Windows CI must launch the packaged Electron application');
+console.log('OK package metadata');
+
+console.log('\nAll source integrity checks passed.');
