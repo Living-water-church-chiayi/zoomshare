@@ -32,6 +32,8 @@ const HTTP_MAX_REDIRECTS = 5;
 const HTTP_MAX_JSON_BYTES = 2 * 1024 * 1024;
 const HTTP_MAX_TEXT_BYTES = 8 * 1024 * 1024;
 const HTTP_MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024;
+const YOUTUBE_OEMBED_TIMEOUT_MS = 5_000;
+const YOUTUBE_METADATA_TIMEOUT_MS = 15_000;
 
 const DEFAULT_CONFIG = {
   title1: '靈修班即將開始',
@@ -50,9 +52,12 @@ const DEFAULT_CONFIG = {
   worshipUrl: '',
   useWorshipPreset: false,
   worshipPreset: '',
+  worshipTitle: '',
+  worshipTitleUrl: '',
   customWorshipPresets: [],
   musicVolume: 0.8,
   autoPlayMusic: true,
+  preventLeftArrowWorship: true,
   videoQuality: 1080,
   cacheKeepDays: 30,
   fontFamily: 'sans-bold',
@@ -122,7 +127,7 @@ function parseHttpsUrl(value, base) {
   return parsed;
 }
 
-function getHttpsResponse(url, headers, redirectCount = 0) {
+function getHttpsResponse(url, headers, redirectCount = 0, timeoutMs = HTTP_TIMEOUT_MS) {
   const target = parseHttpsUrl(url);
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -142,7 +147,7 @@ function getHttpsResponse(url, headers, redirectCount = 0) {
         try { next = parseHttpsUrl(location, target); }
         catch (error) { return finishReject(error); }
         settled = true;
-        getHttpsResponse(next, headers, redirectCount + 1).then(resolve, reject);
+        getHttpsResponse(next, headers, redirectCount + 1, timeoutMs).then(resolve, reject);
         return;
       }
       if (status < 200 || status >= 300) {
@@ -152,13 +157,13 @@ function getHttpsResponse(url, headers, redirectCount = 0) {
       settled = true;
       resolve(response);
     });
-    request.setTimeout(HTTP_TIMEOUT_MS, () => request.destroy(new Error(`連線逾時（${HTTP_TIMEOUT_MS / 1000} 秒）`)));
+    request.setTimeout(timeoutMs, () => request.destroy(new Error(`連線逾時（${timeoutMs / 1000} 秒）`)));
     request.on('error', finishReject);
   });
 }
 
-async function readHttpsBody(url, headers, maxBytes) {
-  const response = await getHttpsResponse(url, headers);
+async function readHttpsBody(url, headers, maxBytes, timeoutMs = HTTP_TIMEOUT_MS) {
+  const response = await getHttpsResponse(url, headers, 0, timeoutMs);
   const declaredLength = Number(response.headers['content-length'] || 0);
   if (declaredLength > maxBytes) {
     response.destroy();
@@ -189,11 +194,11 @@ async function readHttpsBody(url, headers, maxBytes) {
   });
 }
 
-async function httpGetJson(url) {
+async function httpGetJson(url, timeoutMs = HTTP_TIMEOUT_MS) {
   const text = await readHttpsBody(url, {
     'User-Agent': 'lingxiu-cover',
     Accept: 'application/vnd.github+json, application/json'
-  }, HTTP_MAX_JSON_BYTES);
+  }, HTTP_MAX_JSON_BYTES, timeoutMs);
   try { return JSON.parse(text); }
   catch { throw new Error('伺服器回傳的 JSON 格式不正確'); }
 }
@@ -606,6 +611,48 @@ function normalizeMediaRequest(url, kind, quality) {
   return { url: parsed.href, kind, quality: normalizedQuality };
 }
 
+function sanitizeMediaTitle(value) {
+  return String(value || '')
+    .replace(/[\u0000-\u001F\u007F]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 128);
+}
+
+async function fetchYouTubeMetadata(value) {
+  const url = normalizeMediaRequest(value, 'video').url;
+  const oEmbedUrl = `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(url)}`;
+  try {
+    const metadata = await httpGetJson(oEmbedUrl, YOUTUBE_OEMBED_TIMEOUT_MS);
+    const title = sanitizeMediaTitle(metadata && metadata.title);
+    if (title) return { title, url };
+  } catch {}
+
+  try {
+    const { stdout } = await execFileP(resolveYtDlpPath(), [
+      '--no-cache-dir',
+      '--no-playlist',
+      '--skip-download',
+      '--no-warnings',
+      '--socket-timeout', '10',
+      '--extractor-retries', '1',
+      '--print', '%(title)j',
+      '--', url
+    ], {
+      windowsHide: true,
+      env: spawnEnv(),
+      timeout: YOUTUBE_METADATA_TIMEOUT_MS,
+      maxBuffer: 256 * 1024
+    });
+    const output = String(stdout || '').trim();
+    let rawTitle = output;
+    try { rawTitle = JSON.parse(output); } catch {}
+    const title = sanitizeMediaTitle(rawTitle);
+    if (title) return { title, url };
+  } catch {}
+  throw new Error('無法取得 YouTube 影片名稱，請手動輸入公告歌名');
+}
+
 function isIncompleteCacheName(name) {
   return /\.(?:part|ytdl|tmp|temp|download)(?:\.|$)/i.test(name) || /\.f\d+\.[^.]+(?:\.part)?$/i.test(name);
 }
@@ -823,9 +870,15 @@ function sanitizeConfig(input) {
     if (!isPlainObject(item)) return [];
     try {
       const normalized = normalizeMediaRequest(boundedString(item.url, '', 4096), 'video').url;
-      return [{ title: boundedString(item.title, '自訂敬拜影片', 128), url: normalized }];
+      return [{ title: sanitizeMediaTitle(item.title) || '自訂敬拜影片', url: normalized }];
     } catch { return []; }
   }) : [];
+  const worshipTitle = sanitizeMediaTitle(value.worshipTitle);
+  let worshipTitleUrl = '';
+  if (value.worshipTitleUrl) {
+    try { worshipTitleUrl = normalizeMediaRequest(boundedString(value.worshipTitleUrl, '', 4096), 'video').url; }
+    catch {}
+  }
   const backgroundFile = isSafeBackgroundFileName(value.backgroundFile) ? value.backgroundFile : '';
   const book = Object.prototype.hasOwnProperty.call(BIBLE_GATEWAY_BOOKS, value.scriptureBook)
     ? value.scriptureBook : DEFAULT_CONFIG.scriptureBook;
@@ -851,9 +904,12 @@ function sanitizeConfig(input) {
     worshipUrl: boundedString(value.worshipUrl, '', 4096),
     useWorshipPreset: value.useWorshipPreset === true,
     worshipPreset: boundedString(value.worshipPreset, '', 4096),
+    worshipTitle,
+    worshipTitleUrl,
     customWorshipPresets: presets,
     musicVolume: Number.isFinite(volume) ? Math.min(1, Math.max(0, volume)) : DEFAULT_CONFIG.musicVolume,
     autoPlayMusic: value.autoPlayMusic !== false,
+    preventLeftArrowWorship: value.preventLeftArrowWorship !== false,
     videoQuality,
     cacheKeepDays: boundedInteger(value.cacheKeepDays, DEFAULT_CONFIG.cacheKeepDays, 0, 3650),
     fontFamily: boundedString(value.fontFamily, DEFAULT_CONFIG.fontFamily, 100),
@@ -1093,6 +1149,10 @@ function registerIpc() {
       };
     }
     catch { return { cached: false }; }
+  });
+  trustedHandle('youtube:metadata', async (url) => {
+    try { return { ok: true, ...(await fetchYouTubeMetadata(url)) }; }
+    catch (e) { return { ok: false, error: e.message }; }
   });
   trustedHandle('cache:size', async () => cacheSize());
   trustedHandle('cache:clean', async (keepDays) => cleanCache(boundedInteger(keepDays, 0, 0, 3650)));

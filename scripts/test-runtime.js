@@ -126,10 +126,8 @@ function scriptureFixture(count) {
 function loadScripturePaginationFunctions(pageFits) {
   return loadFunctions(
     rendererSource,
-    ['logicalVerseCount', 'lastLogicalVerseGroup', 'rebalanceScriptureTail', 'buildScripturePagesByFit'],
+    ['logicalVerseCount', 'buildScripturePagesByFit'],
     {
-      SCRIPTURE_MIN_VERSES_PER_PAGE: 4,
-      SCRIPTURE_MAX_VERSES_PER_PAGE: 6,
       scripturePageFits: pageFits,
       // Oversized-verse behavior has its own focused tests below. Keeping this
       // stub identity-like makes page distribution deterministic.
@@ -222,6 +220,52 @@ test('accepts real YouTube hosts and rejects lookalike media URLs', () => {
   assert.throws(() => normalizeMediaRequest('https://youtu.be/abc', 'document', 1080), /audio.*video/);
 });
 
+test('fetches a safe YouTube title with oEmbed and yt-dlp fallback', async () => {
+  let oEmbedFails = false;
+  let requestedOEmbedUrl = '';
+  let execCall = null;
+  const functions = loadFunctions(
+    mainSource,
+    ['normalizeMediaRequest', 'sanitizeMediaTitle', 'fetchYouTubeMetadata'],
+    {
+      httpGetJson: async (url) => {
+        requestedOEmbedUrl = url;
+        if (oEmbedFails) throw new Error('offline');
+        return { title: '  測試\n敬拜   歌曲  ' };
+      },
+      execFileP: async (...args) => {
+        execCall = args;
+        return { stdout: '"備援 敬拜標題"\n' };
+      },
+      resolveYtDlpPath: () => 'yt-dlp-test',
+      spawnEnv: () => ({ NO_COLOR: '1' }),
+      YOUTUBE_OEMBED_TIMEOUT_MS: 5_000,
+      YOUTUBE_METADATA_TIMEOUT_MS: 15_000
+    }
+  );
+
+  assert.deepEqual(plain(await functions.fetchYouTubeMetadata('https://youtu.be/abc123?si=share')), {
+    title: '測試 敬拜 歌曲',
+    url: 'https://youtu.be/abc123?si=share'
+  });
+  assert.match(requestedOEmbedUrl, /^https:\/\/www\.youtube\.com\/oembed\?/);
+  assert.equal(execCall, null, 'yt-dlp should not run when oEmbed succeeds');
+
+  oEmbedFails = true;
+  assert.deepEqual(plain(await functions.fetchYouTubeMetadata('https://www.youtube.com/watch?v=xyz789')), {
+    title: '備援 敬拜標題',
+    url: 'https://www.youtube.com/watch?v=xyz789'
+  });
+  assert.equal(execCall[0], 'yt-dlp-test');
+  assert.deepEqual(plain(execCall[1].slice(-2)), ['--', 'https://www.youtube.com/watch?v=xyz789']);
+  assert.equal(execCall[2].timeout, 15_000);
+  assert.equal(functions.sanitizeMediaTitle('x'.repeat(200)).length, 128);
+  await assert.rejects(
+    () => functions.fetchYouTubeMetadata('https://youtube.com.evil.example/watch?v=abc123'),
+    /YouTube/
+  );
+});
+
 test('validates custom worship presets with the same YouTube policy', () => {
   const { normalizeCustomWorshipUrl } = loadFunctions(rendererSource, ['normalizeCustomWorshipUrl']);
 
@@ -232,6 +276,197 @@ test('validates custom worship presets with the same YouTube policy', () => {
   assert.equal(normalizeCustomWorshipUrl('http://youtube.com/watch?v=abc'), '');
   assert.equal(normalizeCustomWorshipUrl('https://youtube.com.evil.example/watch?v=abc'), '');
   assert.equal(normalizeCustomWorshipUrl('https://example.com/video'), '');
+});
+
+test('does not let a slow title lookup overwrite a newer custom worship URL', async () => {
+  const pending = new Map();
+  const elements = {
+    inCustomWorshipUrl: { value: '' },
+    inCustomWorshipTitle: { value: '', dataset: {} }
+  };
+  const functions = loadFunctions(
+    rendererSource,
+    [
+      'youtubeVideoId',
+      'normalizeWorshipTitle',
+      'meaningfulWorshipTitle',
+      'sameWorshipUrl',
+      'normalizeCustomWorshipUrl',
+      'prepareWorshipTitleDraft',
+      'prefillCustomWorshipTitle'
+    ],
+    {
+      $: (id) => elements[id],
+      customWorshipTitleRequestToken: 0,
+      lookupWorshipTitle: (url) => new Promise((resolve) => pending.set(url, resolve))
+    }
+  );
+
+  elements.inCustomWorshipUrl.value = 'https://youtu.be/first11';
+  const first = functions.prefillCustomWorshipTitle();
+  elements.inCustomWorshipUrl.value = 'https://youtu.be/second22';
+  const second = functions.prefillCustomWorshipTitle();
+
+  pending.get('https://youtu.be/second22').call(null, '第二首歌');
+  await second;
+  assert.equal(elements.inCustomWorshipTitle.value, '第二首歌');
+  assert.equal(elements.inCustomWorshipTitle.dataset.url, 'https://youtu.be/second22');
+
+  pending.get('https://youtu.be/first11').call(null, '第一首歌');
+  await first;
+  assert.equal(elements.inCustomWorshipTitle.value, '第二首歌');
+});
+
+test('does not add or clear a newer custom worship draft after a stale lookup', async () => {
+  let resolveLookup;
+  const cfg = { customWorshipPresets: [] };
+  const elements = {
+    inCustomWorshipUrl: { value: 'https://youtu.be/first11' },
+    inCustomWorshipTitle: { value: '', dataset: {}, focus() {} },
+    btnAddWorshipPreset: { textContent: '加入', disabled: false }
+  };
+  const functions = loadFunctions(
+    rendererSource,
+    [
+      'youtubeVideoId',
+      'normalizeWorshipTitle',
+      'meaningfulWorshipTitle',
+      'sameWorshipUrl',
+      'normalizeCustomWorshipUrl',
+      'customWorshipPresets',
+      'addCustomWorshipPreset'
+    ],
+    {
+      cfg,
+      $: (id) => elements[id],
+      customWorshipTitleRequestToken: 0,
+      lookupWorshipTitle: () => new Promise((resolve) => { resolveLookup = resolve; }),
+      renderCustomWorshipPresets() {},
+      applyWorshipMode() {},
+      collectSettings() {},
+      toast() {},
+      window: { api: { setConfig: async () => {} } }
+    }
+  );
+
+  const add = functions.addCustomWorshipPreset();
+  elements.inCustomWorshipUrl.value = 'https://youtu.be/second22';
+  elements.inCustomWorshipTitle.value = '第二首歌';
+  resolveLookup('第一首歌');
+  await add;
+
+  assert.deepEqual(cfg.customWorshipPresets, []);
+  assert.equal(elements.inCustomWorshipUrl.value, 'https://youtu.be/second22');
+  assert.equal(elements.inCustomWorshipTitle.value, '第二首歌');
+});
+
+test('keeps an active inline worship-title draft when metadata arrives', () => {
+  const cfg = {
+    customWorshipPresets: [{ title: '自訂敬拜影片', url: 'https://youtu.be/first11' }]
+  };
+  const input = { value: '我正在編輯的歌名' };
+  const option = { textContent: '自訂敬拜影片' };
+  const elements = {
+    customWorshipList: { querySelector: () => input },
+    customWorshipGroup: { querySelector: () => option }
+  };
+  const functions = loadFunctions(
+    rendererSource,
+    [
+      'normalizeWorshipTitle',
+      'meaningfulWorshipTitle',
+      'customWorshipPresets',
+      'customWorshipTitleEditor',
+      'updateCustomWorshipPresetTitle'
+    ],
+    {
+      cfg,
+      $: (id) => elements[id],
+      document: { activeElement: input }
+    }
+  );
+
+  const title = functions.updateCustomWorshipPresetTitle(0, 'YouTube 自動歌名', true);
+  assert.equal(title, '我正在編輯的歌名');
+  assert.equal(cfg.customWorshipPresets[0].title, '我正在編輯的歌名');
+  assert.equal(input.value, '我正在編輯的歌名');
+  assert.equal(option.textContent, '我正在編輯的歌名');
+});
+
+test('never combines a stale metadata result with a newer worship URL', async () => {
+  const firstUrl = 'https://youtu.be/first11';
+  const secondUrl = 'https://youtu.be/second22';
+  const cfg = {
+    useWorshipPreset: false,
+    worshipUrl: firstUrl,
+    worshipTitle: '',
+    worshipTitleUrl: '',
+    customWorshipPresets: []
+  };
+  const elements = {
+    inWorshipUrl: { value: firstUrl },
+    inWorshipTitle: { value: '', dataset: {} }
+  };
+  let lookupImplementation;
+  let saveResolve = null;
+  let delaySave = false;
+  const document = { getElementById: () => ({ options: [], selectedOptions: [] }) };
+  const functions = loadFunctions(
+    rendererSource,
+    [
+      'youtubeVideoId',
+      'normalizeWorshipTitle',
+      'meaningfulWorshipTitle',
+      'sameWorshipUrl',
+      'worshipOptionAnnouncementTitle',
+      'selectedCustomWorshipPresetIndex',
+      'currentWorshipAnnouncement',
+      'ensureCurrentWorshipAnnouncementTitle'
+    ],
+    {
+      cfg,
+      document,
+      $: (id) => elements[id],
+      lookupWorshipTitle: (url) => lookupImplementation(url),
+      customWorshipPresets: () => cfg.customWorshipPresets,
+      updateCustomWorshipPresetTitle: () => '',
+      toast() {},
+      window: {
+        api: {
+          setConfig: async () => {
+            if (!delaySave) return;
+            await new Promise((resolve) => { saveResolve = resolve; });
+          }
+        }
+      }
+    }
+  );
+
+  let failLookup;
+  lookupImplementation = () => new Promise((resolve) => { failLookup = resolve; });
+  const failedRequest = functions.ensureCurrentWorshipAnnouncementTitle();
+  cfg.worshipUrl = secondUrl;
+  cfg.worshipTitle = '第二首歌';
+  cfg.worshipTitleUrl = secondUrl;
+  failLookup('');
+  assert.deepEqual(plain(await failedRequest), { title: '第二首歌', url: secondUrl });
+
+  cfg.worshipUrl = firstUrl;
+  cfg.worshipTitle = '';
+  cfg.worshipTitleUrl = firstUrl;
+  elements.inWorshipUrl.value = firstUrl;
+  elements.inWorshipTitle.value = '';
+  lookupImplementation = async () => '第一首歌';
+  delaySave = true;
+  const savingRequest = functions.ensureCurrentWorshipAnnouncementTitle();
+  while (!saveResolve) await new Promise((resolve) => setImmediate(resolve));
+  cfg.worshipUrl = secondUrl;
+  cfg.worshipTitle = '第二首歌';
+  cfg.worshipTitleUrl = secondUrl;
+  elements.inWorshipUrl.value = secondUrl;
+  elements.inWorshipTitle.value = '第二首歌';
+  saveResolve();
+  assert.deepEqual(plain(await savingRequest), { title: '第二首歌', url: secondUrl });
 });
 
 test('does not mistake interrupted download fragments for final cache files', () => {
@@ -283,7 +518,11 @@ test('builds the announcement from the renderer implementation and current confi
       'chineseChapterNumber',
       'formatScriptureAnnouncementRef',
       'youtubeVideoId',
+      'normalizeWorshipTitle',
+      'meaningfulWorshipTitle',
+      'sameWorshipUrl',
       'worshipOptionAnnouncementTitle',
+      'selectedCustomWorshipPresetIndex',
       'currentWorshipAnnouncement',
       'buildAnnounceText'
     ],
@@ -360,22 +599,21 @@ test('resolves worship announcement titles by YouTube video id and ignores empty
     worshipPreset: '',
     customWorshipPresets: []
   };
-  const document = {
-    getElementById() {
-      return {
-        options: [
-          { value: '', textContent: '選擇敬拜影片' },
-          {
-            value: 'https://www.youtube.com/watch?v=7mrMh_2tXCI&list=example',
-            textContent: '讚美之泉（美好的創造）'
-          }
-        ]
-      };
-    }
+  const select = {
+    options: [
+      { value: '', textContent: '選擇敬拜影片' },
+      {
+        value: 'https://www.youtube.com/watch?v=7mrMh_2tXCI&list=example',
+        textContent: '讚美之泉（美好的創造）'
+      }
+    ],
+    selectedOptions: []
   };
+  const document = { getElementById: () => select };
   const functions = loadFunctions(
     rendererSource,
-    ['youtubeVideoId', 'worshipOptionAnnouncementTitle', 'currentWorshipAnnouncement'],
+    ['youtubeVideoId', 'normalizeWorshipTitle', 'meaningfulWorshipTitle', 'sameWorshipUrl',
+      'worshipOptionAnnouncementTitle', 'selectedCustomWorshipPresetIndex', 'currentWorshipAnnouncement'],
     { cfg, document }
   );
 
@@ -385,10 +623,58 @@ test('resolves worship announcement titles by YouTube video id and ignores empty
     url: cfg.worshipUrl
   });
 
+  cfg.worshipTitle = '今天要顯示的自訂歌名';
+  cfg.worshipTitleUrl = 'https://www.youtube.com/watch?v=7mrMh_2tXCI';
+  assert.deepEqual(plain(functions.currentWorshipAnnouncement()), {
+    title: '今天要顯示的自訂歌名',
+    url: cfg.worshipUrl
+  }, 'manual announcement title must override a matching built-in option');
+
   cfg.worshipUrl = '';
   cfg.worshipPreset = 'https://youtu.be/old-selection';
   cfg.worshipTitle = '不應套用到空網址';
   assert.deepEqual(plain(functions.currentWorshipAnnouncement()), { title: '', url: '' });
+
+  cfg.worshipUrl = 'https://youtu.be/manual123?si=today';
+  cfg.worshipTitle = '自行加入的敬拜歌曲';
+  cfg.worshipTitleUrl = 'https://www.youtube.com/watch?v=manual123';
+  assert.deepEqual(plain(functions.currentWorshipAnnouncement()), {
+    title: '自行加入的敬拜歌曲',
+    url: cfg.worshipUrl
+  });
+
+  cfg.worshipUrl = 'https://youtu.be/different1';
+  assert.deepEqual(plain(functions.currentWorshipAnnouncement()), {
+    title: '',
+    url: cfg.worshipUrl
+  }, 'a title saved for another URL must not leak into today\'s announcement');
+
+  cfg.worshipTitle = '';
+  cfg.worshipTitleUrl = '';
+  cfg.customWorshipPresets = [{ title: '自訂敬拜影片 1', url: cfg.worshipUrl }];
+  assert.deepEqual(plain(functions.currentWorshipAnnouncement()), {
+    title: '',
+    url: cfg.worshipUrl
+  }, 'legacy placeholder titles should be treated as unresolved');
+
+  cfg.useWorshipPreset = true;
+  cfg.worshipUrl = 'https://youtu.be/duplicate1?si=selected';
+  cfg.customWorshipPresets = [
+    { title: '另一筆已有的歌名', url: 'https://youtu.be/duplicate1?si=older' },
+    { title: '自訂敬拜影片 2', url: cfg.worshipUrl }
+  ];
+  const selectedPlaceholder = {
+    value: cfg.worshipUrl,
+    textContent: '自訂敬拜影片 2',
+    dataset: { index: '1' },
+    selected: true
+  };
+  select.options = [selectedPlaceholder];
+  select.selectedOptions = [selectedPlaceholder];
+  assert.deepEqual(plain(functions.currentWorshipAnnouncement()), {
+    title: '',
+    url: cfg.worshipUrl
+  }, 'a selected legacy duplicate must not borrow another preset title');
 });
 
 test('keeps every built-in worship announcement title paired with the video that will play', () => {
@@ -421,7 +707,8 @@ test('keeps every built-in worship announcement title paired with the video that
   const document = { getElementById: (id) => id === 'worshipPreset' ? select : null };
   const functions = loadFunctions(
     rendererSource,
-    ['youtubeVideoId', 'worshipOptionAnnouncementTitle', 'currentWorshipAnnouncement'],
+    ['youtubeVideoId', 'normalizeWorshipTitle', 'meaningfulWorshipTitle', 'sameWorshipUrl',
+      'worshipOptionAnnouncementTitle', 'selectedCustomWorshipPresetIndex', 'currentWorshipAnnouncement'],
     { cfg, document }
   );
 
@@ -502,31 +789,21 @@ test('parses scripture verses across chapter boundaries without losing chapter i
   );
 });
 
-test('paginates short scripture passages into balanced groups of four to six verses', () => {
-  const pageFits = (verses) => verses.length <= 6;
+test('fills each Scripture page to measured capacity before starting the next', () => {
+  const measuredCapacity = 9;
+  const pageFits = (verses) => verses.length <= measuredCapacity;
   const { buildScripturePagesByFit } = loadScripturePaginationFunctions(pageFits);
-  const expectedDistributions = new Map([
-    [6, [6]],
-    [7, [4, 3]],
-    [8, [4, 4]],
-    [13, [5, 4, 4]],
-    [19, [5, 5, 5, 4]],
-    [25, [5, 5, 5, 5, 5]]
-  ]);
+  const verseCounts = [6, 7, 8, 9, 10, 14, 19, 25];
 
-  for (const [verseCount, expectedDistribution] of expectedDistributions) {
+  for (const verseCount of verseCounts) {
     const input = scriptureFixture(verseCount);
     const pages = plain(buildScripturePagesByFit(input));
     const distribution = pages.map((page) => new Set(page.verses.map((verse) => verse.key)).size);
-    assert.deepEqual(distribution, expectedDistribution, `${verseCount} verses is not balanced`);
-    assert.ok(distribution.every((count) => count <= 6), `${verseCount} verses exceeds six-per-page cap`);
+    assert.equal(pages.length, Math.ceil(verseCount / measuredCapacity), `${verseCount} verses used extra pages`);
+    assert.ok(distribution.every((count) => count <= measuredCapacity), `${verseCount} verses exceeds measured capacity`);
     assert.ok(
-      distribution.every((count) => count >= (verseCount === 7 ? 3 : 4)),
-      `${verseCount} verses has an avoidably sparse page: ${distribution.join(', ')}`
-    );
-    assert.ok(
-      pages.length === 1 || distribution[distribution.length - 1] >= 3,
-      `${verseCount} verses leaves an orphaned one- or two-verse final page`
+      distribution.slice(0, -1).every((count) => count === measuredCapacity),
+      `${verseCount} verses left avoidable space before the final page: ${distribution.join(', ')}`
     );
     assert.deepEqual(
       pages.flatMap((page) => page.verses.map((verse) => verse.key)),
@@ -536,7 +813,7 @@ test('paginates short scripture passages into balanced groups of four to six ver
   }
 });
 
-test('allows fewer than four scripture verses only when the measured page cannot fit more', () => {
+test('obeys measured scripture capacity even on a small viewport', () => {
   const pageFits = (verses) => verses.length <= 3;
   const { buildScripturePagesByFit } = loadScripturePaginationFunctions(pageFits);
   const input = scriptureFixture(8);
@@ -548,6 +825,27 @@ test('allows fewer than four scripture verses only when the measured page cannot
     pages.flatMap((page) => page.verses.map((verse) => verse.key)),
     input.map((verse) => verse.key)
   );
+});
+
+test('keeps the same oversized-verse position when Scripture is repaginated', () => {
+  const { scripturePageAnchor, findScriptureAnchorPage } = loadFunctions(
+    rendererSource,
+    ['scripturePageAnchor', 'findScriptureAnchorPage']
+  );
+  const fragment = (text, continuation = true) => ({ key: '1:1:0', text, continuation });
+  const oldPages = [
+    { verses: [fragment('甲乙丙丁', false)] },
+    { verses: [fragment('戊己庚辛')] },
+    { verses: [fragment('壬癸子丑')] }
+  ];
+  const newPages = [
+    { verses: [fragment('甲乙丙丁戊己', false)] },
+    { verses: [fragment('庚辛壬癸子丑')] }
+  ];
+
+  const anchor = plain(scripturePageAnchor(oldPages, 2));
+  assert.deepEqual(anchor, { key: '1:1:0', offset: 8 });
+  assert.equal(findScriptureAnchorPage(newPages, anchor), 1);
 });
 
 test('splits an oversized scripture verse without losing text or chapter context', () => {
@@ -614,7 +912,7 @@ test('uses code points when splitting an unpunctuated oversized verse', () => {
 test('builds one structured Utmost page with distinct heading, verse and body paragraphs', () => {
   const { createUtmostPage } = loadFunctions(
     rendererSource,
-    ['createUtmostPage'],
+    ['splitUtmostVerseCitation', 'createUtmostPage'],
     { systemDateChinese: () => '7月19日' }
   );
   const maliciousText = '<img src=x onerror=alert(1)>';
@@ -629,7 +927,11 @@ test('builds one structured Utmost page with distinct heading, verse and body pa
     type: 'utmost',
     date: '7月19日',
     title: `信心的操練 ${maliciousText}`,
-    verse: '你們要休息，要知道我是神。',
+    verse: {
+      text: '你們要休息，要知道我是神。',
+      quote: '你們要休息，要知道我是神。',
+      citation: ''
+    },
     paragraphs: ['第一段正文。', '第二段正文。', '第三段正文。']
   });
   assert.equal(Array.isArray(page), false, 'Utmost must be represented by one page object');
@@ -641,8 +943,23 @@ test('builds one structured Utmost page with distinct heading, verse and body pa
   assert.deepEqual(emptyBody.paragraphs, ['今天暫時沒有正文內容。']);
 });
 
-test('uses unmodified left and right arrows for Scripture and Utmost navigation', () => {
+test('keeps the complete Utmost citation together after the final dash', () => {
+  const { splitUtmostVerseCitation } = loadFunctions(rendererSource, ['splitUtmostVerseCitation']);
+  const cases = [
+    ['你們要心裡不要憂愁。—約翰福音', '你們要心裡不要憂愁。', '—約翰福音'],
+    ['他說—不要怕—路加福音八章五十節', '他說—不要怕', '—路加福音八章五十節'],
+    ['平安留給你們。–約翰福音十四章', '平安留給你們。', '–約翰福音十四章'],
+    ['你們要喜樂。 - Philippians 4:4', '你們要喜樂。', '- Philippians 4:4'],
+    ['約翰福音 3-16', '約翰福音 3-16', '']
+  ];
+  for (const [value, quote, citation] of cases) {
+    assert.deepEqual(plain(splitUtmostVerseCitation(value)), { text: value, quote, citation });
+  }
+});
+
+test('uses arrow keys for reading while optionally blocking Scripture-to-worship back navigation', () => {
   const calls = [];
+  const cfg = { preventLeftArrowWorship: true };
   let settingsOpen = false;
   const elements = {
     flowScreen: { classList: { contains: (name) => name === 'hidden' ? false : false } },
@@ -653,7 +970,9 @@ test('uses unmodified left and right arrows for Scripture and Utmost navigation'
     ['isEditableFlowNavigationTarget', 'handleFlowArrowNavigation'],
     {
       $: (id) => elements[id],
+      cfg,
       flowStep: 'scripture',
+      flowPageIndex: 0,
       worshipActive: false,
       flowTransitioning: false,
       flowLoading: false,
@@ -685,7 +1004,13 @@ test('uses unmodified left and right arrows for Scripture and Utmost navigation'
   const left = arrowEvent('ArrowLeft');
   assert.equal(handleFlowArrowNavigation(left.event), true);
   assert.equal(left.prevented(), true);
-  assert.deepEqual(calls, [['next', 'keyboard'], ['prev']]);
+  assert.deepEqual(calls, [['next', 'keyboard']], 'left arrow should be consumed on the first Scripture page');
+
+  cfg.preventLeftArrowWorship = false;
+  const unlockedLeft = arrowEvent('ArrowLeft');
+  assert.equal(handleFlowArrowNavigation(unlockedLeft.event), true);
+  assert.equal(unlockedLeft.prevented(), true);
+  assert.deepEqual(calls, [['next', 'keyboard'], ['prev']], 'disabling the safeguard should restore back navigation');
 
   for (const blocked of [
     arrowEvent('ArrowRight', { repeat: true }),
@@ -703,13 +1028,35 @@ test('uses unmodified left and right arrows for Scripture and Utmost navigation'
   assert.deepEqual(calls, [['next', 'keyboard'], ['prev']]);
 
   settingsOpen = false;
+  const laterCalls = [];
+  const laterNavigation = loadFunctions(
+    rendererSource,
+    ['isEditableFlowNavigationTarget', 'handleFlowArrowNavigation'],
+    {
+      $: (id) => elements[id],
+      cfg: { preventLeftArrowWorship: true },
+      flowStep: 'scripture',
+      flowPageIndex: 1,
+      worshipActive: false,
+      flowTransitioning: false,
+      flowLoading: false,
+      nextFlowPageOrStep: (source) => laterCalls.push(['next', source]),
+      prevFlowPageOrStep: () => laterCalls.push(['prev'])
+    }
+  );
+  const laterLeft = arrowEvent('ArrowLeft');
+  assert.equal(laterNavigation.handleFlowArrowNavigation(laterLeft.event), true);
+  assert.equal(laterLeft.prevented(), true);
+  assert.deepEqual(laterCalls, [['prev']], 'left arrow must still move between Scripture pages');
   const utmostCalls = [];
   const utmostNavigation = loadFunctions(
     rendererSource,
     ['isEditableFlowNavigationTarget', 'handleFlowArrowNavigation'],
     {
       $: (id) => elements[id],
+      cfg: { preventLeftArrowWorship: true },
       flowStep: 'utmost',
+      flowPageIndex: 0,
       worshipActive: false,
       flowTransitioning: false,
       flowLoading: false,
@@ -720,7 +1067,10 @@ test('uses unmodified left and right arrows for Scripture and Utmost navigation'
   const utmostRight = arrowEvent('ArrowRight');
   assert.equal(utmostNavigation.handleFlowArrowNavigation(utmostRight.event), true);
   assert.equal(utmostRight.prevented(), true);
-  assert.deepEqual(utmostCalls, [['next', 'keyboard']]);
+  const utmostLeft = arrowEvent('ArrowLeft');
+  assert.equal(utmostNavigation.handleFlowArrowNavigation(utmostLeft.event), true);
+  assert.equal(utmostLeft.prevented(), true);
+  assert.deepEqual(utmostCalls, [['next', 'keyboard'], ['prev']]);
 });
 
 test('treats one inertial wheel gesture as at most one reading-page action', () => {
@@ -854,6 +1204,36 @@ test('ignores repeated Escape keydown events during reading completion confirmat
   assert.equal(returnRequests, 1, 'one held Escape key armed and completed the flow');
 });
 
+test('reports the current reading page and progress percentage', () => {
+  const cases = [
+    { index: 0, total: 3, text: '1 / 3', percentage: 100 / 3, section: '經文' },
+    { index: 1, total: 3, text: '2 / 3', percentage: 200 / 3, section: '經文' },
+    { index: 2, total: 3, text: '3 / 3', percentage: 100, section: '經文' },
+    { index: 0, total: 1, text: '1 / 1', percentage: 100, section: '竭誠獻上', step: 'utmost' }
+  ];
+
+  for (const item of cases) {
+    const properties = {};
+    const attributes = {};
+    const info = {
+      textContent: '',
+      style: { setProperty: (name, value) => { properties[name] = value; } },
+      setAttribute: (name, value) => { attributes[name] = value; }
+    };
+    const { updateFlowPageProgress } = loadFunctions(rendererSource, ['updateFlowPageProgress'], {
+      $: () => info,
+      flowPages: Array.from({ length: item.total }, () => ({ type: item.step || 'scripture' })),
+      flowPageIndex: item.index,
+      flowStep: item.step || 'scripture'
+    });
+
+    updateFlowPageProgress();
+    assert.equal(info.textContent, item.text);
+    assert.ok(Math.abs(Number.parseFloat(properties['--flow-page-progress']) - item.percentage) < 0.001);
+    assert.match(attributes['aria-label'], new RegExp(`${item.section}.*第 ${item.index + 1} 頁.*共 ${item.total} 頁`));
+  }
+});
+
 function loadUtmostConfirmationHarness() {
   let now = 1000;
   let nextTimerId = 1;
@@ -866,6 +1246,7 @@ function loadUtmostConfirmationHarness() {
   const functions = loadFunctions(
     rendererSource,
     [
+      'setFlowButtonLabel',
       'isUtmostFinalPage',
       'resetUtmostFinishConfirmation',
       'requestUtmostFinishConfirmation',
@@ -888,7 +1269,8 @@ function loadUtmostConfirmationHarness() {
       utmostFinishConfirmUntil: 0,
       utmostFinishConfirmTimer: null,
       UTMOST_FINISH_CONFIRM_MS: 3500,
-      revealUtmostFooter: () => { calls.revealed++; },
+      revealFlowFooter: () => { calls.revealed++; },
+      scheduleFlowFooterHide: () => {},
       toast: (message, milliseconds) => calls.toasts.push([message, milliseconds]),
       returnToMainCover: () => { calls.returned++; },
       prevFlowStep: () => calls.steps.push('previous-step'),
@@ -1151,7 +1533,8 @@ test('keeps the post-Utmost silence latch when navigating back before the cover'
     musicRequestToken: 0,
     musicFadeTimer: null,
     resetUtmostFinishConfirmation: () => false,
-    hideUtmostFooterImmediately: () => {},
+    isReadingFlowStep: (step) => step === 'scripture' || step === 'utmost',
+    hideFlowFooterImmediately: () => {},
     stopWorshipPlayback: () => {},
     pauseMusicForFlow: () => {},
     setFlowVisible: () => {},

@@ -25,7 +25,7 @@ let flowNavigationToken = 0;
 let flowPageRenderToken = 0;
 let flowTransitioning = false;
 let flowResizeTimer = null;
-let utmostFooterHideTimer = null;
+let flowFooterHideTimer = null;
 let utmostFinishConfirmUntil = 0;
 let utmostFinishConfirmTimer = null;
 let flowWheelDelta = 0;
@@ -368,10 +368,45 @@ function youtubeVideoId(value) {
   }
 }
 
+function normalizeWorshipTitle(value) {
+  return String(value || '')
+    .replace(/[\u0000-\u001F\u007F]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 128);
+}
+
+function meaningfulWorshipTitle(value) {
+  const title = normalizeWorshipTitle(value);
+  return /^自訂敬拜影片(?:\s+\d+)?$/.test(title) ? '' : title;
+}
+
+function sameWorshipUrl(left, right) {
+  const leftUrl = String(left || '').trim();
+  const rightUrl = String(right || '').trim();
+  if (!leftUrl || !rightUrl) return false;
+  if (leftUrl === rightUrl) return true;
+  const leftVideoId = youtubeVideoId(leftUrl);
+  return !!leftVideoId && leftVideoId === youtubeVideoId(rightUrl);
+}
+
 function worshipOptionAnnouncementTitle(option) {
   if (!option) return '';
   const explicit = option.dataset && option.dataset.announcementTitle;
-  return String(explicit || option.textContent || '').replace(/\s+/g, ' ').trim();
+  return normalizeWorshipTitle(explicit || option.textContent || '');
+}
+
+function selectedCustomWorshipPresetIndex(url) {
+  if (!cfg.useWorshipPreset || typeof document === 'undefined') return -1;
+  const select = document.getElementById('worshipPreset');
+  if (!select) return -1;
+  const selected = select.selectedOptions && select.selectedOptions[0]
+    ? select.selectedOptions[0]
+    : Array.from(select.options || []).find((item) => item.selected);
+  const index = Number(selected && selected.dataset && selected.dataset.index);
+  const presets = Array.isArray(cfg.customWorshipPresets) ? cfg.customWorshipPresets : [];
+  return Number.isInteger(index) && index >= 0 && presets[index] && sameWorshipUrl(presets[index].url, url)
+    ? index : -1;
 }
 
 function currentWorshipAnnouncement() {
@@ -379,16 +414,15 @@ function currentWorshipAnnouncement() {
   const url = String(cfg.worshipUrl || '').trim();
   if (!url) return { title: '', url: '' };
 
-  const activeVideoId = youtubeVideoId(url);
-  const isCurrentUrl = (candidate) => {
-    const candidateUrl = String(candidate || '').trim();
-    if (!candidateUrl) return false;
-    if (candidateUrl === url) return true;
-    return !!activeVideoId && youtubeVideoId(candidateUrl) === activeVideoId;
-  };
+  const isCurrentUrl = (candidate) => sameWorshipUrl(candidate, url);
   let title = '';
   let select = null;
   if (typeof document !== 'undefined') select = document.getElementById('worshipPreset');
+
+  // In manual mode the scoped, user-editable announcement title is authoritative.
+  if (!cfg.useWorshipPreset && isCurrentUrl(cfg.worshipTitleUrl)) {
+    title = meaningfulWorshipTitle(cfg.worshipTitle);
+  }
 
   // Preset mode must use the title of the option the user actually selected.
   // This prevents a duplicate custom preset from lending today's video an old name.
@@ -397,6 +431,7 @@ function currentWorshipAnnouncement() {
       ? select.selectedOptions[0]
       : Array.from(select.options || []).find((item) => item.selected);
     if (selected && isCurrentUrl(selected.value)) title = worshipOptionAnnouncementTitle(selected);
+    title = meaningfulWorshipTitle(title);
   }
 
   if (!title && select) {
@@ -406,14 +441,97 @@ function currentWorshipAnnouncement() {
   }
 
   const presets = Array.isArray(cfg.customWorshipPresets) ? cfg.customWorshipPresets : [];
-  const custom = presets.find((item) => item && isCurrentUrl(item.url));
-  if (!title && custom) title = String(custom.title || '').replace(/\s+/g, ' ').trim();
+  const selectedCustomIndex = selectedCustomWorshipPresetIndex(url);
+  const custom = selectedCustomIndex >= 0
+    ? presets[selectedCustomIndex]
+    : presets.find((item) => item && isCurrentUrl(item.url));
+  if (!title && custom) title = meaningfulWorshipTitle(custom.title);
 
   if (!title && select) {
     const matchingOption = Array.from(select.options || []).find((item) => isCurrentUrl(item.value));
     if (matchingOption) title = worshipOptionAnnouncementTitle(matchingOption);
   }
+  title = meaningfulWorshipTitle(title);
   return { title, url };
+}
+
+const worshipTitleCache = new Map();
+const worshipTitleInflight = new Map();
+let customWorshipTitleRequestToken = 0;
+let manualWorshipTitleRequestToken = 0;
+
+function worshipTitleCacheKey(url) {
+  return youtubeVideoId(url) || String(url || '').trim();
+}
+
+async function lookupWorshipTitle(url) {
+  const normalizedUrl = normalizeCustomWorshipUrl(url);
+  if (!normalizedUrl) return '';
+  const key = worshipTitleCacheKey(normalizedUrl);
+  if (worshipTitleCache.has(key)) return worshipTitleCache.get(key);
+  if (worshipTitleInflight.has(key)) return worshipTitleInflight.get(key);
+  const request = window.api.youtubeMetadata(normalizedUrl)
+    .then((result) => result && result.ok ? meaningfulWorshipTitle(result.title) : '')
+    .catch(() => '')
+    .then((title) => {
+      if (title) worshipTitleCache.set(key, title);
+      return title;
+    })
+    .finally(() => worshipTitleInflight.delete(key));
+  worshipTitleInflight.set(key, request);
+  return request;
+}
+
+async function ensureCurrentWorshipAnnouncementTitle(showProgress = false) {
+  let worship = currentWorshipAnnouncement();
+  if (!worship.url || worship.title) return worship;
+  const requestedUrl = worship.url;
+  if (showProgress) toast('正在讀取敬拜歌名…', 4000);
+  const title = await lookupWorshipTitle(requestedUrl);
+  if (!sameWorshipUrl(cfg.worshipUrl, requestedUrl)) return currentWorshipAnnouncement();
+  if (!title) return currentWorshipAnnouncement();
+
+  const presets = customWorshipPresets();
+  const selectedCustomIndex = selectedCustomWorshipPresetIndex(requestedUrl);
+  const customIndex = selectedCustomIndex >= 0
+    ? selectedCustomIndex
+    : presets.findIndex((item) => item && sameWorshipUrl(item.url, requestedUrl));
+  const custom = customIndex >= 0 ? presets[customIndex] : null;
+  let resolvedTitle = title;
+  if (custom && !meaningfulWorshipTitle(custom.title)) {
+    resolvedTitle = updateCustomWorshipPresetTitle(customIndex, title, true);
+    if (!resolvedTitle) return currentWorshipAnnouncement();
+  }
+  if (!cfg.useWorshipPreset) {
+    cfg.worshipTitle = resolvedTitle;
+    cfg.worshipTitleUrl = requestedUrl;
+    const manualTitle = $('inWorshipTitle');
+    if (manualTitle && sameWorshipUrl($('inWorshipUrl').value, requestedUrl)) {
+      manualTitle.value = resolvedTitle;
+      manualTitle.dataset.url = requestedUrl;
+    }
+  }
+  await window.api.setConfig(cfg);
+  if (!sameWorshipUrl(cfg.worshipUrl, requestedUrl)) return currentWorshipAnnouncement();
+  worship = currentWorshipAnnouncement();
+  return worship.title ? worship : { title: resolvedTitle, url: requestedUrl };
+}
+
+function focusWorshipTitleEditor(url) {
+  openSettings();
+  const customIndex = customWorshipPresets().findIndex((item) => item && sameWorshipUrl(item.url, url));
+  if (customIndex >= 0) {
+    const input = $('customWorshipList').querySelector(
+      `.custom-worship-item[data-index="${customIndex}"] .custom-worship-title-input`
+    );
+    if (input) { input.focus(); input.select(); return; }
+  }
+  if (cfg.useWorshipPreset) {
+    $('inCustomWorshipUrl').value = url;
+    $('inCustomWorshipTitle').focus();
+  } else {
+    $('inWorshipTitle').focus();
+  }
 }
 
 function buildAnnounceText(now = new Date()) {
@@ -451,6 +569,12 @@ async function copyAnnounce() {
   // debounced config write finishes. The announcement then mirrors playback.
   const settingsPanel = $('settingsPanel');
   if (settingsPanel && !settingsPanel.classList.contains('hidden')) collectSettings();
+  const worship = await ensureCurrentWorshipAnnouncementTitle(true);
+  if (worship.url && !worship.title) {
+    focusWorshipTitleEditor(worship.url);
+    toast('無法自動取得歌名，請先填寫「公告歌名」再複製', 5200);
+    return;
+  }
   const text = buildAnnounceText();
   await window.api.writeClipboard(text);
   toast('已複製公告，可以直接貼到群組上', 3200);
@@ -502,6 +626,7 @@ function renderCustomWorshipPresets() {
       const option = document.createElement('option');
       option.value = item.url;
       option.textContent = title;
+      option.dataset.index = String(index);
       group.appendChild(option);
     }
     if (list) {
@@ -511,7 +636,7 @@ function renderCustomWorshipPresets() {
       row.dataset.index = String(index);
       row.innerHTML = `
         <span class="drag-handle" aria-hidden="true">⋮⋮</span>
-        <span class="custom-worship-title"></span>
+        <input type="text" class="custom-worship-title-input" maxlength="128" aria-label="公告歌名" draggable="false" />
         <button type="button" class="custom-delete-btn" title="刪除" aria-label="刪除">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M6 7h12" />
@@ -522,13 +647,41 @@ function renderCustomWorshipPresets() {
           </svg>
         </button>
       `;
-      row.querySelector('.custom-worship-title').textContent = title;
+      row.querySelector('.custom-worship-title-input').value = title;
       list.appendChild(row);
     }
   });
   if ($('worshipPreset')) $('worshipPreset').value = selectedUrl;
   if (group) group.hidden = !group.children.length;
   if (list) list.hidden = !presets.length;
+}
+
+function customWorshipTitleEditor(index) {
+  const list = $('customWorshipList');
+  return list ? list.querySelector(
+    `.custom-worship-item[data-index="${index}"] .custom-worship-title-input`
+  ) : null;
+}
+
+function updateCustomWorshipPresetTitle(index, value, respectActiveEditor = false) {
+  const presets = customWorshipPresets();
+  const item = presets[index];
+  if (!item) return '';
+  const input = customWorshipTitleEditor(index);
+  const isActive = !!(input && typeof document !== 'undefined' && document.activeElement === input);
+  let title = meaningfulWorshipTitle(value);
+  if (respectActiveEditor && isActive) {
+    const draft = meaningfulWorshipTitle(input.value);
+    if (!draft) return '';
+    title = draft;
+  }
+  if (!title) return '';
+  item.title = title;
+  if (input && !(respectActiveEditor && isActive)) input.value = title;
+  const group = $('customWorshipGroup');
+  const option = group && group.querySelector(`option[data-index="${index}"]`);
+  if (option) option.textContent = title;
+  return title;
 }
 
 function normalizeCustomWorshipUrl(value) {
@@ -546,6 +699,55 @@ function normalizeCustomWorshipUrl(value) {
   }
 }
 
+function prepareWorshipTitleDraft(titleInput, url) {
+  const resolvedUrl = titleInput.dataset.url || '';
+  if (resolvedUrl && !sameWorshipUrl(resolvedUrl, url)) {
+    titleInput.value = '';
+    delete titleInput.dataset.url;
+  }
+}
+
+async function prefillCustomWorshipTitle() {
+  const url = normalizeCustomWorshipUrl($('inCustomWorshipUrl').value);
+  const titleInput = $('inCustomWorshipTitle');
+  prepareWorshipTitleDraft(titleInput, url);
+  if (!url || meaningfulWorshipTitle(titleInput.value)) return;
+  const token = ++customWorshipTitleRequestToken;
+  const title = await lookupWorshipTitle(url);
+  if (token !== customWorshipTitleRequestToken) return;
+  if (!sameWorshipUrl($('inCustomWorshipUrl').value, url) || meaningfulWorshipTitle(titleInput.value)) return;
+  if (title) {
+    titleInput.value = title;
+    titleInput.dataset.url = url;
+  }
+}
+
+async function prefillManualWorshipTitle() {
+  const url = normalizeCustomWorshipUrl($('inWorshipUrl').value);
+  const titleInput = $('inWorshipTitle');
+  prepareWorshipTitleDraft(titleInput, url);
+  if (!url || meaningfulWorshipTitle(titleInput.value)) return;
+  const known = currentWorshipAnnouncement();
+  const knownTitle = sameWorshipUrl(known.url, url) ? meaningfulWorshipTitle(known.title) : '';
+  if (knownTitle) {
+    titleInput.value = knownTitle;
+    titleInput.dataset.url = url;
+    collectSettings();
+    await window.api.setConfig(cfg);
+    return;
+  }
+  const token = ++manualWorshipTitleRequestToken;
+  const title = await lookupWorshipTitle(url);
+  if (token !== manualWorshipTitleRequestToken) return;
+  if (!sameWorshipUrl($('inWorshipUrl').value, url) || meaningfulWorshipTitle(titleInput.value)) return;
+  if (title) {
+    titleInput.value = title;
+    titleInput.dataset.url = url;
+    collectSettings();
+    await window.api.setConfig(cfg);
+  }
+}
+
 async function addCustomWorshipPreset() {
   const input = $('inCustomWorshipUrl');
   const url = normalizeCustomWorshipUrl(input.value);
@@ -553,19 +755,73 @@ async function addCustomWorshipPreset() {
     toast('請貼上有效的 YouTube 網址', 3000);
     return;
   }
-  const presets = customWorshipPresets();
-  const existing = presets.find((item) => item.url === url);
-  if (!existing) {
-    presets.push({ title: `自訂敬拜影片 ${presets.length + 1}`, url });
-    renderCustomWorshipPresets();
+  let presets = customWorshipPresets();
+  let existing = presets.find((item) => item && sameWorshipUrl(item.url, url));
+  const hadExisting = !!existing;
+  const titleInput = $('inCustomWorshipTitle');
+  let title = meaningfulWorshipTitle(titleInput.value) || (existing && meaningfulWorshipTitle(existing.title));
+  const addButton = $('btnAddWorshipPreset');
+  if (!title) {
+    const lookupToken = ++customWorshipTitleRequestToken;
+    const originalText = addButton.textContent;
+    addButton.disabled = true;
+    addButton.textContent = '讀取中…';
+    try { title = await lookupWorshipTitle(url); }
+    finally {
+      addButton.disabled = false;
+      addButton.textContent = originalText;
+    }
+    if (lookupToken !== customWorshipTitleRequestToken || !sameWorshipUrl(input.value, url)) {
+      toast('連結已變更，請確認新的歌名後再加入', 3200);
+      return;
+    }
+    title = meaningfulWorshipTitle(titleInput.value) || title;
+    presets = customWorshipPresets();
+    const currentExisting = presets.find((item) => item && sameWorshipUrl(item.url, url));
+    if (hadExisting && !currentExisting) {
+      toast('常用清單已變更，這次沒有加入', 3200);
+      return;
+    }
+    existing = currentExisting;
   }
+  if (!title) {
+    titleInput.focus();
+    toast('無法自動取得歌名，請填寫公告歌名後再加入', 4800);
+    return;
+  }
+  let selectedUrl = url;
+  if (!existing) {
+    presets.push({ title, url });
+  } else {
+    existing.title = title;
+    selectedUrl = existing.url;
+  }
+  renderCustomWorshipPresets();
   $('useWorshipPreset').checked = true;
-  $('worshipPreset').value = url;
+  $('worshipPreset').value = selectedUrl;
   input.value = '';
+  titleInput.value = '';
+  delete titleInput.dataset.url;
+  customWorshipTitleRequestToken++;
   applyWorshipMode();
   collectSettings();
   await window.api.setConfig(cfg);
-  toast(existing ? '已選取這部常用敬拜影片' : '已加入常用敬拜影片', 3200);
+  toast(existing ? '已更新並選取這部常用敬拜影片' : `已加入：${title}`, 3600);
+}
+
+async function renameCustomWorshipPreset(index, value, input) {
+  const presets = customWorshipPresets();
+  const item = presets[index];
+  if (!item) return;
+  const title = meaningfulWorshipTitle(value);
+  if (!title) {
+    input.value = item.title || `自訂敬拜影片 ${index + 1}`;
+    toast('公告歌名不能留白', 2600);
+    return;
+  }
+  updateCustomWorshipPresetTitle(index, title);
+  await window.api.setConfig(cfg);
+  toast('已更新公告歌名', 2200);
 }
 
 async function saveCustomWorshipOrder(fromIndex, toIndex) {
@@ -601,13 +857,21 @@ function fillSettings() {
   $('inScheduleUrl').value = cfg.scheduleUrl || '';
   fillScriptureControls();
   $('inMusicUrl').value = cfg.musicUrl || '';
-  $('inWorshipUrl').value = cfg.worshipUrl || '';
+  const manualUrl = cfg.useWorshipPreset && cfg.worshipTitleUrl
+    ? cfg.worshipTitleUrl : cfg.worshipUrl;
+  $('inWorshipUrl').value = manualUrl || '';
+  const manualTitle = sameWorshipUrl(cfg.worshipTitleUrl, manualUrl)
+    ? meaningfulWorshipTitle(cfg.worshipTitle) : '';
+  $('inWorshipTitle').value = manualTitle;
+  if (manualTitle) $('inWorshipTitle').dataset.url = cfg.worshipTitleUrl;
+  else delete $('inWorshipTitle').dataset.url;
   renderCustomWorshipPresets();
   $('worshipPreset').value = cfg.worshipPreset || '';
   $('useWorshipPreset').checked = !!cfg.useWorshipPreset;
   applyWorshipMode();
   $('musicVolume').value = cfg.musicVolume;
   $('autoPlayMusic').checked = !!cfg.autoPlayMusic;
+  $('preventLeftArrowWorship').checked = cfg.preventLeftArrowWorship !== false;
   $('cacheKeepDays').value = String(cfg.cacheKeepDays != null ? cfg.cacheKeepDays : 30);
 }
 
@@ -623,8 +887,15 @@ function collectSettings() {
   cfg.worshipPreset = $('worshipPreset').value;
   // 勾選常用影片時採用下拉選單，否則採用手動輸入網址。
   cfg.worshipUrl = cfg.useWorshipPreset ? cfg.worshipPreset : $('inWorshipUrl').value.trim();
+  if (!cfg.useWorshipPreset) {
+    cfg.worshipTitle = meaningfulWorshipTitle($('inWorshipTitle').value);
+    cfg.worshipTitleUrl = cfg.worshipUrl;
+    if (cfg.worshipTitle) $('inWorshipTitle').dataset.url = cfg.worshipUrl;
+    else delete $('inWorshipTitle').dataset.url;
+  }
   cfg.musicVolume = parseFloat($('musicVolume').value);
   cfg.autoPlayMusic = $('autoPlayMusic').checked;
+  cfg.preventLeftArrowWorship = $('preventLeftArrowWorship').checked;
   cfg.cacheKeepDays = parseInt($('cacheKeepDays').value, 10);
 }
 
@@ -827,7 +1098,7 @@ function toggleMusicPlayPause() {
 
 // ---------- 閱讀流程 ----------
 function setFlowVisible(visible) {
-  if (!visible) hideUtmostFooterImmediately();
+  if (!visible) hideFlowFooterImmediately();
   $('flowScreen').classList.toggle('hidden', !visible);
   $('bgBlur').classList.toggle('hidden', visible);
   $('bgImage').classList.toggle('hidden', visible);
@@ -835,7 +1106,11 @@ function setFlowVisible(visible) {
   document.querySelector('.overlay-bottom').classList.toggle('hidden', visible);
 }
 
-function hideUtmostFooterImmediately() {
+function isReadingFlowStep(step = flowStep) {
+  return step === 'scripture' || step === 'utmost';
+}
+
+function hideFlowFooterImmediately() {
   const screen = $('flowScreen');
   const footer = document.querySelector('.flow-footer');
   if (
@@ -844,56 +1119,77 @@ function hideUtmostFooterImmediately() {
     document.activeElement &&
     typeof document.activeElement.blur === 'function'
   ) document.activeElement.blur();
-  if (utmostFooterHideTimer) clearTimeout(utmostFooterHideTimer);
-  utmostFooterHideTimer = null;
+  if (flowFooterHideTimer) clearTimeout(flowFooterHideTimer);
+  flowFooterHideTimer = null;
   if (screen) screen.classList.remove('footer-visible');
   if (footer) footer.classList.remove('footer-visible');
 }
 
-function revealUtmostFooter() {
-  if (utmostFooterHideTimer) clearTimeout(utmostFooterHideTimer);
-  utmostFooterHideTimer = null;
-  if (flowStep !== 'utmost') return;
+function revealFlowFooter() {
+  if (flowFooterHideTimer) clearTimeout(flowFooterHideTimer);
+  flowFooterHideTimer = null;
   const screen = $('flowScreen');
-  if (screen && screen.dataset.step === 'utmost') screen.classList.add('footer-visible');
+  if (
+    !isReadingFlowStep() ||
+    !screen ||
+    screen.classList.contains('hidden') ||
+    screen.dataset.step !== flowStep
+  ) return;
+  screen.classList.add('footer-visible');
 }
 
-function scheduleUtmostFooterHide() {
-  if (utmostFooterHideTimer) clearTimeout(utmostFooterHideTimer);
-  if (flowStep !== 'utmost') {
-    hideUtmostFooterImmediately();
+function scheduleFlowFooterHide() {
+  if (flowFooterHideTimer) clearTimeout(flowFooterHideTimer);
+  const scheduledStep = flowStep;
+  const screen = $('flowScreen');
+  if (
+    !isReadingFlowStep(scheduledStep) ||
+    !screen ||
+    screen.classList.contains('hidden') ||
+    screen.dataset.step !== scheduledStep
+  ) {
+    hideFlowFooterImmediately();
     return;
   }
-  utmostFooterHideTimer = setTimeout(() => {
-    utmostFooterHideTimer = null;
-    const footer = document.querySelector('.flow-footer');
-    const hotzone = document.getElementById('flowFooterHotzone');
-    const footerHovered = footer && footer.matches(':hover');
-    const hotzoneHovered = hotzone && hotzone.matches(':hover');
-    const footerFocused = footer && footer.contains(document.activeElement);
-    if (flowStep === 'utmost' && (footerHovered || hotzoneHovered || footerFocused)) {
-      revealUtmostFooter();
-      return;
-    }
-    hideUtmostFooterImmediately();
+  flowFooterHideTimer = setTimeout(() => {
+    flowFooterHideTimer = null;
+    if (
+      flowStep === scheduledStep &&
+      screen.dataset.step === scheduledStep &&
+      !screen.classList.contains('hidden')
+    ) hideFlowFooterImmediately();
   }, 1000);
 }
 
-function setupUtmostFooterReveal() {
+function setupFlowFooterReveal() {
+  const screen = $('flowScreen');
   const footer = document.querySelector('.flow-footer');
-  const hotzone = document.getElementById('flowFooterHotzone');
-  hideUtmostFooterImmediately();
+  hideFlowFooterImmediately();
 
-  [hotzone, footer].filter(Boolean).forEach((element) => {
-    element.addEventListener('mouseenter', revealUtmostFooter);
-    element.addEventListener('mouseleave', scheduleUtmostFooterHide);
-  });
+  if (screen) {
+    screen.addEventListener('pointermove', () => {
+      revealFlowFooter();
+      scheduleFlowFooterHide();
+    });
+    screen.addEventListener('pointerleave', scheduleFlowFooterHide);
+  }
   if (!footer) return;
-  footer.addEventListener('focusin', revealUtmostFooter);
+  footer.addEventListener('focusin', revealFlowFooter);
+  footer.addEventListener('pointerup', scheduleFlowFooterHide);
   footer.addEventListener('focusout', (event) => {
     if (event.relatedTarget && footer.contains(event.relatedTarget)) return;
-    scheduleUtmostFooterHide();
+    scheduleFlowFooterHide();
   });
+
+  const hoverQuery = typeof window.matchMedia === 'function'
+    ? window.matchMedia('(hover: none)')
+    : null;
+  if (hoverQuery && typeof hoverQuery.addEventListener === 'function') {
+    hoverQuery.addEventListener('change', () => {
+      hideFlowFooterImmediately();
+      if (typeof scheduleFlowLayoutRefresh === 'function') scheduleFlowLayoutRefresh();
+    });
+  }
 }
 
 function nextPaint() {
@@ -911,8 +1207,6 @@ function nextPaint() {
   });
 }
 
-const SCRIPTURE_MIN_VERSES_PER_PAGE = 4;
-const SCRIPTURE_MAX_VERSES_PER_PAGE = 6;
 const UTMOST_MIN_REGULAR_SCALE = 0.48;
 
 function textPage(text) {
@@ -1040,6 +1334,22 @@ function createScripturePageElement(page) {
   return root;
 }
 
+function splitUtmostVerseCitation(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  let separatorIndex = -1;
+  for (const separator of ['—', '–', '―', '－']) {
+    separatorIndex = Math.max(separatorIndex, text.lastIndexOf(separator));
+  }
+  const spacedHyphenIndex = text.lastIndexOf(' - ');
+  if (spacedHyphenIndex >= 0) separatorIndex = Math.max(separatorIndex, spacedHyphenIndex + 1);
+  if (separatorIndex < 0) return { text, quote: text, citation: '' };
+  return {
+    text,
+    quote: text.slice(0, separatorIndex).trim(),
+    citation: text.slice(separatorIndex).trim()
+  };
+}
+
 function createUtmostPage(data) {
   const paragraphs = String(data.body || '')
     .replace(/\r/g, '')
@@ -1050,7 +1360,7 @@ function createUtmostPage(data) {
     type: 'utmost',
     date: String(data.date || systemDateChinese()).trim(),
     title: String(data.title || '竭誠獻上').trim(),
-    verse: String(data.verse || '').replace(/\s+/g, ' ').trim(),
+    verse: splitUtmostVerseCitation(data.verse),
     paragraphs: paragraphs.length ? paragraphs : ['今天暫時沒有正文內容。']
   };
 }
@@ -1084,16 +1394,27 @@ function createUtmostPageElement(page) {
   verseLabel.textContent = '今日經文';
   const verseText = document.createElement('div');
   verseText.className = 'utmost-verse-text';
-  verseText.textContent = page.verse || '—';
+  const verse = page.verse && typeof page.verse === 'object'
+    ? page.verse : splitUtmostVerseCitation(page.verse);
+  const quote = document.createElement('span');
+  quote.className = 'utmost-verse-quote';
+  const citationIndex = verse.citation ? String(verse.text || '').lastIndexOf(verse.citation) : -1;
+  const citationGap = citationIndex >= 0
+    ? String(verse.text || '').slice(String(verse.quote || '').length, citationIndex)
+    : '';
+  quote.textContent = (verse.quote || (verse.citation ? '' : '—')) + citationGap;
+  verseText.appendChild(quote);
+  if (verse.citation) {
+    const citation = document.createElement('cite');
+    citation.className = 'utmost-verse-citation';
+    citation.textContent = verse.citation;
+    verseText.appendChild(citation);
+  }
   verseCard.append(verseLabel, verseText);
   sheet.appendChild(verseCard);
 
   const body = document.createElement('section');
   body.className = 'utmost-body';
-  const bodyLabel = document.createElement('div');
-  bodyLabel.className = 'utmost-section-label';
-  bodyLabel.textContent = '正文';
-  body.appendChild(bodyLabel);
   (page.paragraphs || []).forEach((paragraph) => {
     const p = document.createElement('p');
     p.className = 'utmost-paragraph';
@@ -1189,63 +1510,32 @@ function logicalVerseCount(verses) {
   return new Set(verses.map((verse) => verse.key)).size;
 }
 
-function lastLogicalVerseGroup(verses) {
-  if (!verses.length) return [];
-  const key = verses[verses.length - 1].key;
-  let start = verses.length - 1;
-  while (start > 0 && verses[start - 1].key === key) start--;
-  return verses.slice(start);
-}
-
-function rebalanceScriptureTail(pages, fits = scripturePageFits) {
-  if (pages.length < 2) return pages;
-  const keyPages = new Map();
-  pages.forEach((page, pageIndex) => {
-    new Set(page.verses.map((verse) => verse.key)).forEach((key) => {
-      if (!keyPages.has(key)) keyPages.set(key, []);
-      keyPages.get(key).push(pageIndex);
-    });
-  });
-  // A split long verse can legitimately occupy several pages. Its fragments
-  // must stay where they fit instead of being treated as ordinary verse rows.
-  if ([...keyPages.values()].some((indices) => indices.length > 1)) return pages;
-
-  let balanced = pages.map((page) => ({ ...page, verses: [...page.verses] }));
-  const total = balanced.reduce((sum, page) => sum + logicalVerseCount(page.verses), 0);
-  const base = Math.floor(total / balanced.length);
-  const extra = total % balanced.length;
-  const targets = balanced.map((_page, index) => base + (index < extra ? 1 : 0));
-
-  for (let targetIndex = balanced.length - 1; targetIndex > 0; targetIndex--) {
-    while (logicalVerseCount(balanced[targetIndex].verses) < targets[targetIndex]) {
-      let shifted = false;
-      for (let donorIndex = targetIndex - 1; donorIndex >= 0 && !shifted; donorIndex--) {
-        if (logicalVerseCount(balanced[donorIndex].verses) <= targets[donorIndex]) continue;
-        const trial = balanced.map((page) => ({ ...page, verses: [...page.verses] }));
-        let valid = true;
-        for (let boundary = targetIndex - 1; boundary >= donorIndex; boundary--) {
-          const moved = lastLogicalVerseGroup(trial[boundary].verses);
-          const candidate = [...moved, ...trial[boundary + 1].verses];
-          if (
-            !moved.length ||
-            logicalVerseCount(candidate) > SCRIPTURE_MAX_VERSES_PER_PAGE ||
-            !fits(candidate)
-          ) {
-            valid = false;
-            break;
-          }
-          trial[boundary].verses.splice(trial[boundary].verses.length - moved.length, moved.length);
-          trial[boundary + 1].verses.unshift(...moved);
-        }
-        if (valid) {
-          balanced = trial;
-          shifted = true;
-        }
-      }
-      if (!shifted) break;
+function scripturePageAnchor(pages, pageIndex) {
+  const firstVerse = pages[pageIndex] && pages[pageIndex].verses && pages[pageIndex].verses[0];
+  if (!firstVerse) return null;
+  let offset = 0;
+  for (let index = 0; index < pageIndex; index++) {
+    for (const verse of pages[index].verses || []) {
+      if (verse.key === firstVerse.key) offset += Array.from(verse.text || '').length;
     }
   }
-  return balanced;
+  return { key: firstVerse.key, offset };
+}
+
+function findScriptureAnchorPage(pages, anchor) {
+  if (!anchor) return -1;
+  let offset = 0;
+  let firstMatch = -1;
+  for (let pageIndex = 0; pageIndex < pages.length; pageIndex++) {
+    for (const verse of pages[pageIndex].verses || []) {
+      if (verse.key !== anchor.key) continue;
+      if (firstMatch < 0) firstMatch = pageIndex;
+      const length = Math.max(1, Array.from(verse.text || '').length);
+      if (anchor.offset < offset + length) return pageIndex;
+      offset += length;
+    }
+  }
+  return firstMatch;
 }
 
 function buildScripturePagesByFit(verses, fits = scripturePageFits) {
@@ -1255,8 +1545,7 @@ function buildScripturePagesByFit(verses, fits = scripturePageFits) {
 
   expanded.forEach((verse) => {
     const candidate = [...current, verse];
-    const withinVerseLimit = logicalVerseCount(candidate) <= SCRIPTURE_MAX_VERSES_PER_PAGE;
-    if (!current.length || (withinVerseLimit && fits(candidate))) {
+    if (!current.length || fits(candidate)) {
       current = candidate;
       return;
     }
@@ -1264,7 +1553,38 @@ function buildScripturePagesByFit(verses, fits = scripturePageFits) {
     current = [verse];
   });
   if (current.length) pages.push({ type: 'scripture', verses: current });
-  return rebalanceScriptureTail(pages.length ? pages : [{ type: 'scripture', verses: [] }], fits);
+  return pages.length ? pages : [{ type: 'scripture', verses: [] }];
+}
+
+function setFlowButtonLabel(buttonId, label) {
+  const button = $(buttonId);
+  if (!button) return;
+  const text = String(label || '');
+  const labelElement = typeof button.querySelector === 'function'
+    ? button.querySelector('.flow-btn-label')
+    : null;
+  if (labelElement) labelElement.textContent = text;
+  else button.textContent = text;
+  if (typeof button.setAttribute === 'function') {
+    button.setAttribute('aria-label', text);
+    button.setAttribute('title', text);
+  }
+}
+
+function updateFlowPageProgress() {
+  const info = $('flowPageInfo');
+  if (!info) return;
+  const total = Math.max(flowPages.length, 1);
+  const current = Math.min(Math.max(flowPageIndex + 1, 1), total);
+  const percentage = (current / total) * 100;
+  info.textContent = `${current} / ${total}`;
+  if (info.style && typeof info.style.setProperty === 'function') {
+    info.style.setProperty('--flow-page-progress', `${percentage}%`);
+  }
+  if (typeof info.setAttribute === 'function') {
+    const section = flowStep === 'utmost' ? '竭誠獻上' : '經文';
+    info.setAttribute('aria-label', `${section}，第 ${current} 頁，共 ${total} 頁`);
+  }
 }
 
 function renderFlowPage() {
@@ -1273,11 +1593,14 @@ function renderFlowPage() {
   flowPageRenderToken++;
   $('flowScreen').style.setProperty('--flow-font-scale', String(flowPageScales[flowPageIndex] || 1));
   renderFlowPageContent(page);
-  $('flowPageInfo').textContent = '';
+  updateFlowPageProgress();
   $('flowPrevPage').disabled = flowPageIndex <= 0 && flowStep !== 'scripture' && flowStep !== 'utmost';
   const isLastPage = flowPageIndex >= flowPages.length - 1;
   const isLastStep = flowStep === FLOW_ORDER[FLOW_ORDER.length - 1];
-  $('flowNextPage').textContent = isLastPage && isLastStep ? '完成' : (isLastPage ? '下一段' : '下一頁');
+  const nextLabel = isLastPage && isLastStep ? '完成' : (isLastPage ? '竭誠獻上' : '下一頁');
+  const prevLabel = flowPageIndex > 0 ? '上一頁' : (flowStep === 'utmost' ? '回到經文' : '返回敬拜');
+  setFlowButtonLabel('flowPrevPage', prevLabel);
+  setFlowButtonLabel('flowNextPage', nextLabel);
   $('flowNextPage').disabled = false;
 }
 
@@ -1319,6 +1642,7 @@ async function fitCurrentFlowPageToScreen(
   sheet.style.removeProperty('--utmost-scale');
   sheet.classList.remove('is-extreme');
   content.removeAttribute('data-fit-mode');
+
   let scale = 1;
   sheet.style.setProperty('--utmost-scale', String(scale));
   while (scale > minScale && flowContentOverflows()) {
@@ -1411,17 +1735,14 @@ function scheduleFlowLayoutRefresh() {
     }
 
     if (flowStep !== 'scripture' || !cachedBible) return;
-    const anchorKey = flowPages[flowPageIndex] && flowPages[flowPageIndex].verses &&
-      flowPages[flowPageIndex].verses[0] && flowPages[flowPageIndex].verses[0].key;
+    const anchor = scripturePageAnchor(flowPages, flowPageIndex);
     if (!await waitForFlowLayout(navigationToken) || flowStep !== 'scripture') return;
     const verses = parseScriptureVerses(cachedBible.body || '', currentRefPayload());
     const pages = buildScripturePagesByFit(verses);
     if (navigationToken !== flowNavigationToken || flowStep !== 'scripture') return;
     flowPages = pages;
     flowPageScales = pages.map(() => 1);
-    const anchoredPage = anchorKey
-      ? pages.findIndex((page) => page.verses.some((verse) => verse.key === anchorKey))
-      : -1;
+    const anchoredPage = findScriptureAnchorPage(pages, anchor);
     flowPageIndex = anchoredPage >= 0 ? anchoredPage : Math.min(flowPageIndex, pages.length - 1);
     renderFlowPage();
   }, 180);
@@ -1540,7 +1861,7 @@ async function showScriptureFlow(navigationToken) {
 
 async function showUtmostFlow(navigationToken) {
   if (flowLoading) return;
-  hideUtmostFooterImmediately();
+  hideFlowFooterImmediately();
   flowLoading = true;
   $('flowScreen').dataset.step = 'utmost';
   setFlowContent({
@@ -1563,7 +1884,7 @@ async function showUtmostFlow(navigationToken) {
 }
 
 function showEndScreen() {
-  hideUtmostFooterImmediately();
+  hideFlowFooterImmediately();
   flowStep = 'end';
   $('flowScreen').dataset.step = 'end';
   setFlowContent({
@@ -1578,7 +1899,7 @@ async function goFlowStep(step) {
   if (flowTransitioning) return false;
   resetUtmostFinishConfirmation();
   if (flowStep === 'cover' && step !== 'cover') flowReachedUtmost = false;
-  if (flowStep === 'utmost' || step === 'utmost') hideUtmostFooterImmediately();
+  if (isReadingFlowStep(flowStep) || isReadingFlowStep(step)) hideFlowFooterImmediately();
   const navigationToken = ++flowNavigationToken;
   flowTransitioning = true;
   try {
@@ -1619,7 +1940,7 @@ async function goFlowStep(step) {
 
 async function returnToMainCover() {
   resetUtmostFinishConfirmation();
-  hideUtmostFooterImmediately();
+  hideFlowFooterImmediately();
   const navigationToken = ++flowNavigationToken;
   flowTransitioning = true;
   flowLoading = false;
@@ -1660,7 +1981,7 @@ function resetUtmostFinishConfirmation() {
   if (utmostFinishConfirmTimer) clearTimeout(utmostFinishConfirmTimer);
   utmostFinishConfirmTimer = null;
   utmostFinishConfirmUntil = 0;
-  if (isUtmostFinalPage()) $('flowNextPage').textContent = '完成';
+  if (isUtmostFinalPage()) setFlowButtonLabel('flowNextPage', '完成');
   return wasArmed;
 }
 
@@ -1673,13 +1994,14 @@ function requestUtmostFinishConfirmation() {
 
   resetUtmostFinishConfirmation();
   utmostFinishConfirmUntil = now + UTMOST_FINISH_CONFIRM_MS;
-  $('flowNextPage').textContent = '再按一次完成';
-  revealUtmostFooter();
+  setFlowButtonLabel('flowNextPage', '再按一次完成');
+  revealFlowFooter();
+  scheduleFlowFooterHide();
   toast('請再按一次，以確認回到主畫面', 3000);
   utmostFinishConfirmTimer = setTimeout(() => {
     utmostFinishConfirmTimer = null;
     utmostFinishConfirmUntil = 0;
-    if (isUtmostFinalPage()) $('flowNextPage').textContent = '完成';
+    if (isUtmostFinalPage()) setFlowButtonLabel('flowNextPage', '完成');
   }, UTMOST_FINISH_CONFIRM_MS);
   return false;
 }
@@ -1687,7 +2009,8 @@ function requestUtmostFinishConfirmation() {
 function requestFlowReturnToCover(source = 'button') {
   if (isUtmostFinalPage()) {
     if (source === 'wheel') {
-      revealUtmostFooter();
+      revealFlowFooter();
+      scheduleFlowFooterHide();
       toast('請按「完成」或右方向鍵回到主畫面', 2600);
       return false;
     }
@@ -1718,7 +2041,8 @@ function nextFlowPageOrStep(source = 'button') {
 function prevFlowPageOrStep() {
   if (flowTransitioning) return;
   if (resetUtmostFinishConfirmation()) {
-    revealUtmostFooter();
+    revealFlowFooter();
+    scheduleFlowFooterHide();
     return;
   }
   if ($('flowScreen').classList.contains('hidden')) { prevFlowStep(); return; }
@@ -1920,8 +2244,13 @@ function handleFlowArrowNavigation(event) {
   ) return false;
 
   event.preventDefault();
-  if (event.key === 'ArrowRight') nextFlowPageOrStep('keyboard');
-  else prevFlowPageOrStep();
+  if (event.key === 'ArrowRight') {
+    nextFlowPageOrStep('keyboard');
+  } else if (cfg.preventLeftArrowWorship !== false && flowStep === 'scripture' && flowPageIndex <= 0) {
+    return true;
+  } else {
+    prevFlowPageOrStep();
+  }
   return true;
 }
 
@@ -2207,6 +2536,11 @@ function setupCustomWorshipList() {
   let dragIndex = -1;
 
   list.addEventListener('dragstart', (e) => {
+    if (e.target.closest('input, button')) {
+      e.preventDefault();
+      dragIndex = -1;
+      return;
+    }
     const row = e.target.closest('.custom-worship-item');
     if (!row) return;
     dragIndex = Number(row.dataset.index);
@@ -2250,6 +2584,14 @@ function setupCustomWorshipList() {
     if (!row) return;
     await deleteCustomWorshipPreset(Number(row.dataset.index));
   });
+
+  list.addEventListener('change', async (e) => {
+    const input = e.target.closest('.custom-worship-title-input');
+    if (!input) return;
+    const row = input.closest('.custom-worship-item');
+    if (!row) return;
+    await renameCustomWorshipPreset(Number(row.dataset.index), input.value, input);
+  });
 }
 
 // ---------- 初始化 ----------
@@ -2282,13 +2624,29 @@ async function init() {
   $('flowScreen').addEventListener('click', () => {
     if (flowStep === 'end') returnToMainCover();
   });
-  setupUtmostFooterReveal();
+  setupFlowFooterReveal();
   $('btnMin').addEventListener('click', () => window.api.minimizeWindow());
   $('btnClose').addEventListener('click', () => window.api.closeWindow());
   $('btnPasteMusic').addEventListener('click', () => pasteInto('inMusicUrl'));
   $('btnPasteWorship').addEventListener('click', () => pasteInto('inWorshipUrl'));
   $('btnPasteCustomWorship').addEventListener('click', () => pasteInto('inCustomWorshipUrl'));
   $('btnAddWorshipPreset').addEventListener('click', addCustomWorshipPreset);
+  $('inCustomWorshipUrl').addEventListener('input', () => {
+    customWorshipTitleRequestToken++;
+    prepareWorshipTitleDraft($('inCustomWorshipTitle'), $('inCustomWorshipUrl').value);
+  });
+  $('inCustomWorshipTitle').addEventListener('input', () => {
+    const url = normalizeCustomWorshipUrl($('inCustomWorshipUrl').value);
+    if (url) $('inCustomWorshipTitle').dataset.url = url;
+  });
+  $('inCustomWorshipUrl').addEventListener('change', () => { prefillCustomWorshipTitle(); });
+  $('inWorshipUrl').addEventListener('input', () => {
+    manualWorshipTitleRequestToken++;
+    prepareWorshipTitleDraft($('inWorshipTitle'), $('inWorshipUrl').value);
+  });
+  $('inWorshipUrl').addEventListener('change', () => {
+    prepareWorshipTitleDraft($('inWorshipTitle'), $('inWorshipUrl').value);
+  });
   $('btnScheduleNow').addEventListener('click', async () => {
     const ok = await refreshDailyReadingData();
     toast(ok ? '經文與竭誠獻上已更新' : '更新失敗，請稍後再試', ok ? 2600 : 3600);
@@ -2303,7 +2661,7 @@ async function init() {
     if (p) useImagePath(p);
   });
 
-  ['dateAuto','dateDay','inReading','inMusicUrl','inWorshipUrl','inCustomWorshipUrl','musicVolume','autoPlayMusic',
+  ['dateAuto','dateDay','inReading','inMusicUrl','inWorshipUrl','inWorshipTitle','inCustomWorshipUrl','musicVolume','autoPlayMusic','preventLeftArrowWorship',
    'useWorshipPreset','worshipPreset','cacheKeepDays','scheduleEnabled','inScheduleUrl']
     .forEach((id) => {
       const el = $(id);
@@ -2317,20 +2675,26 @@ async function init() {
   });
 
   // 切換常用敬拜影片與手動網址時，同步設定並預先下載。
-  $('useWorshipPreset').addEventListener('change', () => {
+  $('useWorshipPreset').addEventListener('change', async () => {
     applyWorshipMode();
     collectSettings();
     if (cfg.worshipUrl) prefetch('video');
+    await ensureCurrentWorshipAnnouncementTitle(false);
   });
   // 更換常用影片後，預先準備新選項。
-  $('worshipPreset').addEventListener('change', () => {
+  $('worshipPreset').addEventListener('change', async () => {
     collectSettings();
     if (cfg.useWorshipPreset && cfg.worshipUrl) prefetch('video');
+    await ensureCurrentWorshipAnnouncementTitle(false);
   });
 
   // 網址輸入完成後更新媒體來源。
   $('inMusicUrl').addEventListener('change', () => { collectSettings(); if (cfg.musicUrl) resolveAndPlayMusic(); });
-  $('inWorshipUrl').addEventListener('change', () => { collectSettings(); prefetch('video'); });
+  $('inWorshipUrl').addEventListener('change', async () => {
+    collectSettings();
+    prefetch('video');
+    await prefillManualWorshipTitle();
+  });
 
   // 媒體下載進度。
   window.api.onMediaProgress(({ kind, percent }) => {

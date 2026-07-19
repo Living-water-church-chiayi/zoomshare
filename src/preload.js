@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('api', {
   // 媒體：必要時下載並快取，回傳本地檔 URL（無廣告、流暢）
   ensureMedia: (url, kind, quality) => ipcRenderer.invoke('media:ensure', { url, kind, quality }),
   mediaStatus: (url, kind, quality) => ipcRenderer.invoke('media:status', { url, kind, quality }),
+  youtubeMetadata: (url) => ipcRenderer.invoke('youtube:metadata', url),
   onMediaProgress: (cb) => ipcRenderer.on('media:progress', (_e, d) => cb(d)),
   cacheSize: () => ipcRenderer.invoke('cache:size'),
   cleanCache: (keepDays) => ipcRenderer.invoke('cache:clean', keepDays),

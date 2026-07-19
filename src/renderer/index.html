@@ -45,14 +45,19 @@
           <div id="flowEyebrow" class="flow-eyebrow"></div>
           <div id="flowTitle" class="flow-title">讀經內容</div>
         </div>
+        <span id="flowPageInfo" class="flow-page-info" role="status" aria-live="polite" aria-atomic="true"></span>
       </div>
       <div id="flowMeta" class="flow-meta"></div>
       <div id="flowContent" class="flow-content"></div>
-      <div id="flowFooterHotzone" class="flow-footer-hotzone" aria-hidden="true"></div>
       <div class="flow-footer">
-        <button id="flowPrevPage" class="flow-btn">上一頁</button>
-        <span id="flowPageInfo" class="flow-page-info"></span>
-        <button id="flowNextPage" class="flow-btn primary">下一頁</button>
+        <button id="flowPrevPage" class="flow-btn" type="button" title="上一頁" aria-label="上一頁">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 6.5-5.5 5.5 5.5 5.5" /></svg>
+          <span class="flow-btn-label">上一頁</span>
+        </button>
+        <button id="flowNextPage" class="flow-btn primary" type="button" title="下一頁" aria-label="下一頁">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 6.5 5.5 5.5-5.5 5.5" /></svg>
+          <span class="flow-btn-label">下一頁</span>
+        </button>
       </div>
     </div>
 
@@ -151,11 +156,13 @@
             </select>
           </label>
           <label>加入常用敬拜影片
+            <input type="text" id="inCustomWorshipTitle" maxlength="128" placeholder="公告歌名（可留空，會自動讀取）" />
             <div class="url-row add-preset-row">
               <input type="text" id="inCustomWorshipUrl" placeholder="貼上 YouTube 連結" />
               <button type="button" id="btnPasteCustomWorship" class="paste-btn">貼上</button>
               <button type="button" id="btnAddWorshipPreset" class="paste-btn add-btn">加入</button>
             </div>
+            <span class="field-note">自動取得的是 YouTube 影片標題，可修改成「歌手（歌名）」後再加入。</span>
           </label>
           <div id="customWorshipList" class="custom-worship-list"></div>
         </div>
@@ -165,6 +172,9 @@
               <input type="text" id="inWorshipUrl" placeholder="https://www.youtube.com/watch?v=..." />
               <button type="button" id="btnPasteWorship" class="paste-btn">貼上</button>
             </div>
+          </label>
+          <label>公告歌名
+            <input type="text" id="inWorshipTitle" maxlength="128" placeholder="可留空，會自動讀取 YouTube 標題" />
           </label>
         </div>
       </fieldset>
@@ -206,6 +216,12 @@
         <legend>背景</legend>
         <button id="btnPickImage" class="full-btn">選擇背景圖片</button>
         <p class="hint">也可以直接把圖片拖曳到主畫面。</p>
+      </fieldset>
+
+      <fieldset>
+        <legend>閱讀操作</legend>
+        <label class="inline"><input type="checkbox" id="preventLeftArrowWorship" /> 在經文第一頁停用左方向鍵返回敬拜（防誤觸）</label>
+        <p class="hint">需要返回時，仍可明確點選頁面下方的「上一頁」。</p>
       </fieldset>
 
       <fieldset>

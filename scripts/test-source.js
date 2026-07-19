@@ -108,6 +108,17 @@ assert.match(
   /if \(flowReachedUtmost\) \{[\s\S]*?a\.pause\(\);[\s\S]*?setMusicSwitchState\(false\);/,
   'returning from Utmost must settle the audio in a silent state'
 );
+assert.match(main, /preventLeftArrowWorship:\s*true/, 'left-arrow worship safeguard must default to enabled');
+assert.match(
+  main,
+  /preventLeftArrowWorship:\s*value\.preventLeftArrowWorship\s*!==\s*false/,
+  'left-arrow worship safeguard must survive config sanitization'
+);
+assert.match(
+  renderer,
+  /cfg\.preventLeftArrowWorship\s*!==\s*false[\s\S]*?flowStep\s*===\s*'scripture'[\s\S]*?flowPageIndex\s*<=\s*0/,
+  'left-arrow worship safeguard must only intercept the first Scripture page'
+);
 console.log('OK reading keyboard and completion wiring');
 
 const html = read('src/renderer/index.html');
@@ -117,6 +128,7 @@ assert.match(
   /7mrMh_2tXCI[^>]*data-announcement-title="讚美之泉（美好的創造）"[^>]*>美好的創造<\/option>/,
   'the announcement sample worship song must be available as a named preset'
 );
+assert.match(html, /id="preventLeftArrowWorship"/, 'settings must expose the left-arrow worship safeguard');
 const ids = [...html.matchAll(/\bid=["']([^"']+)["']/g)].map((match) => match[1]);
 const idCounts = new Map();
 for (const id of ids) idCounts.set(id, (idCounts.get(id) || 0) + 1);
@@ -147,6 +159,7 @@ for (const selector of [
   '.scripture-continuation',
   '.utmost-sheet',
   '.utmost-verse-card',
+  '.utmost-verse-citation',
   '.utmost-paragraph'
 ]) {
   assert.ok(css.includes(selector), `Reading layout CSS is missing ${selector}`);
@@ -154,6 +167,16 @@ for (const selector of [
 assert.match(renderer, /type:\s*'scripture'/, 'scripture pages must use structured page objects');
 assert.match(renderer, /type:\s*'utmost'/, 'Utmost must use a structured page object');
 assert.match(renderer, /const UTMOST_MIN_REGULAR_SCALE = 0\.48;/, 'Utmost regular scaling must stop at 48%');
+assert.doesNotMatch(
+  section(renderer, 'function buildScripturePagesByFit', 'function renderFlowPage'),
+  /SCRIPTURE_MAX_VERSES_PER_PAGE/,
+  'scripture pagination must use measured height instead of a fixed verse limit'
+);
+assert.doesNotMatch(
+  renderer,
+  /function rebalanceScriptureTail/,
+  'scripture pagination must not empty earlier pages merely to balance the tail'
+);
 const cssDir = path.join(root, 'src', 'renderer');
 const missingAssets = [];
 for (const match of css.matchAll(/url\(\s*['"]?([^)'"\s]+)['"]?\s*\)/g)) {

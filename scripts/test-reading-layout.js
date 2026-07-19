@@ -13,9 +13,10 @@ const coverViewports = [
   { width: 1920, height: 1080 }
 ];
 const viewports = [
-  { width: 405, height: 720 },
-  { width: 608, height: 1080 },
-  { width: 320, height: 560 }
+  { width: 405, height: 720, deviceScaleFactor: 1 },
+  { width: 608, height: 1080, deviceScaleFactor: 1 },
+  { width: 608, height: 1080, deviceScaleFactor: 2 },
+  { width: 320, height: 560, deviceScaleFactor: 1 }
 ];
 
 const scripturePage = {
@@ -44,6 +45,30 @@ const scripturePage = {
   ]
 };
 
+const scripturePackingVerses = Array.from({ length: 7 }, (_, index) => ({
+  key: `5:${index + 1}:${index}`,
+  chapter: 5,
+  number: index + 1,
+  startsChapter: false,
+  continuation: false,
+  text: `第 ${index + 1} 節短經文。`
+}));
+
+const scriptureMixedVerses = Array.from({ length: 18 }, (_, index) => {
+  const inSecondChapter = index >= 9;
+  const number = inSecondChapter ? index - 8 : index + 1;
+  return {
+    key: `${inSecondChapter ? 6 : 5}:${number}:${index}`,
+    chapter: inSecondChapter ? 6 : 5,
+    number,
+    startsChapter: index === 9,
+    continuation: false,
+    text: index % 3 === 0
+      ? `第 ${number} 節稍長經文，混合長度測試不可丟失順序或超出畫面。`
+      : `第 ${number} 節經文。`
+  };
+});
+
 const utmostCases = [
   {
     name: 'utmost-normal',
@@ -70,6 +95,18 @@ const utmostCases = [
       '當答案還沒有出現，我們仍然可以選擇誠實、寬容與感恩，並把不能控制的明天交給那位比我們更清楚全貌的主。',
       '忠心不一定會被看見，卻會在日常的重複中塑造一個可信靠的人，使我們在突然的風雨裡仍能持守所相信的。',
       '願今天的每一份工作都成為敬拜，每一次與人相遇都成為祝福，並讓平安不在結果裡，而在同在中逐漸穩固。'
+    ]
+  },
+  {
+    name: 'utmost-long-verse',
+    date: '七月十九日',
+    title: '平安在主裡',
+    verse: Array.from({ length: 32 }, () =>
+      '你們心裡不要憂愁，也不要膽怯；我所賜的平安不像世人所賜的。'
+    ).join('') + '—約翰福音十四章二十七節',
+    paragraphs: [
+      '今天只需安靜地回應眼前的託付，並把無法掌握的部分交在神手中。',
+      '當心回到同在裡，平安就不再取決於環境是否立刻改變。'
     ]
   },
   {
@@ -147,15 +184,24 @@ function rendererHarnessSource() {
     'nextPaint',
     'textPage',
     'createScripturePageElement',
+    'splitUtmostVerseCitation',
     'createUtmostPage',
     'createUtmostPageElement',
     'renderFlowPageContent',
     'flowContentOverflows',
+    'scripturePageFits',
+    'scriptureSentenceTokens',
+    'largestFittingVersePrefix',
+    'splitOversizedScriptureVerse',
+    'logicalVerseCount',
+    'buildScripturePagesByFit',
     'fitCurrentFlowPageToScreen',
-    'hideUtmostFooterImmediately',
-    'revealUtmostFooter',
-    'scheduleUtmostFooterHide',
-    'setupUtmostFooterReveal'
+    'isReadingFlowStep',
+    'hideFlowFooterImmediately',
+    'revealFlowFooter',
+    'scheduleFlowFooterHide',
+    'setupFlowFooterReveal',
+    'updateFlowPageProgress'
   ];
   const implementations = functionNames.map((name) => extractFunction(rendererSource, name)).join('\n\n');
   return `(() => {
@@ -167,11 +213,11 @@ function rendererHarnessSource() {
     let flowNavigationToken = 0;
     let flowPageRenderToken = 0;
     let flowStep = 'cover';
-    let utmostFooterHideTimer = null;
+    let flowFooterHideTimer = null;
     ${implementations}
 
     const prepare = (step) => {
-      hideUtmostFooterImmediately();
+      hideFlowFooterImmediately();
       flowStep = step;
       document.body.className = ${JSON.stringify(process.platform === 'darwin' ? 'plat-mac' : 'plat-win')};
       const screen = $('flowScreen');
@@ -184,9 +230,39 @@ function rendererHarnessSource() {
       $('flowContent').replaceChildren();
     };
 
-    setupUtmostFooterReveal();
+    setupFlowFooterReveal();
 
     window.__readingLayoutHarness = {
+      async paginateScripture(verses) {
+        prepare('scripture');
+        if (document.fonts && document.fonts.ready) await document.fonts.ready;
+        await nextPaint();
+        await nextPaint();
+        const pages = buildScripturePagesByFit(verses);
+        const chapterLabels = [];
+        const pageOverflows = pages.map((page) => {
+          renderFlowPageContent(page);
+          chapterLabels.push(...Array.from(document.querySelectorAll('.scripture-chapter'), (element) => element.textContent));
+          return flowContentOverflows();
+        });
+        const logicalKeys = [];
+        for (const page of pages) {
+          for (const verse of page.verses) {
+            if (logicalKeys[logicalKeys.length - 1] !== verse.key) logicalKeys.push(verse.key);
+          }
+        }
+        const fillableBoundaries = pages.slice(0, -1).map((page, index) =>
+          scripturePageFits([...page.verses, pages[index + 1].verses[0]])
+        );
+        return {
+          pageCount: pages.length,
+          distribution: pages.map((page) => logicalVerseCount(page.verses)),
+          pageOverflows,
+          logicalKeys,
+          chapterLabels,
+          fillableBoundaries
+        };
+      },
       async renderScripture(page) {
         prepare('scripture');
         flowPages = [page];
@@ -195,6 +271,7 @@ function rendererHarnessSource() {
         flowNavigationToken++;
         flowPageRenderToken++;
         renderFlowPageContent(page);
+        updateFlowPageProgress();
         if (document.fonts && document.fonts.ready) await document.fonts.ready;
         await nextPaint();
         await nextPaint();
@@ -209,6 +286,7 @@ function rendererHarnessSource() {
         const navigationToken = ++flowNavigationToken;
         const pageRenderToken = ++flowPageRenderToken;
         renderFlowPageContent(page);
+        updateFlowPageProgress();
         const fitOk = await fitCurrentFlowPageToScreen(
           UTMOST_MIN_REGULAR_SCALE,
           navigationToken,
@@ -222,28 +300,26 @@ function rendererHarnessSource() {
           extreme: page.extremeScale < 1
         };
       },
-      async exerciseUtmostFooterAutoHide() {
-        prepare('utmost');
+      async exerciseFlowFooterAutoHide(step) {
+        prepare(step);
         const screen = $('flowScreen');
-        const hotzone = $('flowFooterHotzone');
-        if (!hotzone) throw new Error('Missing #flowFooterHotzone');
 
-        hideUtmostFooterImmediately();
+        hideFlowFooterImmediately();
         const hiddenInitially = !screen.classList.contains('footer-visible');
-        hotzone.dispatchEvent(new MouseEvent('mouseenter'));
+        screen.dispatchEvent(new PointerEvent('pointermove', { pointerType: 'mouse' }));
         const setupRevealWorked = screen.classList.contains('footer-visible');
 
-        hideUtmostFooterImmediately();
-        revealUtmostFooter();
+        hideFlowFooterImmediately();
+        revealFlowFooter();
         const directRevealWorked = screen.classList.contains('footer-visible');
         const startedAt = performance.now();
-        scheduleUtmostFooterHide();
+        scheduleFlowFooterHide();
         while (screen.classList.contains('footer-visible') && performance.now() - startedAt < 1800) {
           await new Promise((resolve) => setTimeout(resolve, 20));
         }
         const hideElapsed = performance.now() - startedAt;
         const hiddenAfterSchedule = !screen.classList.contains('footer-visible');
-        hideUtmostFooterImmediately();
+        hideFlowFooterImmediately();
         return {
           hiddenInitially,
           setupRevealWorked,
@@ -266,6 +342,12 @@ function measurementScript(fixture) {
     return (async () => {
       const harness = window.__readingLayoutHarness;
       if (!harness) throw new Error('Reading layout harness was not installed');
+      const scripturePagination = fixture.kind === 'scripture'
+        ? {
+            short: await harness.paginateScripture(fixture.packingVerses),
+            mixed: await harness.paginateScripture(fixture.mixedVerses)
+          }
+        : null;
       const fit = fixture.kind === 'scripture'
         ? await harness.renderScripture(fixture.page)
         : await harness.renderUtmost({
@@ -281,10 +363,14 @@ function measurementScript(fixture) {
       const contentStyle = getComputedStyle(content);
       const contentRect = content.getBoundingClientRect();
       const screen = document.getElementById('flowScreen');
+      const topbar = document.querySelector('.flow-topbar');
+      const heading = document.querySelector('.flow-heading');
       const footer = document.querySelector('.flow-footer');
-      const footerHotzone = document.getElementById('flowFooterHotzone');
+      const pageInfo = document.getElementById('flowPageInfo');
+      const previousButton = document.getElementById('flowPrevPage');
+      const nextButton = document.getElementById('flowNextPage');
       let footerMetrics = null;
-      if (sheet && footer) {
+      if ((sheet || scripture) && footer) {
         const finishFooterAnimations = () => {
           footer.getAnimations().forEach((animation) => {
             try { animation.finish(); } catch {}
@@ -299,7 +385,6 @@ function measurementScript(fixture) {
         const defaultState = {
           footerFocusWithin: footer.matches(':focus-within'),
           footerHovered: footer.matches(':hover'),
-          hotzoneHovered: footerHotzone ? footerHotzone.matches(':hover') : false,
           hoverNone: matchMedia('(hover: none)').matches,
           activeElement: document.activeElement ? document.activeElement.id || document.activeElement.tagName : ''
         };
@@ -323,7 +408,10 @@ function measurementScript(fixture) {
           contentHeightHidden,
           contentHeightVisible,
           contentRectHeightHidden,
-          contentRectHeightVisible
+          contentRectHeightVisible,
+          footerRect: rectData(footer),
+          previousButtonRect: previousButton ? rectData(previousButton) : null,
+          nextButtonRect: nextButton ? rectData(nextButton) : null,
         };
         screen.classList.remove('footer-visible');
         finishFooterAnimations();
@@ -344,16 +432,25 @@ function measurementScript(fixture) {
         .map((element) => ({ className: element.className, rect: rectData(element) }))
         .filter(({ rect }) => rect.left < visibleBounds.left - 1.5 || rect.right > visibleBounds.right + 1.5);
       const verseLabel = content.querySelector('.utmost-verse-card .utmost-section-label');
-      const bodyLabel = content.querySelector('.utmost-body > .utmost-section-label');
-      const verseTextElement = content.querySelector('.utmost-verse-text');
+      const utmostKicker = content.querySelector('.utmost-kicker');
+      const verseCitation = content.querySelector('.utmost-verse-citation');
+      const verseQuote = content.querySelector('.utmost-verse-quote');
+      const utmostTitle = content.querySelector('.utmost-title');
       const bodyElement = content.querySelector('.utmost-body');
       const paragraphs = Array.from(content.querySelectorAll('.utmost-paragraph'));
       const firstParagraphStyle = paragraphs[0] ? getComputedStyle(paragraphs[0]) : null;
       const secondParagraphStyle = paragraphs[1] ? getComputedStyle(paragraphs[1]) : null;
+      const sheetTransformValue = sheet ? getComputedStyle(sheet).transform : 'none';
+      const sheetTransform = !sheet || sheetTransformValue === 'none'
+        ? { a: 1, b: 0, c: 0, d: 1 }
+        : (() => {
+            const matrix = new DOMMatrixReadOnly(sheetTransformValue);
+            return { a: matrix.a, b: matrix.b, c: matrix.c, d: matrix.d };
+          })();
 
       return {
         kind: fixture.kind,
-        viewport: { width: innerWidth, height: innerHeight },
+        viewport: { width: innerWidth, height: innerHeight, deviceScaleFactor: devicePixelRatio },
         content: {
           clientWidth: content.clientWidth,
           clientHeight: content.clientHeight,
@@ -370,14 +467,33 @@ function measurementScript(fixture) {
         continuationText: continuation ? continuation.textContent : '',
         chapterLabels: Array.from(content.querySelectorAll('.scripture-chapter'), (element) => element.textContent),
         headingText: content.querySelector('.utmost-heading')?.textContent || '',
+        kickerText: utmostKicker?.textContent || '',
         verseLabelText: verseLabel?.textContent || '',
         verseText: content.querySelector('.utmost-verse-text')?.textContent || '',
-        bodyLabelText: bodyLabel?.textContent || '',
+        verseCitationText: verseCitation?.textContent || '',
+        verseCitationWhiteSpace: verseCitation ? getComputedStyle(verseCitation).whiteSpace : '',
+        verseCitationScrollWidth: verseCitation ? verseCitation.scrollWidth : 0,
+        verseCitationClientWidth: verseCitation ? verseCitation.clientWidth : 0,
+        verseCitationRect: verseCitation ? rectData(verseCitation) : null,
+        verseQuoteRect: verseQuote ? rectData(verseQuote) : null,
+        bodyLabelCount: content.querySelectorAll('.utmost-body > .utmost-section-label').length,
         paragraphCount: content.querySelectorAll('.utmost-paragraph').length,
-        footerHotzoneExists: !!footerHotzone,
         footerMetrics,
-        verseFontSize: verseTextElement ? Number.parseFloat(getComputedStyle(verseTextElement).fontSize) : 0,
+        pageInfoMetrics: pageInfo ? {
+          display: getComputedStyle(pageInfo).display,
+          opacity: Number.parseFloat(getComputedStyle(pageInfo).opacity),
+          text: pageInfo.textContent,
+          progress: pageInfo.style.getPropertyValue('--flow-page-progress'),
+          rect: rectData(pageInfo),
+          topbarRect: topbar ? rectData(topbar) : null,
+          headingRect: heading ? rectData(heading) : null
+        } : null,
+        kickerFontSize: utmostKicker ? Number.parseFloat(getComputedStyle(utmostKicker).fontSize) : 0,
+        verseQuoteFontSize: verseQuote ? Number.parseFloat(getComputedStyle(verseQuote).fontSize) : 0,
+        citationFontSize: verseCitation ? Number.parseFloat(getComputedStyle(verseCitation).fontSize) : 0,
+        titleFontSize: utmostTitle ? Number.parseFloat(getComputedStyle(utmostTitle).fontSize) : 0,
         bodyFontSize: bodyElement ? Number.parseFloat(getComputedStyle(bodyElement).fontSize) : 0,
+        sheetTransform,
         paragraphTextIndent: firstParagraphStyle ? Number.parseFloat(firstParagraphStyle.textIndent) : 0,
         paragraphMarginTop: secondParagraphStyle ? Number.parseFloat(secondParagraphStyle.marginTop) : 0,
         paragraphPaddingTop: secondParagraphStyle ? Number.parseFloat(secondParagraphStyle.paddingTop) : 0,
@@ -385,6 +501,7 @@ function measurementScript(fixture) {
         documentScrollWidth: document.documentElement.scrollWidth,
         fontStatus: document.fonts ? document.fonts.status : 'unsupported',
         fontLoaded: document.fonts ? document.fonts.check('16px "SHSans-Bold"') : true,
+        scripturePagination,
         ...fit
       };
     })();
@@ -399,6 +516,8 @@ function coverMeasurementScript() {
     document.getElementById('flowScreen').classList.add('hidden');
     document.querySelector('.overlay-top').classList.remove('hidden');
     document.querySelector('.overlay-bottom').classList.remove('hidden');
+    const scriptureLabel = document.getElementById('scriptureLabel');
+    scriptureLabel.textContent = '本日經文：';
     const reading = document.getElementById('readingLines');
     reading.replaceChildren();
     for (const text of ['提摩太後書三：1-17', '竭誠獻上']) {
@@ -410,6 +529,7 @@ function coverMeasurementScript() {
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const top = document.querySelector('.overlay-top').getBoundingClientRect();
     const bottom = document.querySelector('.overlay-bottom').getBoundingClientRect();
+    const readingBox = reading.getBoundingClientRect();
     const title = getComputedStyle(document.getElementById('title1'));
     const date = getComputedStyle(document.getElementById('dateText'));
     const card = getComputedStyle(document.querySelector('.overlay-bottom'));
@@ -422,7 +542,29 @@ function coverMeasurementScript() {
       dateStrokeWidth: Number.parseFloat(date.webkitTextStrokeWidth) || 0,
       titleTextShadow: title.textShadow,
       cardTextShadow: card.textShadow,
-      cardBoxShadow: card.boxShadow
+      cardBoxShadow: card.boxShadow,
+      cardBackgroundImage: card.backgroundImage,
+      cardBorderLeftWidth: Number.parseFloat(card.borderLeftWidth) || 0,
+      cardWidth: bottom.width,
+      cardRight: bottom.right,
+      readingRight: readingBox.right
+    };
+    scriptureLabel.textContent = '這是一段刻意加長的本日經文標籤，用來驗證自訂內容也不會超出卡片';
+    const longRow = document.createElement('div');
+    longRow.textContent = '這是一段用來驗證很長本日經文內容仍會在卡片內自然換行，而且不會超出封面左右邊界的測試文字。';
+    reading.replaceChildren(longRow);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const longBottom = document.querySelector('.overlay-bottom').getBoundingClientRect();
+    const longReading = reading.getBoundingClientRect();
+    const longContent = {
+      gap: longBottom.top - top.bottom,
+      cardWidth: longBottom.width,
+      cardRight: longBottom.right,
+      readingRight: longReading.right,
+      scrollWidth: reading.scrollWidth,
+      clientWidth: reading.clientWidth,
+      labelScrollWidth: scriptureLabel.scrollWidth,
+      labelClientWidth: scriptureLabel.clientWidth
     };
     canvas.classList.add('no-background');
     await new Promise((resolve) => requestAnimationFrame(resolve));
@@ -433,6 +575,7 @@ function coverMeasurementScript() {
     return {
       viewport: { width: innerWidth, height: innerHeight },
       withBackground,
+      longContent,
       withoutBackgroundStroke
     };
   })())()`;
@@ -448,15 +591,32 @@ function verifyCoverMetrics(metrics, expectedViewport) {
   assert.notEqual(visual.titleTextShadow, 'none', `${label}: complex-background title has no compact shadow fallback`);
   assert.equal(visual.cardTextShadow, 'none', `${label}: white scripture card has a dirty text shadow`);
   assert.doesNotMatch(visual.cardBoxShadow, /50px/, `${label}: scripture card still uses the old broad shadow`);
+  assert.notEqual(visual.cardBackgroundImage, 'none', `${label}: scripture card lost its warm paper treatment`);
+  assert.ok(
+    visual.cardBorderLeftWidth >= 2.5 && visual.cardBorderLeftWidth <= 5.1,
+    `${label}: scripture card accent is not restrained (${visual.cardBorderLeftWidth}px)`
+  );
+  assert.ok(visual.cardWidth < expectedViewport.width * 0.65, `${label}: short scripture card still stretches across the cover`);
+  assert.ok(visual.readingRight <= visual.cardRight + 1, `${label}: short scripture text escapes its card`);
   assert.ok(visual.gap > expectedViewport.height * 0.1, `${label}: title and scripture card are cramped`);
   assert.ok(visual.gap < expectedViewport.height * 0.2, `${label}: title and scripture card remain too far apart`);
   assert.ok(visual.cardBottom < expectedViewport.height * 0.86, `${label}: scripture card was not moved upward`);
+  assert.ok(metrics.longContent.cardWidth <= expectedViewport.width * 0.86 + 1, `${label}: long scripture card exceeds its width cap`);
+  assert.ok(metrics.longContent.cardRight <= expectedViewport.width + 1, `${label}: long scripture card crosses the viewport`);
+  assert.ok(metrics.longContent.readingRight <= metrics.longContent.cardRight + 1, `${label}: long scripture text escapes its card`);
+  assert.ok(metrics.longContent.scrollWidth <= metrics.longContent.clientWidth + 1, `${label}: long scripture text overflows horizontally`);
+  assert.ok(metrics.longContent.labelScrollWidth <= metrics.longContent.labelClientWidth + 1, `${label}: long scripture label overflows horizontally`);
+  assert.ok(metrics.longContent.gap > 0, `${label}: long scripture card overlaps the title`);
 }
 
 function verifyMetrics(metrics, fixture, expectedViewport) {
   const label = `${metrics.kind} at ${expectedViewport.width}x${expectedViewport.height}`;
   assert.equal(metrics.viewport.width, expectedViewport.width, `${label}: unexpected CSS viewport width`);
   assert.equal(metrics.viewport.height, expectedViewport.height, `${label}: unexpected CSS viewport height`);
+  assert.ok(
+    Math.abs(metrics.viewport.deviceScaleFactor - (expectedViewport.deviceScaleFactor || 1)) < 0.01,
+    `${label}: unexpected device scale factor ${metrics.viewport.deviceScaleFactor}`
+  );
   assert.equal(metrics.fontStatus, 'loaded', `${label}: fonts did not finish loading`);
   assert.equal(metrics.fontLoaded, true, `${label}: bundled SHSans-Bold was not loaded`);
   assert.ok(metrics.documentScrollWidth <= metrics.viewport.width + 1, `${label}: document overflows horizontally`);
@@ -467,25 +627,6 @@ function verifyMetrics(metrics, fixture, expectedViewport) {
     metrics.visualRoot.bottom <= metrics.visibleBounds.bottom + 1.5,
     `${label}: content bottom ${metrics.visualRoot.bottom.toFixed(1)} exceeds visible bottom ${metrics.visibleBounds.bottom.toFixed(1)}`
   );
-
-  if (metrics.kind === 'scripture') {
-    assert.equal(metrics.scripturePageCount, 1, `${label}: expected one rendered scripture page`);
-    assert.equal(metrics.continuationCount, 1, `${label}: expected one continuation label`);
-    assert.equal(metrics.continuationText, '續', `${label}: incorrect continuation label`);
-    assert.deepEqual(metrics.chapterLabels, ['第 6 章'], `${label}: cross-chapter divider is incorrect`);
-    assert.ok(metrics.content.scrollHeight <= metrics.content.clientHeight + 2, `${label}: scripture fixture overflows vertically`);
-    return;
-  }
-
-  assert.equal(metrics.fitOk, true, `${label}: real renderer fit function was cancelled`);
-  assert.equal(metrics.sheetCount, 1, `${label}: Utmost must render as exactly one sheet`);
-  assert.match(metrics.headingText, new RegExp(fixture.data.date), `${label}: heading is missing the date`);
-  assert.match(metrics.headingText, new RegExp(fixture.data.title), `${label}: heading is missing the title`);
-  assert.equal(metrics.verseLabelText, '今日經文', `${label}: verse section label is incorrect`);
-  assert.equal(metrics.verseText, fixture.data.verse, `${label}: verse text changed during rendering`);
-  assert.equal(metrics.bodyLabelText, '正文', `${label}: body section label is incorrect`);
-  assert.equal(metrics.paragraphCount, fixture.data.paragraphs.length, `${label}: body paragraphs were merged or lost`);
-  assert.equal(metrics.footerHotzoneExists, true, `${label}: missing #flowFooterHotzone`);
   assert.ok(metrics.footerMetrics, `${label}: missing footer style measurements`);
   assert.equal(
     metrics.footerMetrics.defaultOpacity,
@@ -503,7 +644,84 @@ function verifyMetrics(metrics, fixture, expectedViewport) {
     Math.abs(metrics.footerMetrics.contentRectHeightHidden - metrics.footerMetrics.contentRectHeightVisible) <= 0.5,
     `${label}: footer visibility changes the content usable height`
   );
-  assert.ok(metrics.verseFontSize < metrics.bodyFontSize, `${label}: today's verse is not smaller than the body copy`);
+  assert.ok(metrics.footerMetrics.previousButtonRect.width >= 43, `${label}: previous arrow is too small to click`);
+  assert.ok(metrics.footerMetrics.nextButtonRect.width >= 43, `${label}: next arrow is too small to click`);
+  assert.ok(
+    metrics.footerMetrics.previousButtonRect.top >= metrics.footerMetrics.footerRect.top - 1 &&
+      metrics.footerMetrics.previousButtonRect.bottom <= metrics.footerMetrics.footerRect.bottom + 1 &&
+      metrics.footerMetrics.nextButtonRect.top >= metrics.footerMetrics.footerRect.top - 1 &&
+      metrics.footerMetrics.nextButtonRect.bottom <= metrics.footerMetrics.footerRect.bottom + 1,
+    `${label}: an arrow escapes the floating control pill`
+  );
+  assert.ok(
+    metrics.footerMetrics.previousButtonRect.right <= metrics.footerMetrics.nextButtonRect.left + 1,
+    `${label}: the floating arrows overlap`
+  );
+  assert.ok(metrics.footerMetrics.footerRect.width < metrics.viewport.width * 0.45, `${label}: floating arrows are too wide`);
+
+  if (metrics.kind === 'scripture') {
+    assert.ok(metrics.pageInfoMetrics, `${label}: missing fixed Scripture page status`);
+    assert.notEqual(metrics.pageInfoMetrics.display, 'none', `${label}: Scripture page status is hidden`);
+    assert.equal(metrics.pageInfoMetrics.text, '1 / 1', `${label}: Scripture page count is incorrect`);
+    assert.equal(metrics.pageInfoMetrics.progress, '100%', `${label}: Scripture page progress did not reach 100%`);
+    assert.ok(metrics.pageInfoMetrics.opacity < 0.8, `${label}: Scripture page status is too visually prominent`);
+    assert.ok(
+      metrics.pageInfoMetrics.rect.top >= metrics.pageInfoMetrics.topbarRect.top - 1 &&
+        metrics.pageInfoMetrics.rect.bottom <= metrics.pageInfoMetrics.topbarRect.bottom + 1,
+      `${label}: Scripture page status is not fixed inside the top bar`
+    );
+    assert.ok(
+      metrics.pageInfoMetrics.headingRect.right <= metrics.pageInfoMetrics.rect.left + 1,
+      `${label}: Scripture title overlaps the fixed page status`
+    );
+    assert.equal(metrics.scripturePageCount, 1, `${label}: expected one rendered scripture page`);
+    assert.equal(metrics.continuationCount, 1, `${label}: expected one continuation label`);
+    assert.equal(metrics.continuationText, '續', `${label}: incorrect continuation label`);
+    assert.deepEqual(metrics.chapterLabels, ['第 6 章'], `${label}: cross-chapter divider is incorrect`);
+    assert.ok(metrics.content.scrollHeight <= metrics.content.clientHeight + 2, `${label}: scripture fixture overflows vertically`);
+    assert.equal(metrics.scripturePagination.short.pageCount, 1, `${label}: seven short verses were needlessly split`);
+    assert.deepEqual(metrics.scripturePagination.short.distribution, [7], `${label}: scripture paginator did not use measured capacity`);
+    assert.deepEqual(metrics.scripturePagination.short.pageOverflows, [false], `${label}: packed scripture page overflows`);
+    assert.ok(metrics.scripturePagination.mixed.pageCount > 1, `${label}: mixed fixture did not exercise multiple pages`);
+    assert.ok(metrics.scripturePagination.mixed.pageOverflows.every((value) => value === false), `${label}: a mixed scripture page overflows`);
+    assert.ok(
+      metrics.scripturePagination.mixed.fillableBoundaries.every((value) => value === false),
+      `${label}: paginator left room for the next complete verse on an earlier page`
+    );
+    assert.deepEqual(
+      metrics.scripturePagination.mixed.logicalKeys,
+      fixture.mixedVerses.map((verse) => verse.key),
+      `${label}: mixed scripture order or membership changed`
+    );
+    assert.deepEqual(metrics.scripturePagination.mixed.chapterLabels, ['第 6 章'], `${label}: mixed pagination lost its chapter divider`);
+    return;
+  }
+
+  assert.equal(metrics.fitOk, true, `${label}: real renderer fit function was cancelled`);
+  assert.equal(metrics.pageInfoMetrics.display, 'none', `${label}: one-page Utmost should not show Scripture page status`);
+  assert.equal(metrics.sheetCount, 1, `${label}: Utmost must render as exactly one sheet`);
+  assert.match(metrics.headingText, new RegExp(fixture.data.date), `${label}: heading is missing the date`);
+  assert.match(metrics.headingText, new RegExp(fixture.data.title), `${label}: heading is missing the title`);
+  assert.match(metrics.kickerText, /《竭誠獻上》/, `${label}: kicker is missing the devotional name`);
+  assert.match(metrics.kickerText, new RegExp(fixture.data.date), `${label}: kicker is missing the date`);
+  assert.equal(metrics.verseLabelText, '今日經文', `${label}: verse section label is incorrect`);
+  assert.equal(metrics.verseText, fixture.data.verse, `${label}: verse text changed during rendering`);
+  const citation = fixture.data.verse.match(/[—–―－][^—–―－]*$/)?.[0] || '';
+  assert.equal(metrics.verseCitationText, citation, `${label}: citation was not separated intact`);
+  assert.equal(metrics.verseCitationWhiteSpace, 'nowrap', `${label}: citation can split across lines`);
+  assert.ok(metrics.verseCitationScrollWidth <= metrics.verseCitationClientWidth + 1, `${label}: citation exceeds its card`);
+  assert.ok(metrics.verseCitationRect.top >= metrics.verseQuoteRect.bottom - 1, `${label}: citation did not start on its own line`);
+  assert.equal(metrics.bodyLabelCount, 0, `${label}: body still contains a redundant section label`);
+  assert.equal(metrics.paragraphCount, fixture.data.paragraphs.length, `${label}: body paragraphs were merged or lost`);
+  for (const [role, fontSize] of [
+    ['kicker', metrics.kickerFontSize],
+    ['article title', metrics.titleFontSize],
+    ["today's verse", metrics.verseQuoteFontSize],
+    ['verse citation', metrics.citationFontSize]
+  ]) {
+    assert.equal(fontSize, metrics.bodyFontSize, `${label}: ${role} font size differs from the body copy`);
+  }
+  assert.ok(metrics.regularScale <= 1, `${label}: regular scale exceeds its native size`);
   assert.ok(
     metrics.paragraphTextIndent >= metrics.bodyFontSize * 1.5,
     `${label}: body paragraph first-line indent is not visually clear`
@@ -519,10 +737,29 @@ function verifyMetrics(metrics, fixture, expectedViewport) {
     assert.ok(metrics.regularScale < 1, `${label}: long fixture did not exercise regular fitting`);
     assert.equal(metrics.extreme, false, `${label}: long fixture should fit before emergency transform`);
   }
+  if (metrics.kind === 'utmost-long-verse') {
+    assert.ok(metrics.regularScale < 1, `${label}: long verse did not exercise unified regular fitting`);
+    assert.equal(metrics.extreme, false, `${label}: long verse with short body should not need emergency scaling`);
+  }
+  assert.ok(Math.abs(metrics.sheetTransform.b) <= 0.0001, `${label}: sheet transform contains horizontal skew or rotation`);
+  assert.ok(Math.abs(metrics.sheetTransform.c) <= 0.0001, `${label}: sheet transform contains vertical skew or rotation`);
+  assert.ok(
+    Math.abs(metrics.sheetTransform.a - metrics.sheetTransform.d) <= 0.0001,
+    `${label}: sheet is not scaled uniformly in both axes`
+  );
   if (metrics.kind === 'utmost-extreme') {
     assert.ok(metrics.regularScale <= 0.48 + Number.EPSILON, `${label}: extreme fitting started above the 48% floor`);
     assert.equal(metrics.extreme, true, `${label}: extreme fixture did not exercise transform fitting`);
     assert.ok(metrics.transformScale < 1, `${label}: extreme fixture was not transform-scaled`);
+    assert.ok(
+      Math.abs(metrics.sheetTransform.a - metrics.transformScale) <= 0.001,
+      `${label}: emergency scale was not applied to the complete sheet`
+    );
+  } else {
+    assert.ok(
+      Math.abs(metrics.sheetTransform.a - 1) <= 0.0001,
+      `${label}: non-extreme content received an unexpected transform scale`
+    );
   }
 }
 
@@ -582,7 +819,7 @@ async function run() {
       await window.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', {
         width: viewport.width,
         height: viewport.height,
-        deviceScaleFactor: 1,
+        deviceScaleFactor: viewport.deviceScaleFactor || 1,
         mobile: false,
         screenWidth: viewport.width,
         screenHeight: viewport.height
@@ -594,19 +831,24 @@ async function run() {
       );
       verifyCoverMetrics(metrics, viewport);
       passed++;
-      console.log(`PASS ${'cover'.padEnd(15)} ${viewport.width}x${viewport.height} (clean card + thin outline)`);
+      console.log(`PASS ${'cover'.padEnd(15)} ${viewport.width}x${viewport.height} (compact card + thin outline)`);
     }
     for (const viewport of viewports) {
       await window.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', {
         width: viewport.width,
         height: viewport.height,
-        deviceScaleFactor: 1,
+        deviceScaleFactor: viewport.deviceScaleFactor || 1,
         mobile: false,
         screenWidth: viewport.width,
         screenHeight: viewport.height
       });
       const fixtures = [
-        { kind: 'scripture', page: scripturePage },
+        {
+          kind: 'scripture',
+          page: scripturePage,
+          packingVerses: scripturePackingVerses,
+          mixedVerses: scriptureMixedVerses
+        },
         ...utmostCases.map((data) => ({ kind: data.name, data }))
       ];
 
@@ -614,33 +856,37 @@ async function run() {
         const metrics = await withTimeout(
           window.webContents.executeJavaScript(measurementScript(fixture), true),
           15000,
-          `${fixture.kind} ${viewport.width}x${viewport.height}`
+          `${fixture.kind} ${viewport.width}x${viewport.height}@${viewport.deviceScaleFactor || 1}x`
         );
         verifyMetrics(metrics, fixture, viewport);
         passed++;
         const fitting = fixture.kind === 'scripture'
           ? 'native + continuation'
           : (metrics.extreme ? `extreme ${metrics.transformScale.toFixed(3)}` : `scale ${metrics.regularScale.toFixed(2)}`);
-        console.log(`PASS ${fixture.kind.padEnd(15)} ${viewport.width}x${viewport.height} (${fitting})`);
+        console.log(`PASS ${fixture.kind.padEnd(15)} ${viewport.width}x${viewport.height}@${viewport.deviceScaleFactor || 1}x (${fitting})`);
       }
     }
 
-    window.webContents.sendInputEvent({ type: 'mouseMove', x: 1, y: 1 });
-    const footerLifecycle = await withTimeout(
-      window.webContents.executeJavaScript('window.__readingLayoutHarness.exerciseUtmostFooterAutoHide()', true),
-      4000,
-      'Utmost footer auto-hide'
-    );
-    assert.equal(footerLifecycle.hiddenInitially, true, 'Utmost footer lifecycle: footer did not start hidden');
-    assert.equal(footerLifecycle.setupRevealWorked, true, 'Utmost footer lifecycle: hotzone setup did not reveal the footer');
-    assert.equal(footerLifecycle.directRevealWorked, true, 'Utmost footer lifecycle: revealUtmostFooter did not reveal the footer');
-    assert.equal(footerLifecycle.hiddenAfterSchedule, true, 'Utmost footer lifecycle: scheduled hide did not hide the footer');
-    assert.ok(
-      footerLifecycle.hideElapsed >= 850 && footerLifecycle.hideElapsed <= 1750,
-      `Utmost footer lifecycle: expected about 1000ms, observed ${footerLifecycle.hideElapsed.toFixed(1)}ms`
-    );
-    passed++;
-    console.log(`PASS ${'utmost-footer'.padEnd(15)} auto-hide ${footerLifecycle.hideElapsed.toFixed(0)}ms`);
+    for (const step of ['scripture', 'utmost']) {
+      const footerLifecycle = await withTimeout(
+        window.webContents.executeJavaScript(
+          `window.__readingLayoutHarness.exerciseFlowFooterAutoHide(${JSON.stringify(step)})`,
+          true
+        ),
+        4000,
+        `${step} footer auto-hide`
+      );
+      assert.equal(footerLifecycle.hiddenInitially, true, `${step} footer lifecycle: footer did not start hidden`);
+      assert.equal(footerLifecycle.setupRevealWorked, true, `${step} footer lifecycle: mouse movement did not reveal the arrows`);
+      assert.equal(footerLifecycle.directRevealWorked, true, `${step} footer lifecycle: revealFlowFooter did not reveal the footer`);
+      assert.equal(footerLifecycle.hiddenAfterSchedule, true, `${step} footer lifecycle: scheduled hide did not hide the footer`);
+      assert.ok(
+        footerLifecycle.hideElapsed >= 850 && footerLifecycle.hideElapsed <= 1750,
+        `${step} footer lifecycle: expected about 1000ms, observed ${footerLifecycle.hideElapsed.toFixed(1)}ms`
+      );
+      passed++;
+      console.log(`PASS ${`${step}-footer`.padEnd(15)} auto-hide ${footerLifecycle.hideElapsed.toFixed(0)}ms`);
+    }
     console.log(`Reading layout smoke passed: ${passed} cases using renderer app.js functions`);
   } finally {
     if (window.webContents.debugger.isAttached()) window.webContents.debugger.detach();
