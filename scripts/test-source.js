@@ -173,6 +173,7 @@ const packageJson = JSON.parse(read('package.json'));
 const packageLock = JSON.parse(read('package-lock.json'));
 const ciWorkflow = read('.github/workflows/ci.yml');
 const builderConfig = read('electron-builder.yml');
+const setupMac = read('scripts/setup-mac.sh');
 assert.equal(packageJson.version, packageLock.version, 'package and lockfile versions must match');
 assert.equal(packageJson.version, packageLock.packages[''].version, 'lockfile root version must match package');
 assert.equal(packageJson.scripts['test:layout'], 'electron scripts/test-reading-layout.js', 'layout smoke script is missing');
@@ -182,6 +183,16 @@ assert.match(
   builderConfig,
   /^\s*artifactName:\s*lingxiu-cover-setup-\$\{version\}\.\$\{ext\}\s*$/m,
   'Windows installer filename must match the ASCII path written to latest.yml'
+);
+assert.match(
+  setupMac,
+  /\[\[ "\$ffmpeg_version_line" != ffmpeg\\ version\\ \* \]\]/,
+  'macOS helper setup must verify that the merged ffmpeg binary executes'
+);
+assert.match(
+  setupMac,
+  /\[\[ "\$ffprobe_version_line" != ffprobe\\ version\\ \* \]\]/,
+  'macOS helper setup must verify that the merged ffprobe binary executes'
 );
 console.log('OK package metadata');
 

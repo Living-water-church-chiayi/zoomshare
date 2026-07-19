@@ -152,13 +152,21 @@ if [[ "$deno_version_output" != *"deno $DENO_VERSION"* ]]; then
   exit 1
 fi
 ffmpeg_version_output="$("$STAGE/ffmpeg" -version 2>&1)"
-if [[ "$ffmpeg_version_output" != *"6.1.1"* ]]; then
+ffmpeg_version_line="${ffmpeg_version_output%%$'\n'*}"
+# The b6.1.1 assets are pinned above by their exact SHA-256 digests, while
+# their compiled banners may use an upstream Git revision instead of "6.1.1".
+# Executing each merged binary and checking its banner still catches a broken
+# or wrong-kind universal binary without relying on that unstable label.
+if [[ "$ffmpeg_version_line" != ffmpeg\ version\ * ]]; then
   echo "ffmpeg version verification failed" >&2
+  echo "Observed: $ffmpeg_version_line" >&2
   exit 1
 fi
 ffprobe_version_output="$("$STAGE/ffprobe" -version 2>&1)"
-if [[ "$ffprobe_version_output" != *"6.1.1"* ]]; then
+ffprobe_version_line="${ffprobe_version_output%%$'\n'*}"
+if [[ "$ffprobe_version_line" != ffprobe\ version\ * ]]; then
   echo "ffprobe version verification failed" >&2
+  echo "Observed: $ffprobe_version_line" >&2
   exit 1
 fi
 
