@@ -23,7 +23,8 @@ win:
   # Preserve app name/version/icon resources while intentionally skipping
   # Authenticode until a Windows signing certificate is configured.
   signExecutable: false
-  artifactName: ${productName}-${version}-setup.${ext}
+  # Keep the published filename aligned with latest.yml and safe for updater URLs.
+  artifactName: lingxiu-cover-setup-${version}.${ext}
   extraResources:
     - from: resources/bin/win
       to: bin

@@ -172,11 +172,17 @@ console.log('OK CSS assets');
 const packageJson = JSON.parse(read('package.json'));
 const packageLock = JSON.parse(read('package-lock.json'));
 const ciWorkflow = read('.github/workflows/ci.yml');
+const builderConfig = read('electron-builder.yml');
 assert.equal(packageJson.version, packageLock.version, 'package and lockfile versions must match');
 assert.equal(packageJson.version, packageLock.packages[''].version, 'lockfile root version must match package');
 assert.equal(packageJson.scripts['test:layout'], 'electron scripts/test-reading-layout.js', 'layout smoke script is missing');
 assert.match(ciWorkflow, /npm run test:layout/, 'cross-platform CI must run the Electron reading layout test');
 assert.match(ciWorkflow, /test-packaged-smoke\.js/, 'Windows CI must launch the packaged Electron application');
+assert.match(
+  builderConfig,
+  /^\s*artifactName:\s*lingxiu-cover-setup-\$\{version\}\.\$\{ext\}\s*$/m,
+  'Windows installer filename must match the ASCII path written to latest.yml'
+);
 console.log('OK package metadata');
 
 console.log('\nAll source integrity checks passed.');
