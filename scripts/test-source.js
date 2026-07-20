@@ -19,13 +19,28 @@ const sourceFiles = [
   'scripts/test-announce.js',
   'scripts/test-packaged-smoke.js',
   'scripts/test-reading-layout.js',
+  'scripts/test-host-layout.js',
+  'scripts/test-presence.js',
   'scripts/test-runtime.js',
   'src/main.js',
   'src/preload.js',
+  'src/presence.js',
+  'src/presence-shared.js',
+  'src/assignment-shared.js',
+  'src/host/host-preload.js',
+  'src/host/host.js',
+  'src/host/index.html',
+  'src/host/host.css',
   'src/renderer/app.js',
   'src/renderer/bible.js',
   'src/renderer/index.html',
-  'src/renderer/style.css'
+  'src/renderer/style.css',
+  'server/src/index.mjs',
+  'server/src/shared.mjs',
+  'server/src/google-sheets.mjs',
+  'server/google-apps-script/Code.gs',
+  'server/wrangler.jsonc',
+  'server/README.md'
 ];
 
 // Replacement/private-use characters are reliable signs of a broken text decode.
@@ -152,6 +167,12 @@ const missingApi = [...new Set(apiCalls.filter((name) => !exposedApi.has(name)))
 assert.deepStrictEqual(missingApi, [], `preload is missing renderer APIs: ${missingApi.join(', ')}`);
 console.log('OK preload API coverage');
 
+assert.match(main, /new BrowserWindow\(\{[\s\S]*?title: '靈修班主持台'/, 'host console must use a separate BrowserWindow');
+assert.match(main, /trustedHandle\('presence:pair'/, 'presence pairing IPC is missing');
+assert.match(main, /presenceManager\.scheduleToday/, 'private backend schedule must be preferred');
+assert.match(preload, /openHostConsole/, 'main renderer cannot open the private host console');
+console.log('OK private host console wiring');
+
 const css = read('src/renderer/style.css');
 for (const selector of [
   '.scripture-page',
@@ -200,7 +221,9 @@ const setupMac = read('scripts/setup-mac.sh');
 assert.equal(packageJson.version, packageLock.version, 'package and lockfile versions must match');
 assert.equal(packageJson.version, packageLock.packages[''].version, 'lockfile root version must match package');
 assert.equal(packageJson.scripts['test:layout'], 'electron scripts/test-reading-layout.js', 'layout smoke script is missing');
+assert.equal(packageJson.scripts['test:host-layout'], 'electron scripts/test-host-layout.js', 'host layout smoke script is missing');
 assert.match(ciWorkflow, /npm run test:layout/, 'cross-platform CI must run the Electron reading layout test');
+assert.match(ciWorkflow, /npm run test:host-layout/, 'cross-platform CI must run the host console layout test');
 assert.match(ciWorkflow, /test-packaged-smoke\.js/, 'Windows CI must launch the packaged Electron application');
 assert.match(
   builderConfig,

@@ -18,6 +18,7 @@ files:
   - "!src/renderer/fonts/SourceHanSerifTC-Medium.otf"
   - "!src/renderer/fonts/SourceHanSerifTC-Heavy.otf"
 win:
+  icon: build/icon.ico
   target:
     - nsis
   # Preserve app name/version/icon resources while intentionally skipping
@@ -35,6 +36,7 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
 mac:
+  icon: build/icon.icns
   target:
     - target: dmg
       arch:

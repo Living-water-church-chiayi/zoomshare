@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('api', {
   onUpdateDownloaded: (cb) => ipcRenderer.on('update:downloaded', (_e, d) => cb(d)),
 
   openExternal: (url) => ipcRenderer.invoke('open:external', url),
+  openHostConsole: () => ipcRenderer.invoke('host:open'),
   scheduleToday: (url) => ipcRenderer.invoke('schedule:today', url),
   utmostToday: () => ipcRenderer.invoke('utmost:today'),
   biblePassage: (ref) => ipcRenderer.invoke('bible:passage', ref),

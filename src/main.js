@@ -13,6 +13,10 @@ const { execFile, spawn } = require('child_process');
 const { promisify } = require('util');
 const execFileP = promisify(execFile);
 const { autoUpdater } = require('electron-updater');
+const { PresenceManager } = require('./presence');
+
+const presenceManager = new PresenceManager();
+const APP_ICON_PATH = path.join(__dirname, 'renderer', 'images', 'app-icon.png');
 
 // 允許背景音樂與敬拜影片在沒有使用者手勢時自動播放。
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -984,6 +988,7 @@ function bgFileUrl(fileName) {
 
 // ---------- IPC ----------
 const RENDERER_ENTRY_PATH = path.resolve(__dirname, 'renderer', 'index.html');
+const HOST_ENTRY_PATH = path.resolve(__dirname, 'host', 'index.html');
 
 function sameFilePath(a, b) {
   const left = path.resolve(a);
@@ -991,17 +996,22 @@ function sameFilePath(a, b) {
   return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
 }
 
-function isTrustedRendererUrl(value) {
+function isTrustedRendererUrl(value, expectedPath = RENDERER_ENTRY_PATH) {
   try {
     const parsed = new URL(value);
-    return parsed.protocol === 'file:' && sameFilePath(fileURLToPath(parsed), RENDERER_ENTRY_PATH);
+    return parsed.protocol === 'file:' && sameFilePath(fileURLToPath(parsed), expectedPath);
   } catch { return false; }
 }
 
 function isTrustedIpcSender(event) {
-  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) return false;
   if (!event.senderFrame || event.senderFrame !== event.sender.mainFrame) return false;
-  return isTrustedRendererUrl(event.senderFrame.url);
+  if (mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents) {
+    return isTrustedRendererUrl(event.senderFrame.url, RENDERER_ENTRY_PATH);
+  }
+  if (hostWindow && !hostWindow.isDestroyed() && event.sender === hostWindow.webContents) {
+    return isTrustedRendererUrl(event.senderFrame.url, HOST_ENTRY_PATH);
+  }
+  return false;
 }
 
 function trustedHandle(channel, handler) {
@@ -1093,6 +1103,7 @@ function registerIpc() {
     try { serialized = JSON.stringify(cfg); } catch { throw new Error('設定格式不正確'); }
     if (Buffer.byteLength(serialized, 'utf8') > 512 * 1024) throw new Error('設定內容過大');
     await writeConfig(cfg);
+    sendHostScriptureConfig(await readConfig());
     return { ok: true };
   });
 
@@ -1197,6 +1208,8 @@ function registerIpc() {
     catch (e) { return { ok: false, error: e.message }; }
   });
   trustedHandle('schedule:today', async (url) => {
+    const managed = await presenceManager.scheduleToday().catch(() => null);
+    if (managed && managed.ok) return managed;
     try { return await fetchScheduleToday(normalizeScheduleUrl(url)); }
     catch (e) { return { ok: false, error: e.message }; }
   });
@@ -1222,10 +1235,36 @@ function registerIpc() {
     clipboard.writeText(text);
     return { ok: true };
   });
+
+  trustedHandle('host:open', () => {
+    openHostWindow();
+    return { ok: true };
+  });
+  trustedHandle('host:close', () => {
+    if (hostWindow && !hostWindow.isDestroyed()) hostWindow.close();
+    return { ok: true };
+  });
+  trustedHandle('presence:state', () => presenceManager.publicState());
+  trustedHandle('presence:pair', async (settings) => {
+    if (!isPlainObject(settings)) throw new Error('配對資料格式不正確');
+    return presenceManager.pair(settings);
+  });
+  trustedHandle('presence:unpair', () => presenceManager.unpair());
+  trustedHandle('presence:refresh', () => presenceManager.refreshBootstrap());
+  trustedHandle('presence:assignments', async (assignments) => {
+    if (!isPlainObject(assignments)) throw new Error('閱讀安排格式不正確');
+    return presenceManager.saveAssignments(assignments);
+  });
+  trustedHandle('host:utmost-today', async () => {
+    try { return await fetchUtmostToday(); }
+    catch (error) { return { ok: false, body: '', error: error.message }; }
+  });
+  trustedHandle('host:scripture-current', async () => scriptureConfigFrom(await readConfig()));
 }
 
 // ---------- 視窗 ----------
 let mainWindow = null;
+let hostWindow = null;
 let lastWideBounds = null;
 app.on('second-instance', () => {
   if (!mainWindow || mainWindow.isDestroyed()) {
@@ -1250,6 +1289,7 @@ function createWindow() {
     ...initialBounds,
     minWidth: Math.min(640, size.width), minHeight: Math.min(360, size.height),
     backgroundColor: '#000000', title: '靈修封面', autoHideMenuBar: true,
+    icon: APP_ICON_PATH,
     frame: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -1287,7 +1327,81 @@ function createWindow() {
   });
 
   window.webContents.once('did-finish-load', () => { checkLatestVersion(); });
-  window.on('closed', () => { if (mainWindow === window) mainWindow = null; });
+  window.on('closed', () => {
+    if (mainWindow === window) mainWindow = null;
+    if (hostWindow && !hostWindow.isDestroyed()) hostWindow.close();
+  });
+}
+
+function sendPresenceState(state = presenceManager.publicState()) {
+  if (hostWindow && !hostWindow.isDestroyed()) hostWindow.webContents.send('presence:state', state);
+}
+
+function scriptureConfigFrom(cfg) {
+  return {
+    book: String(cfg && cfg.scriptureBook || '').trim().slice(0, 40),
+    startCh: Number(cfg && cfg.scriptureStartCh),
+    startV: Number(cfg && cfg.scriptureStartV),
+    endCh: Number(cfg && cfg.scriptureEndCh),
+    endV: Number(cfg && cfg.scriptureEndV)
+  };
+}
+
+function sendHostScriptureConfig(cfg) {
+  if (hostWindow && !hostWindow.isDestroyed()) {
+    hostWindow.webContents.send('host:scripture-current', scriptureConfigFrom(cfg));
+  }
+}
+
+function openHostWindow() {
+  if (hostWindow && !hostWindow.isDestroyed()) {
+    if (hostWindow.isMinimized()) hostWindow.restore();
+    hostWindow.show();
+    hostWindow.focus();
+    sendPresenceState();
+    return hostWindow;
+  }
+  const display = mainWindow && !mainWindow.isDestroyed()
+    ? screen.getDisplayMatching(mainWindow.getBounds())
+    : screen.getPrimaryDisplay();
+  const workArea = display.workArea;
+  const width = Math.min(460, workArea.width);
+  const height = Math.min(760, workArea.height);
+  const window = new BrowserWindow({
+    width,
+    height,
+    minWidth: Math.min(360, width),
+    minHeight: Math.min(560, height),
+    x: Math.max(workArea.x, workArea.x + workArea.width - width - 18),
+    y: Math.max(workArea.y, workArea.y + 18),
+    title: '靈修班主持台',
+    backgroundColor: '#f7f1f5',
+    icon: APP_ICON_PATH,
+    autoHideMenuBar: true,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'host', 'host-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+  hostWindow = window;
+  window.removeMenu();
+  window.webContents.on('will-navigate', (event, targetUrl) => {
+    if (!isTrustedRendererUrl(targetUrl, HOST_ENTRY_PATH)) event.preventDefault();
+  });
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  window.loadFile(HOST_ENTRY_PATH).catch((error) => console.error('載入主持台失敗：', error));
+  window.once('ready-to-show', () => {
+    if (!window.isDestroyed()) {
+      window.show();
+      sendPresenceState();
+      readConfig().then(sendHostScriptureConfig).catch(() => {});
+    }
+  });
+  window.on('closed', () => { if (hostWindow === window) hostWindow = null; });
+  return window;
 }
 
 // ---------- 應用程式更新設定 ----------
@@ -1339,8 +1453,10 @@ async function checkLatestVersion() {
 
 app.whenReady().then(async () => {
   registerIpc();
+  presenceManager.on('state', sendPresenceState);
   await ensureWritableYtDlp();
   createWindow();
+  presenceManager.start().catch((error) => console.warn('啟動主持台即時連線失敗：', error.message));
   setupAutoUpdater();
   autoUpdateYtDlp().then((r) => { if (r && r.updated) console.log('yt-dlp 已更新至', r.to); });
   readConfig().then((cfg) => {
@@ -1352,4 +1468,5 @@ app.whenReady().then(async () => {
   if (app.isPackaged && process.platform !== 'darwin') autoUpdater.checkForUpdates().catch(() => {});
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
+app.on('before-quit', () => presenceManager.stop());
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

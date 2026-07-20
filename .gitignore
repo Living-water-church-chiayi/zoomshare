@@ -16,3 +16,10 @@ sermon-ppt/
 
 # Windows 殘留的 nul 假裝裝置檔
 nul
+
+# Cloudflare Worker 本機秘密與狀態
+server/.dev.vars
+server/.wrangler/
+
+# Codex 本機視覺檢查與暫存截圖
+.codex-backups/

@@ -1,0 +1,10 @@
+ZOOM_ACCOUNT_ID=your_zoom_account_id
+ZOOM_MEETING_NUMBER=77730692079
+ZOOM_WEBHOOK_SECRET=your_zoom_webhook_secret
+INSTALL_KEY=generate_a_long_random_install_key
+GOOGLE_SHEET_ID=your_google_sheet_id
+GOOGLE_SERVICE_ACCOUNT_EMAIL=service-account@project.iam.gserviceaccount.com
+GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+# If service-account keys are disabled, use the Apps Script bridge instead:
+GOOGLE_APPS_SCRIPT_URL=https://script.google.com/macros/s/your_deployment_id/exec
+GOOGLE_APPS_SCRIPT_SECRET=generate_a_separate_long_random_secret

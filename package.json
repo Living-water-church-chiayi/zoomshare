@@ -1,6 +1,6 @@
 {
   "name": "lingxiu-cover",
-  "version": "1.0.14",
+  "version": "1.0.17",
   "description": "靈修封面 — 晨更/靈修班開始前的 16:9 封面與背景音樂/敬拜播放工具 (Windows/Mac)",
   "main": "src/main.js",
   "author": "",
@@ -10,9 +10,12 @@
   },
   "scripts": {
     "start": "electron .",
-    "test": "node --check src/main.js && node --check src/preload.js && node --check src/renderer/app.js && node --check src/renderer/bible.js && node --check scripts/test-source.js && node --check scripts/test-runtime.js && node --check scripts/test-reading-layout.js && node --check scripts/test-packaged-smoke.js && node scripts/test-source.js && node scripts/test-runtime.js",
+    "test": "node --check src/main.js && node --check src/preload.js && node --check src/presence.js && node --check src/presence-shared.js && node --check src/assignment-shared.js && node --check src/host/host-preload.js && node --check src/host/host.js && node --check src/renderer/app.js && node --check src/renderer/bible.js && node --check scripts/test-source.js && node --check scripts/test-runtime.js && node --check scripts/test-reading-layout.js && node --check scripts/test-packaged-smoke.js && node scripts/test-source.js && node scripts/test-runtime.js && node --test server/test/*.test.mjs && node --test scripts/test-presence.js",
     "test:layout": "electron scripts/test-reading-layout.js",
+    "test:host-layout": "electron scripts/test-host-layout.js",
     "test:packaged": "node scripts/test-packaged-smoke.js",
+    "check:presence": "wrangler deploy --dry-run --config server/wrangler.jsonc",
+    "deploy:presence": "wrangler deploy --config server/wrangler.jsonc",
     "build": "electron-builder",
     "build:win": "electron-builder --win",
     "build:mac": "electron-builder --mac",
@@ -21,9 +24,11 @@
   },
   "devDependencies": {
     "electron": "43.1.1",
-    "electron-builder": "26.15.3"
+    "electron-builder": "26.15.3",
+    "wrangler": "4.112.0"
   },
   "dependencies": {
-    "electron-updater": "^6.8.9"
+    "electron-updater": "^6.8.9",
+    "ws": "^8.18.3"
   }
 }

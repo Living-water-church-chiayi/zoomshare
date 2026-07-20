@@ -163,6 +163,23 @@ npm run build:win          # 只打包，產出 dist/靈修封面-<版號>-setup
 3. 第一次設定好背景音樂 / 敬拜的 YouTube 連結後即會自動快取，之後點 🎵 / 「敬拜」即播。
 4. 用 Zoom 分享此視窗即可（工具列閒置會自動隱藏，畫面乾淨）。
 
+## Zoom 在線服務人選控制台
+
+App 可搭配 `server/` 內的 Cloudflare Worker，透過 Zoom 官方會議事件顯示目前在線者，並與 Google 試算表的「服務名單」配對：
+
+- 按原本的 **Zoom** 按鈕時會一起開啟獨立的「主持人控制台」；Zoom 仍只分享靈修投影視窗。
+- 控制台分別列出可讀經文、可讀竭誠獻上的在線人員，選人結果只留在當班主持人的電腦。
+- Zoom 帳號擁有者只需建立並啟用一次內部 Server-to-Server OAuth App；各主持人不需登入該帳號。
+- 每台 Windows／Mac 電腦由安裝人員輸入 Worker 網址與安裝金鑰配對一次，裝置權杖會用作業系統安全儲存加密。
+- 只維護當次會議的在線狀態，不建立出席歷史；會議結束立即清除。
+
+後端部署、Zoom 事件訂閱、私人 Google 試算表與「服務名單」欄位設定請見 [`server/README.md`](server/README.md)。部署前可先執行：
+
+```bash
+npm run check:presence
+npm run deploy:presence
+```
+
 ## 備註
 
 - 本工具供教會內部 / 個人使用；`yt-dlp` 抽取 YouTube 內容請遵守當地法規與服務條款。

@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'" />
+  <title>靈修班主持台</title>
+  <link rel="stylesheet" href="host.css" />
+</head>
+<body>
+  <main>
+    <section id="setupView" class="setup-view hidden">
+      <img class="welcome-mark" src="../renderer/images/app-icon.png" alt="" aria-hidden="true" />
+      <h1>設定主持人電腦</h1>
+      <p>安裝人員只需在這台電腦輸入一次服務網址及安裝金鑰；之後主持人不必登入或重新授權。</p>
+      <form id="pairForm">
+        <label>服務網址
+          <input id="serviceUrl" type="url" required autocomplete="url" placeholder="https://lingxiu-presence.example.workers.dev" />
+        </label>
+        <label>裝置名稱
+          <input id="deviceLabel" type="text" maxlength="80" required placeholder="例如：教會 Windows 主持電腦" />
+        </label>
+        <label>安裝金鑰
+          <input id="installKey" type="password" minlength="16" maxlength="512" required autocomplete="off" />
+        </label>
+        <button id="pairButton" class="primary wide" type="submit">配對這台電腦</button>
+        <p id="pairMessage" class="form-message" role="status"></p>
+      </form>
+    </section>
+
+    <section id="consoleView" class="console-view hidden">
+      <header class="console-header">
+        <div>
+          <p class="eyebrow">PRIVATE HOST VIEW</p>
+          <h1>主持人服務控制台</h1>
+        </div>
+        <div id="connectionBadge" class="status-badge">連線中</div>
+      </header>
+
+      <div id="meetingBar" class="meeting-bar">
+        <span id="meetingState">尚未偵測到 Zoom 會議</span>
+        <strong id="onlineCount">0 人在線</strong>
+      </div>
+
+      <div id="notice" class="notice hidden" role="alert"></div>
+
+        <details class="all-online">
+        <summary><span>全部在線</span><strong id="allOnlineCount">0</strong></summary>
+        <div id="allOnlineList" class="online-list"></div>
+      </details>
+
+      <section class="service-group scripture-service" aria-labelledby="scriptureServiceTitle">
+        <div class="section-heading">
+          <h2 id="scriptureServiceTitle">經文</h2>
+          <span>先點分段，再點下方人名</span>
+        </div>
+        <div class="assignment-group">
+          <h3>經文分段 <small id="scriptureRangeSummary"></small></h3>
+          <div id="scriptureAssignments" class="assignment-grid"></div>
+        </div>
+        <div class="eligible-group">
+          <h3><span>目前可讀經文</span><small id="scriptureTargetSummary"></small></h3>
+          <div id="scriptureEligibleList" class="eligible-list"></div>
+        </div>
+      </section>
+
+      <section class="service-group utmost-service" aria-labelledby="utmostServiceTitle">
+        <div class="section-heading">
+          <h2 id="utmostServiceTitle">竭誠獻上</h2>
+          <span>先點分段，再點下方人名</span>
+        </div>
+        <section class="today-sharing" aria-labelledby="todaySharingTitle">
+          <span id="todaySharingTitle">今日竭誠獻上分享</span>
+          <strong id="todaySharingName">讀取中…</strong>
+          <small id="todaySharingNext"></small>
+        </section>
+        <div class="assignment-group">
+          <h3>竭誠獻上段落 <small id="utmostParagraphSummary">正在計算段落…</small></h3>
+          <div id="utmostAssignments" class="assignment-grid"></div>
+        </div>
+        <div class="eligible-group">
+          <h3><span>目前可讀竭誠獻上</span><small id="utmostTargetSummary"></small></h3>
+          <div id="utmostEligibleList" class="eligible-list"></div>
+        </div>
+      </section>
+
+      <div id="rosterErrors" class="roster-errors hidden"></div>
+
+      <footer>
+        <button id="refreshButton" type="button">更新名單</button>
+        <details class="device-menu">
+          <summary>裝置設定</summary>
+          <div>
+            <p id="deviceDescription"></p>
+            <button id="unpairButton" type="button" class="danger">解除這台電腦的配對</button>
+          </div>
+        </details>
+      </footer>
+    </section>
+  </main>
+
+  <script src="../renderer/bible.js"></script>
+  <script src="../presence-shared.js"></script>
+  <script src="../assignment-shared.js"></script>
+  <script src="host.js"></script>
+</body>
+</html>

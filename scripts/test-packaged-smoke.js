@@ -44,6 +44,23 @@ async function waitForPage(port, child, timeoutMilliseconds = 30000) {
   throw new Error(`Timed out waiting for packaged renderer${lastError ? `: ${lastError.message}` : ''}`);
 }
 
+async function waitForTarget(port, child, pattern, timeoutMilliseconds = 15000) {
+  const deadline = Date.now() + timeoutMilliseconds;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) throw new Error(`Packaged application exited early with code ${child.exitCode}`);
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(1500) });
+      if (response.ok) {
+        const targets = await response.json();
+        const target = targets.find((item) => item.type === 'page' && pattern.test(item.url || ''));
+        if (target && target.webSocketDebuggerUrl) return target;
+      }
+    } catch {}
+    await delay(200);
+  }
+  throw new Error(`Timed out waiting for packaged target ${pattern}`);
+}
+
 function evaluate(page, expression) {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(page.webSocketDebuggerUrl);
@@ -133,6 +150,26 @@ async function run() {
     assert.equal(state.hasFlowContent, true, 'Packaged renderer is missing the reading content container');
     assert.equal(state.hasPageControls, true, 'Packaged renderer is missing reading navigation controls');
     assert.equal(state.platformClass, true, 'Packaged renderer initialization did not finish');
+
+    await evaluate(page, `document.getElementById('btnHost').click()`);
+    const hostPage = await waitForTarget(port, child, /host[\\/]index\.html(?:$|[?#])/);
+    const hostExpression = `(() => ({
+      readyState: document.readyState,
+      title: document.title,
+      setupVisible: Boolean(document.getElementById('setupView')) && !document.getElementById('setupView').classList.contains('hidden'),
+      hasPrivateLists: Boolean(document.getElementById('scriptureAssignments') && document.getElementById('utmostAssignments') && document.getElementById('scriptureEligibleList') && document.getElementById('utmostEligibleList'))
+    }))()`;
+    const hostDeadline = Date.now() + 10000;
+    let hostState = null;
+    while (Date.now() < hostDeadline) {
+      hostState = await evaluate(hostPage, hostExpression);
+      if (hostState.readyState === 'complete' && hostState.setupVisible && hostState.hasPrivateLists) break;
+      await delay(200);
+    }
+    assert.equal(hostState.readyState, 'complete', 'Packaged host console did not finish loading');
+    assert.match(hostState.title, /主持/, 'Packaged host console title is incorrect');
+    assert.equal(hostState.setupVisible, true, 'Fresh packaged host console should show device pairing');
+    assert.equal(hostState.hasPrivateLists, true, 'Packaged host console is missing candidate lists');
     console.log(`Packaged Electron smoke passed: ${path.basename(executable)}`);
   } finally {
     stopProcessTree(child);

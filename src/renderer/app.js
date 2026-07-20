@@ -2653,9 +2653,13 @@ async function init() {
   });
   $('btnZoom').addEventListener('click', () => {
     const launchUrl = zoomLaunchUrl(cfg.zoomUrl);
-    if (launchUrl) window.api.openExternal(launchUrl);
+    if (launchUrl) {
+      window.api.openHostConsole();
+      window.api.openExternal(launchUrl);
+    }
     else { toast('請設定有效的 Zoom 連結'); openSettings(); }
   });
+  $('btnHost').addEventListener('click', () => window.api.openHostConsole());
   $('btnPickImage').addEventListener('click', async () => {
     const p = await window.api.pickImage();
     if (p) useImagePath(p);

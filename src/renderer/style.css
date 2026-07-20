@@ -895,6 +895,7 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
   box-shadow: 0 7px 16px rgba(47,41,51,.2);
 }
 .toolbar .btn-zoom,
+.toolbar .btn-host,
 .toolbar .btn-announce { color: var(--ink); }
 .toolbar .btn-close:hover { background: #d93025; color: #fff; }
 .toolbar .tb-sep {

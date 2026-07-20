@@ -1,0 +1,29 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "lingxiu-presence",
+  "main": "src/index.mjs",
+  "compatibility_date": "2026-07-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MEETING_PRESENCE",
+        "class_name": "MeetingPresence"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["MeetingPresence"]
+    }
+  ],
+  "vars": {
+    "APP_TIME_ZONE": "Asia/Taipei",
+    "ZOOM_MEETING_NUMBER": "77730692079",
+    "GOOGLE_SHEET_ID": "11O0As3DWpT45otcL5T7BadMpPVWcWKAoiZ5OUPocMpA",
+    "UTMOST_ASSIGNMENT_CSV_URL": "https://docs.google.com/spreadsheets/d/1lpQF3nhMmQq1nWiRxiooSCpUVkpzwTeLEjd10CfZlWA/export?format=csv&gid=1638326068",
+    "SCHEDULE_RANGE": "經文進度!A:F",
+    "ROSTER_RANGE": "服務名單!A:G"
+  }
+}
