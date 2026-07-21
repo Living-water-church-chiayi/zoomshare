@@ -7,7 +7,7 @@ const fsp = require('fs/promises');
 const path = require('path');
 const WebSocket = require('ws');
 
-const EMPTY_SNAPSHOT = Object.freeze({ status: 'idle', meetingNumber: '', meetingUuid: '', participants: [] });
+const EMPTY_SNAPSHOT = Object.freeze({ status: 'idle', meetingNumber: '', meetingUuid: '', peakParticipants: 0, participants: [] });
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 
 function normalizeServiceUrl(value, allowLocalHttp = false) {
@@ -39,6 +39,7 @@ function validSnapshot(value) {
     status: value.status,
     meetingNumber: String(value.meetingNumber || '').replace(/\D/g, '').slice(0, 32),
     meetingUuid: String(value.meetingUuid || '').slice(0, 256),
+    peakParticipants: Math.max(0, Math.min(1000, Number.parseInt(value.peakParticipants, 10) || participants.length)),
     participants
   };
 }

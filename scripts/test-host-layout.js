@@ -33,6 +33,7 @@ let state = {
     status: 'active',
     meetingNumber: '77730692079',
     meetingUuid: 'meeting-1',
+    peakParticipants: 4,
     participants: [
       { sessionId: 'p1', displayName: '王小明', joinedAt: '' },
       { sessionId: 'p2', displayName: '林平安', joinedAt: '' },
@@ -72,6 +73,8 @@ async function run() {
     utmostSlots: document.querySelectorAll('#utmostAssignments .assignment-card').length,
     sharingName: document.getElementById('todaySharingName').textContent,
     onlineRows: document.querySelectorAll('#allOnlineList .online-row').length,
+    peakOnline: document.getElementById('onlineCount').textContent,
+    eligibleColumns: getComputedStyle(document.getElementById('scriptureEligibleList')).gridTemplateColumns.split(' ').length,
     bodyScrollWidth: document.body.scrollWidth,
     bodyClientWidth: document.body.clientWidth
   }))()`);
@@ -81,6 +84,8 @@ async function run() {
   assert.equal(initial.utmostSlots, 4);
   assert.equal(initial.sharingName, '今日分享者');
   assert.equal(initial.onlineRows, 4);
+  assert.equal(initial.peakOnline, '本次會議最高 4 人在線');
+  assert.equal(initial.eligibleColumns, 3);
   assert.ok(initial.bodyScrollWidth <= initial.bodyClientWidth, 'host console overflows horizontally');
 
   await window.webContents.executeJavaScript(`document.querySelector('#scriptureAssignments .assignment-card').click()`);
@@ -93,11 +98,17 @@ async function run() {
   assert.equal(inlineCandidates.modalRemoved, true);
   assert.match(inlineCandidates.target, /9–13/);
   assert.equal(inlineCandidates.candidateCount, 1);
-  assert.match(inlineCandidates.details, /昨天/);
+  assert.doesNotMatch(inlineCandidates.details, /昨天沒有讀/);
   assert.match(inlineCandidates.details, /本週/);
   await window.webContents.executeJavaScript(`document.querySelector('#scriptureEligibleList .candidate-button').click()`);
-  const selected = await window.webContents.executeJavaScript(`document.querySelector('#scriptureAssignments .assignment-card strong').textContent`);
-  assert.equal(selected, '王小明');
+  const selected = await window.webContents.executeJavaScript(`(() => ({
+    name: document.querySelector('#scriptureAssignments .assignment-card strong').textContent,
+    candidateSelected: document.querySelector('#scriptureEligibleList .candidate-button').classList.contains('selected'),
+    details: document.querySelector('#scriptureEligibleList .candidate-button small').textContent
+  }))()`);
+  assert.equal(selected.name, '王小明');
+  assert.equal(selected.candidateSelected, true);
+  assert.match(selected.details, /已安排・本週閱讀/);
 
   await window.webContents.executeJavaScript(`document.querySelector('#utmostAssignments .assignment-card').click()`);
   const utmostCandidateIds = await window.webContents.executeJavaScript(`Array.from(document.querySelectorAll('#utmostEligibleList .candidate-button'), (item) => item.dataset.memberId)`);
@@ -113,6 +124,22 @@ async function run() {
     }))()`);
     assert.equal(departed.offline, true);
     assert.match(departed.notice, /已離線/);
+
+    state = {
+      ...state,
+      snapshot: {
+        status: 'idle', meetingNumber: '77730692079', meetingUuid: 'meeting-1',
+        peakParticipants: 8, participants: []
+      }
+    };
+    window.webContents.send('presence:state', state);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const ended = await window.webContents.executeJavaScript(`(() => ({
+      meeting: document.getElementById('meetingState').textContent,
+      peak: document.getElementById('onlineCount').textContent
+    }))()`);
+    assert.equal(ended.meeting, 'Zoom 會議已結束・77730692079');
+    assert.equal(ended.peak, '本次會議最高 8 人在線');
   }
 
   const outputPath = process.env.HOST_PREVIEW_OUTPUT;

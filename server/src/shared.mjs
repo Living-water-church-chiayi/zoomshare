@@ -218,6 +218,7 @@ export function applyMeetingMutation(current, versions, mutation) {
         meetingNumber: mutation.meetingNumber,
         meetingUuid: mutation.meetingUuid,
         startedAt: mutation.eventTs,
+        peakParticipants: 0,
         participants: {}
       },
       versions: {},
@@ -228,16 +229,34 @@ export function applyMeetingMutation(current, versions, mutation) {
     if (!current || (mutation.meetingUuid && current.meetingUuid && mutation.meetingUuid !== current.meetingUuid)) {
       return { meeting: current || null, versions: nextVersions, changed: false };
     }
-    return { meeting: null, versions: {}, changed: true };
+    if (current.status === 'ended') return { meeting: current, versions: {}, changed: false };
+    return {
+      meeting: {
+        ...current,
+        status: 'ended',
+        endedAt: mutation.eventTs,
+        peakParticipants: Math.max(
+          Number(current.peakParticipants || 0),
+          Object.keys(current.participants || {}).length
+        ),
+        participants: {}
+      },
+      versions: {},
+      changed: true
+    };
   }
 
   let meeting = current;
-  if (!meeting || meeting.meetingUuid !== mutation.meetingUuid) {
+  if (meeting && meeting.status === 'ended' && meeting.meetingUuid === mutation.meetingUuid) {
+    return { meeting, versions: nextVersions, changed: false };
+  }
+  if (!meeting || meeting.meetingUuid !== mutation.meetingUuid || meeting.status !== 'active') {
     meeting = {
       status: 'active',
       meetingNumber: mutation.meetingNumber,
       meetingUuid: mutation.meetingUuid,
       startedAt: mutation.eventTs,
+      peakParticipants: 0,
       participants: {}
     };
     for (const key of Object.keys(nextVersions)) delete nextVersions[key];
@@ -249,16 +268,20 @@ export function applyMeetingMutation(current, versions, mutation) {
   const participants = { ...(meeting.participants || {}) };
   if (mutation.type === 'meeting.participant_joined') participants[sessionId] = mutation.participant;
   else delete participants[sessionId];
-  return { meeting: { ...meeting, participants }, versions: nextVersions, changed: true };
+  const peakParticipants = Math.max(Number(meeting.peakParticipants || 0), Object.keys(participants).length);
+  return { meeting: { ...meeting, peakParticipants, participants }, versions: nextVersions, changed: true };
 }
 
 export function snapshotFromMeeting(meeting) {
-  if (!meeting) return { status: 'idle', meetingNumber: '', meetingUuid: '', participants: [] };
+  if (!meeting) return { status: 'idle', meetingNumber: '', meetingUuid: '', peakParticipants: 0, participants: [] };
+  const active = meeting.status === 'active';
+  const participants = active ? Object.values(meeting.participants || {}) : [];
   return {
-    status: 'active',
+    status: active ? 'active' : 'idle',
     meetingNumber: meeting.meetingNumber,
     meetingUuid: meeting.meetingUuid,
-    participants: Object.values(meeting.participants || {}).map((participant) => ({
+    peakParticipants: Math.max(Number(meeting.peakParticipants || 0), participants.length),
+    participants: participants.map((participant) => ({
       sessionId: participant.sessionId,
       displayName: participant.displayName,
       joinedAt: participant.joinedAt || ''
