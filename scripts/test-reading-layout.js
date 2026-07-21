@@ -457,6 +457,10 @@ function measurementScript(fixture) {
             return { a: matrix.a, b: matrix.b, c: matrix.c, d: matrix.d };
           })();
 
+      const appRegion = (element) => element
+        ? getComputedStyle(element).getPropertyValue('-webkit-app-region').trim()
+        : '';
+
       return {
         kind: fixture.kind,
         viewport: { width: innerWidth, height: innerHeight, deviceScaleFactor: devicePixelRatio },
@@ -498,6 +502,12 @@ function measurementScript(fixture) {
           topbarRect: topbar ? rectData(topbar) : null,
           headingRect: heading ? rectData(heading) : null
         } : null,
+        appRegions: {
+          screen: appRegion(screen),
+          content: appRegion(content),
+          previousButton: appRegion(previousButton),
+          nextButton: appRegion(nextButton)
+        },
         kickerFontSize: utmostKicker ? Number.parseFloat(getComputedStyle(utmostKicker).fontSize) : 0,
         verseQuoteFontSize: verseQuote ? Number.parseFloat(getComputedStyle(verseQuote).fontSize) : 0,
         citationFontSize: verseCitation ? Number.parseFloat(getComputedStyle(verseCitation).fontSize) : 0,
@@ -638,6 +648,10 @@ function verifyMetrics(metrics, fixture, expectedViewport) {
     `${label}: content bottom ${metrics.visualRoot.bottom.toFixed(1)} exceeds visible bottom ${metrics.visibleBounds.bottom.toFixed(1)}`
   );
   assert.ok(metrics.footerMetrics, `${label}: missing footer style measurements`);
+  assert.equal(metrics.appRegions.screen, 'drag', `${label}: reading screen cannot drag the window`);
+  assert.equal(metrics.appRegions.content, 'drag', `${label}: reading content cannot drag the window`);
+  assert.equal(metrics.appRegions.previousButton, 'no-drag', `${label}: previous button became a drag region`);
+  assert.equal(metrics.appRegions.nextButton, 'no-drag', `${label}: next button became a drag region`);
   assert.equal(
     metrics.footerMetrics.defaultOpacity,
     0,
