@@ -179,7 +179,6 @@ for (const selector of [
   '.scripture-reader',
   '.scripture-verse-number',
   '.scripture-continuation',
-  '.scripture-page-notice',
   '.utmost-sheet',
   '.utmost-verse-card',
   '.utmost-verse-citation',

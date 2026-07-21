@@ -1308,15 +1308,18 @@ function createScripturePageElement(page) {
   const root = document.createElement('section');
   root.className = 'scripture-page';
   let renderedChapter = null;
+  let renderedReader = null;
 
-  if (page.readerLabel) {
-    const reader = document.createElement('div');
-    reader.className = 'scripture-reader';
-    reader.textContent = page.readerLabel;
-    root.appendChild(reader);
-  }
+  (page.verses || []).forEach((verse, verseIndex) => {
+    if (verse.readerIndex && (verseIndex === 0 || verse.readerIndex !== renderedReader)) {
+      const continuesReader = verseIndex === 0 && (!verse.startsReaderSegment || verse.continuation);
+      const reader = document.createElement('div');
+      reader.className = `scripture-reader${continuesReader ? ' is-continuation' : ''}`;
+      reader.textContent = `${verse.readerLabel}${continuesReader ? '（續）' : ''}`;
+      root.appendChild(reader);
+    }
+    renderedReader = verse.readerIndex || renderedReader;
 
-  (page.verses || []).forEach((verse) => {
     if (verse.startsChapter && verse.chapter !== renderedChapter) {
       const chapter = document.createElement('div');
       chapter.className = 'scripture-chapter';
@@ -1346,13 +1349,6 @@ function createScripturePageElement(page) {
     row.append(number, verseText);
     root.appendChild(row);
   });
-
-  if (page.notice) {
-    const notice = document.createElement('div');
-    notice.className = `scripture-page-notice is-${page.noticeKind || 'continue'}`;
-    notice.textContent = page.notice;
-    root.appendChild(notice);
-  }
   return root;
 }
 
@@ -1586,74 +1582,58 @@ function buildScripturePagesByFit(verses, fits = scripturePageFits, segments = [
     segmentGroups.every((group) => group.length > 0) &&
     assignedKeys.length === sourceVerses.length &&
     new Set(assignedKeys).size === new Set(sourceVerses.map((verse) => verse.key)).size;
-  const activeSegments = segmentationIsComplete ? sourceSegments : [];
-  const groups = segmentationIsComplete ? segmentGroups : [sourceVerses];
+  const readerCount = segmentationIsComplete ? sourceSegments.length : 0;
+  const annotatedVerses = segmentationIsComplete
+    ? sourceVerses.map((verse) => {
+        const segmentIndex = sourceSegments.findIndex((segment) => (
+          compareLocation(verse, segment.start) >= 0 && compareLocation(verse, segment.end) <= 0
+        ));
+        const segment = sourceSegments[segmentIndex];
+        return {
+          ...verse,
+          readerIndex: segmentIndex + 1,
+          readerCount,
+          segmentLabel: segment.label,
+          readerLabel: `第 ${segmentIndex + 1} 位・${segment.label}`,
+          startsReaderSegment: compareLocation(verse, segment.start) === 0
+        };
+      })
+    : sourceVerses;
+  const expanded = annotatedVerses.flatMap((verse) => splitOversizedScriptureVerse(verse, fits));
   const pages = [];
+  let current = [];
 
-  groups.forEach((group, segmentIndex) => {
-    const segment = activeSegments[segmentIndex] || null;
-    const nextSegment = activeSegments[segmentIndex + 1] || null;
-    const readerLabel = segment ? `第 ${segmentIndex + 1} 位・${segment.label}` : '';
-    const finalNotice = segment
-      ? (nextSegment
-        ? `本段結束・下一位第 ${segmentIndex + 2} 位：${nextSegment.label}`
-        : '經文閱讀完成')
-      : '';
-    const continuationNotice = segment ? '本段尚未讀完・下一頁繼續閱讀' : '';
-    const measurementContext = {
-      readerLabel,
-      notice: finalNotice.length >= continuationNotice.length ? finalNotice : continuationNotice,
-      noticeKind: 'measure'
-    };
-    const expanded = group.flatMap((verse) => splitOversizedScriptureVerse(verse, fits, measurementContext));
-    const segmentPages = [];
-    let current = [];
+  expanded.forEach((verse) => {
+    const candidate = [...current, verse];
+    if (!current.length || fits(candidate)) {
+      current = candidate;
+      return;
+    }
+    pages.push({ type: 'scripture', verses: current });
+    current = [verse];
+  });
+  if (current.length) pages.push({ type: 'scripture', verses: current });
 
-    expanded.forEach((verse) => {
-      const candidate = [...current, verse];
-      if (!current.length || fits(candidate, measurementContext)) {
-        current = candidate;
+  pages.forEach((page) => {
+    const markers = [];
+    let previousReader = null;
+    (page.verses || []).forEach((verse, verseIndex) => {
+      if (!verse.readerIndex || (verseIndex > 0 && verse.readerIndex === previousReader)) {
+        previousReader = verse.readerIndex || previousReader;
         return;
       }
-      segmentPages.push({ type: 'scripture', verses: current });
-      current = [verse];
-    });
-    if (current.length) segmentPages.push({ type: 'scripture', verses: current });
-    if (!segmentPages.length) segmentPages.push({ type: 'scripture', verses: [] });
-
-    segmentPages.forEach((page, pageIndex) => {
-      if (!segment) {
-        pages.push(page);
-        return;
-      }
-      const nextPage = segmentPages[pageIndex + 1] || null;
-      let notice = finalNotice;
-      let noticeKind = nextSegment ? 'boundary' : 'complete';
-      if (nextPage) {
-        const currentLast = page.verses[page.verses.length - 1];
-        const nextVerse = nextPage.verses[0];
-        const crossesChapter = Number(segment.start.chapter) !== Number(segment.end.chapter);
-        const nextReference = crossesChapter
-          ? `${nextVerse.chapter}:${nextVerse.number}`
-          : String(nextVerse.number);
-        const continuesSameVerse = Boolean(currentLast && nextVerse && currentLast.key === nextVerse.key);
-        notice = `本段尚未讀完・下一頁第 ${nextReference} 節${continuesSameVerse ? '（續）' : ''}`;
-        noticeKind = 'continue';
-      }
-      pages.push({
-        ...page,
-        readerIndex: segmentIndex + 1,
-        readerCount: activeSegments.length,
-        segmentLabel: segment.label,
-        segmentStart: segment.start,
-        segmentEnd: segment.end,
-        segmentPageIndex: pageIndex + 1,
-        segmentPageCount: segmentPages.length,
-        readerLabel,
-        notice,
-        noticeKind
+      const continuation = verseIndex === 0 && (!verse.startsReaderSegment || verse.continuation);
+      markers.push({
+        readerIndex: verse.readerIndex,
+        verseKey: verse.key,
+        continuation,
+        label: `${verse.readerLabel}${continuation ? '（續）' : ''}`
       });
+      previousReader = verse.readerIndex;
     });
+    page.readerCount = readerCount;
+    page.readerMarkers = markers;
+    page.readerLabel = markers[0] ? markers[0].label : '';
   });
   return pages.length ? pages : [{ type: 'scripture', verses: [] }];
 }

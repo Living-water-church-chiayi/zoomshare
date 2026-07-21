@@ -953,7 +953,7 @@ test('obeys measured scripture capacity even on a small viewport', () => {
   );
 });
 
-test('keeps reader assignments intact when a six-verse segment crosses a visual page', () => {
+test('keeps reader assignments visible without forcing extra reader-boundary pages', () => {
   const pageFits = (verses) => verses.length <= 5;
   const { buildScripturePagesByFit } = loadScripturePaginationFunctions(pageFits);
   const input = scriptureFixture(22);
@@ -968,16 +968,18 @@ test('keeps reader assignments intact when a six-verse segment crosses a visual 
     [1, 2, 3, 4, 5],
     [6, 7, 8, 9, 10],
     [11, 12, 13, 14, 15],
-    [16],
-    [17, 18, 19, 20, 21],
-    [22]
+    [16, 17, 18, 19, 20],
+    [21, 22]
   ]);
-  assert.equal(pages[2].readerLabel, '第 3 位・11–16 節');
-  assert.equal(pages[2].notice, '本段尚未讀完・下一頁第 16 節');
-  assert.equal(pages[3].readerLabel, '第 3 位・11–16 節');
-  assert.equal(pages[3].notice, '本段結束・下一位第 4 位：17–22 節');
-  assert.equal(pages[4].readerLabel, '第 4 位・17–22 節');
-  assert.equal(pages[5].notice, '經文閱讀完成');
+  assert.deepEqual(pages[2].readerMarkers.map((marker) => marker.label), ['第 3 位・11–16 節']);
+  assert.deepEqual(pages[3].readerMarkers.map((marker) => marker.label), [
+    '第 3 位・11–16 節（續）',
+    '第 4 位・17–22 節'
+  ]);
+  assert.deepEqual(pages[4].readerMarkers.map((marker) => marker.label), ['第 4 位・17–22 節（續）']);
+  assert.equal(pages[3].verses[0].readerIndex, 3);
+  assert.equal(pages[3].verses[1].readerIndex, 4);
+  assert.equal(pages.length, 5, 'reader boundaries must not create extra visual pages');
   assert.ok(pages.every((page) => new Set(page.verses.map((verse) => verse.key)).size <= 5));
 });
 
@@ -995,9 +997,11 @@ test('uses full chapter references when a reader segment itself crosses chapters
   const pages = plain(buildScripturePagesByFit(input, pageFits, segments));
 
   assert.deepEqual(segments.map((segment) => segment.label), ['1:30–2:1', '2:2–5']);
-  assert.equal(pages[0].readerLabel, '第 1 位・1:30–2:1');
-  assert.equal(pages[0].notice, '本段尚未讀完・下一頁第 2:1 節');
-  assert.equal(pages[1].notice, '本段結束・下一位第 2 位：2:2–5');
+  assert.deepEqual(pages[0].readerMarkers.map((marker) => marker.label), ['第 1 位・1:30–2:1']);
+  assert.deepEqual(pages[1].readerMarkers.map((marker) => marker.label), [
+    '第 1 位・1:30–2:1（續）',
+    '第 2 位・2:2–5'
+  ]);
 });
 
 test('marks an oversized verse as continuing within the same reader segment', () => {
@@ -1029,9 +1033,8 @@ test('marks an oversized verse as continuing within the same reader segment', ()
   const pages = plain(functions.buildScripturePagesByFit([verse], fits, segments));
 
   assert.ok(pages.length > 1);
-  assert.equal(pages[0].readerLabel, '第 1 位・1–1 節');
-  assert.equal(pages[0].notice, '本段尚未讀完・下一頁第 1 節（續）');
-  assert.equal(pages.at(-1).notice, '經文閱讀完成');
+  assert.deepEqual(pages[0].readerMarkers.map((marker) => marker.label), ['第 1 位・1–1 節']);
+  assert.deepEqual(pages[1].readerMarkers.map((marker) => marker.label), ['第 1 位・1–1 節（續）']);
   assert.equal(pages.flatMap((page) => page.verses).map((part) => part.text).join(''), verse.text);
 });
 
