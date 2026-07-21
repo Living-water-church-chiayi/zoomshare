@@ -163,7 +163,7 @@
               <button type="button" id="btnPasteCustomWorship" class="paste-btn">貼上</button>
               <button type="button" id="btnAddWorshipPreset" class="paste-btn add-btn">加入</button>
             </div>
-            <span class="field-note">自動取得的是 YouTube 影片標題，可修改成「歌手（歌名）」後再加入。</span>
+            <span class="field-note">會自動辨識歌曲名稱並移除歌手、專輯與格式標籤，仍可手動修正。</span>
           </label>
           <div id="customWorshipList" class="custom-worship-list"></div>
         </div>
@@ -175,7 +175,7 @@
             </div>
           </label>
           <label>公告歌名
-            <input type="text" id="inWorshipTitle" maxlength="128" placeholder="可留空，會自動讀取 YouTube 標題" />
+            <input type="text" id="inWorshipTitle" maxlength="128" placeholder="可留空，會自動辨識歌曲名稱" />
           </label>
         </div>
       </fieldset>
@@ -256,6 +256,7 @@
   <div id="toast" class="toast hidden"></div>
 
   <script src="bible.js"></script>
+  <script src="../assignment-shared.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

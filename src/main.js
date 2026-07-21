@@ -640,37 +640,157 @@ function sanitizeMediaTitle(value) {
     .slice(0, 128);
 }
 
+function stripWorshipTitleNoise(value) {
+  const noise = '(?:(?:\\bofficial(?:\\s+(?:music\\s+)?video|\\s+mv|\\s+audio)?\\b|\\blyrics?\\b|\\blyric\\s+video\\b|\\bmusic\\s+video\\b|\\bmv\\b|\\bm\\/v\\b|\\blive(?:\\s+(?:session|version|worship))?\\b|\\b4k\\b|\\bhd\\b)|中英字幕|中文字幕|動態歌詞|歌詞版(?:mv)?|官方(?:動態)?歌詞(?:版)?(?:mv)?|官方(?:音樂)?(?:錄影帶|影片|mv|版)?|現場版)';
+  let title = sanitizeMediaTitle(value);
+  if (!title) return '';
+  title = title
+    .replace(new RegExp(`[\\[(（【《][^\\]\\)）】》]{0,80}${noise}[^\\]\\)）】》]{0,80}[\\]\\)）】》]`, 'gi'), ' ')
+    .replace(/^[【\[][^】\]]{0,40}(?:敬拜|讚美|詩歌)[^】\]]{0,40}[】\]]\s*/i, '')
+    .replace(new RegExp(`\\s*(?:[-–—―－|｜／/]\\s*)?${noise}(?:\\s+${noise})*\\s*$`, 'i'), '')
+    .replace(/\s+(?:album|專輯)\s*$/i, '')
+    .replace(/^\s*[-–—―－|｜／/]+|[-–—―－|｜／/]+\s*$/g, ' ')
+    .replace(/^[【《\[(（]\s*([^】》\])）]+)\s*[】》\])）]$/u, '$1');
+  return sanitizeMediaTitle(title);
+}
+
+function worshipTitleIdentity(value) {
+  return stripWorshipTitleNoise(value)
+    .normalize('NFKC')
+    .toLocaleLowerCase('en-US')
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function worshipMetadataPart(value, knownValues) {
+  let residual = worshipTitleIdentity(value);
+  if (!residual) return true;
+  for (const knownValue of knownValues) {
+    const known = worshipTitleIdentity(knownValue);
+    if (known.length >= 2 && residual.includes(known)) residual = residual.split(known).join('');
+    for (const token of known.match(/\p{Script=Han}{3,}/gu) || []) {
+      if (residual.includes(token)) residual = residual.split(token).join('');
+    }
+  }
+  residual = residual
+    .replace(/(?:album|專輯|music|official|channel|頻道|records?|worship|敬拜|讚美)/gu, '')
+    .replace(/\d+$/u, '');
+  return residual.length === 0;
+}
+
+function inferWorshipSongTitle(metadata) {
+  const source = metadata && typeof metadata === 'object' ? metadata : {};
+  const track = stripWorshipTitleNoise(source.track);
+  if (track) return { title: track, confident: true };
+
+  let title = stripWorshipTitleNoise(source.title);
+  if (!title) return { title: '', confident: false };
+  const knownValues = [source.artist, source.album, source.uploader, source.channel, source.authorName]
+    .map((item) => sanitizeMediaTitle(item))
+    .filter(Boolean);
+  for (const knownValue of knownValues) {
+    for (const token of knownValue.match(/\p{Script=Han}{3,}/gu) || []) {
+      const index = title.indexOf(token);
+      if (index <= 0) continue;
+      const suffix = title.slice(index);
+      if (/(?:專輯|album|官方頻道|official\s+channel)/iu.test(suffix)) {
+        title = stripWorshipTitleNoise(title.slice(0, index));
+      }
+    }
+  }
+
+  const hanRuns = [...title.matchAll(/\p{Script=Han}{2,16}/gu)];
+  if (hanRuns.length >= 2 && hanRuns[0].index === 0) {
+    const firstEnd = hanRuns[0][0].length;
+    const between = title.slice(firstEnd, hanRuns[1].index);
+    const afterSecond = title.slice(hanRuns[1].index + hanRuns[1][0].length);
+    if (/[A-Za-z]/.test(between) && /[A-Za-z]/.test(afterSecond)) {
+      return { title: hanRuns[0][0], confident: true };
+    }
+  }
+
+  const parts = title
+    .split(/\s+[-–—―－]\s+|\s*[|｜]\s*|\s+[／/]\s+/u)
+    .map((part) => stripWorshipTitleNoise(part))
+    .filter(Boolean);
+  if (parts.length <= 1) return { title, confident: true };
+
+  const remaining = parts.filter((part) => !worshipMetadataPart(part, knownValues));
+  if (remaining.length === 1 && remaining.length < parts.length) {
+    return { title: remaining[0], confident: true };
+  }
+  if (remaining.length && remaining.length < parts.length) {
+    return { title: sanitizeMediaTitle(remaining.join(' – ')), confident: false };
+  }
+  return { title, confident: false };
+}
+
+function parseYtDlpWorshipMetadata(output) {
+  const text = String(output || '').trim();
+  if (!text) return {};
+  try {
+    const parsed = JSON.parse(text);
+    if (typeof parsed === 'string') return { title: sanitizeMediaTitle(parsed) };
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return {
+      title: sanitizeMediaTitle(parsed.title),
+      track: sanitizeMediaTitle(parsed.track),
+      artist: sanitizeMediaTitle(parsed.artist),
+      album: sanitizeMediaTitle(parsed.album),
+      uploader: sanitizeMediaTitle(parsed.uploader),
+      channel: sanitizeMediaTitle(parsed.channel)
+    };
+  } catch {
+    return { title: sanitizeMediaTitle(text) };
+  }
+}
+
+async function fetchYtDlpWorshipMetadata(url) {
+  const { stdout } = await execFileP(resolveYtDlpPath(), [
+    '--no-cache-dir',
+    '--no-playlist',
+    '--skip-download',
+    '--no-warnings',
+    '--socket-timeout', '10',
+    '--extractor-retries', '1',
+    '--print', '%(.{title,track,artist,album,uploader,channel})j',
+    '--', url
+  ], {
+    windowsHide: true,
+    env: spawnEnv(),
+    timeout: YOUTUBE_METADATA_TIMEOUT_MS,
+    maxBuffer: 512 * 1024
+  });
+  return parseYtDlpWorshipMetadata(stdout);
+}
+
 async function fetchYouTubeMetadata(value) {
   const url = normalizeMediaRequest(value, 'video').url;
   const oEmbedUrl = `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(url)}`;
+  let oEmbedMetadata = {};
   try {
     const metadata = await httpGetJson(oEmbedUrl, YOUTUBE_OEMBED_TIMEOUT_MS);
-    const title = sanitizeMediaTitle(metadata && metadata.title);
-    if (title) return { title, url };
+    oEmbedMetadata = {
+      title: sanitizeMediaTitle(metadata && metadata.title),
+      authorName: sanitizeMediaTitle(metadata && metadata.author_name)
+    };
   } catch {}
 
+  const quickCandidate = inferWorshipSongTitle(oEmbedMetadata);
+  if (quickCandidate.title && quickCandidate.confident) return { title: quickCandidate.title, url };
+
+  let detailedMetadata = {};
   try {
-    const { stdout } = await execFileP(resolveYtDlpPath(), [
-      '--no-cache-dir',
-      '--no-playlist',
-      '--skip-download',
-      '--no-warnings',
-      '--socket-timeout', '10',
-      '--extractor-retries', '1',
-      '--print', '%(title)j',
-      '--', url
-    ], {
-      windowsHide: true,
-      env: spawnEnv(),
-      timeout: YOUTUBE_METADATA_TIMEOUT_MS,
-      maxBuffer: 256 * 1024
-    });
-    const output = String(stdout || '').trim();
-    let rawTitle = output;
-    try { rawTitle = JSON.parse(output); } catch {}
-    const title = sanitizeMediaTitle(rawTitle);
-    if (title) return { title, url };
+    detailedMetadata = await fetchYtDlpWorshipMetadata(url);
   } catch {}
+
+  const detailedCandidate = inferWorshipSongTitle({
+    ...oEmbedMetadata,
+    ...detailedMetadata,
+    title: detailedMetadata.title || oEmbedMetadata.title,
+    authorName: oEmbedMetadata.authorName
+  });
+  const title = detailedCandidate.title || quickCandidate.title;
+  if (title) return { title, url };
   throw new Error('無法取得 YouTube 影片名稱，請手動輸入公告歌名');
 }
 

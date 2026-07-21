@@ -21,6 +21,12 @@ const viewports = [
 
 const scripturePage = {
   type: 'scripture',
+  readerIndex: 3,
+  readerCount: 4,
+  segmentLabel: '11–16 節',
+  readerLabel: '第 3 位・11–16 節',
+  notice: '本段尚未讀完・下一頁第 16 節',
+  noticeKind: 'continue',
   verses: [
     {
       key: '5:1:0', chapter: 5, number: 1, startsChapter: false, continuation: false,
@@ -424,9 +430,11 @@ function measurementScript(fixture) {
       };
       const lastParagraph = content.querySelector('.utmost-paragraph:last-child');
       const continuation = content.querySelector('.scripture-continuation');
+      const scriptureReader = content.querySelector('.scripture-reader');
+      const scriptureNotice = content.querySelector('.scripture-page-notice');
       const visualRoot = sheet || scripture;
       const checkedElements = Array.from(content.querySelectorAll(
-        '.scripture-page, .scripture-chapter, .scripture-verse, .scripture-verse-number, .scripture-verse-text, .scripture-continuation, .utmost-sheet, .utmost-heading, .utmost-verse-card, .utmost-body, .utmost-paragraph'
+        '.scripture-page, .scripture-reader, .scripture-chapter, .scripture-verse, .scripture-verse-number, .scripture-verse-text, .scripture-continuation, .scripture-page-notice, .utmost-sheet, .utmost-heading, .utmost-verse-card, .utmost-body, .utmost-paragraph'
       ));
       const horizontalViolations = checkedElements
         .map((element) => ({ className: element.className, rect: rectData(element) }))
@@ -465,6 +473,8 @@ function measurementScript(fixture) {
         scripturePageCount: content.querySelectorAll('.scripture-page').length,
         continuationCount: content.querySelectorAll('.scripture-continuation').length,
         continuationText: continuation ? continuation.textContent : '',
+        scriptureReaderText: scriptureReader ? scriptureReader.textContent : '',
+        scriptureNoticeText: scriptureNotice ? scriptureNotice.textContent : '',
         chapterLabels: Array.from(content.querySelectorAll('.scripture-chapter'), (element) => element.textContent),
         headingText: content.querySelector('.utmost-heading')?.textContent || '',
         kickerText: utmostKicker?.textContent || '',
@@ -677,6 +687,8 @@ function verifyMetrics(metrics, fixture, expectedViewport) {
     assert.equal(metrics.scripturePageCount, 1, `${label}: expected one rendered scripture page`);
     assert.equal(metrics.continuationCount, 1, `${label}: expected one continuation label`);
     assert.equal(metrics.continuationText, '續', `${label}: incorrect continuation label`);
+    assert.equal(metrics.scriptureReaderText, fixture.page.readerLabel, `${label}: reader assignment label changed`);
+    assert.equal(metrics.scriptureNoticeText, fixture.page.notice, `${label}: reader continuation notice changed`);
     assert.deepEqual(metrics.chapterLabels, ['第 6 章'], `${label}: cross-chapter divider is incorrect`);
     assert.ok(metrics.content.scrollHeight <= metrics.content.clientHeight + 2, `${label}: scripture fixture overflows vertically`);
     assert.equal(metrics.scripturePagination.short.pageCount, 1, `${label}: seven short verses were needlessly split`);

@@ -176,8 +176,10 @@ console.log('OK private host console wiring');
 const css = read('src/renderer/style.css');
 for (const selector of [
   '.scripture-page',
+  '.scripture-reader',
   '.scripture-verse-number',
   '.scripture-continuation',
+  '.scripture-page-notice',
   '.utmost-sheet',
   '.utmost-verse-card',
   '.utmost-verse-citation',

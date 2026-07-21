@@ -1309,6 +1309,13 @@ function createScripturePageElement(page) {
   root.className = 'scripture-page';
   let renderedChapter = null;
 
+  if (page.readerLabel) {
+    const reader = document.createElement('div');
+    reader.className = 'scripture-reader';
+    reader.textContent = page.readerLabel;
+    root.appendChild(reader);
+  }
+
   (page.verses || []).forEach((verse) => {
     if (verse.startsChapter && verse.chapter !== renderedChapter) {
       const chapter = document.createElement('div');
@@ -1339,6 +1346,13 @@ function createScripturePageElement(page) {
     row.append(number, verseText);
     root.appendChild(row);
   });
+
+  if (page.notice) {
+    const notice = document.createElement('div');
+    notice.className = `scripture-page-notice is-${page.noticeKind || 'continue'}`;
+    notice.textContent = page.notice;
+    root.appendChild(notice);
+  }
   return root;
 }
 
@@ -1448,9 +1462,9 @@ function flowContentOverflows() {
   return content.scrollHeight > content.clientHeight + 2 || content.scrollWidth > content.clientWidth + 2;
 }
 
-function scripturePageFits(verses) {
+function scripturePageFits(verses, pageContext = null) {
   $('flowScreen').style.setProperty('--flow-font-scale', '1');
-  renderFlowPageContent({ type: 'scripture', verses });
+  renderFlowPageContent({ type: 'scripture', ...(pageContext || {}), verses });
   return !flowContentOverflows();
 }
 
@@ -1458,7 +1472,7 @@ function scriptureSentenceTokens(text) {
   return String(text || '').match(/[^。！？!?；;，,：:\n]+(?:[。！？!?；;，,：:]+|$)|\n+/g) || [String(text || '')];
 }
 
-function largestFittingVersePrefix(verse, text, continuation, fits = scripturePageFits) {
+function largestFittingVersePrefix(verse, text, continuation, fits = scripturePageFits, pageContext = null) {
   const chars = Array.from(text);
   let low = 1;
   let high = chars.length;
@@ -1466,7 +1480,10 @@ function largestFittingVersePrefix(verse, text, continuation, fits = scripturePa
   while (low <= high) {
     const mid = Math.floor((low + high) / 2);
     const candidate = chars.slice(0, mid).join('').trim();
-    const candidateFits = candidate && fits([{ ...verse, text: candidate, continuation, startsChapter: verse.startsChapter && !continuation }]);
+    const candidateFits = candidate && fits(
+      [{ ...verse, text: candidate, continuation, startsChapter: verse.startsChapter && !continuation }],
+      pageContext
+    );
     if (candidateFits) {
       best = mid;
       low = mid + 1;
@@ -1477,14 +1494,17 @@ function largestFittingVersePrefix(verse, text, continuation, fits = scripturePa
   return chars.slice(0, Math.max(best, 1)).join('');
 }
 
-function splitOversizedScriptureVerse(verse, fits = scripturePageFits) {
-  if (fits([verse])) return [verse];
+function splitOversizedScriptureVerse(verse, fits = scripturePageFits, pageContext = null) {
+  if (fits([verse], pageContext)) return [verse];
   const parts = [];
   let remaining = String(verse.text || '').trim();
   let continuation = Boolean(verse.continuation);
 
   while (remaining) {
-    if (fits([{ ...verse, text: remaining, continuation, startsChapter: verse.startsChapter && parts.length === 0 }])) {
+    if (fits(
+      [{ ...verse, text: remaining, continuation, startsChapter: verse.startsChapter && parts.length === 0 }],
+      pageContext
+    )) {
       parts.push({ ...verse, text: remaining, continuation, startsChapter: verse.startsChapter && parts.length === 0 });
       break;
     }
@@ -1493,13 +1513,16 @@ function splitOversizedScriptureVerse(verse, fits = scripturePageFits) {
     for (const token of scriptureSentenceTokens(remaining)) {
       const candidateRaw = rawPrefix + token;
       const candidate = candidateRaw.trim();
-      if (!candidate || fits([{ ...verse, text: candidate, continuation, startsChapter: verse.startsChapter && parts.length === 0 }])) {
+      if (!candidate || fits(
+        [{ ...verse, text: candidate, continuation, startsChapter: verse.startsChapter && parts.length === 0 }],
+        pageContext
+      )) {
         rawPrefix = candidateRaw;
       } else {
         break;
       }
     }
-    if (!rawPrefix.trim()) rawPrefix = largestFittingVersePrefix(verse, remaining, continuation, fits);
+    if (!rawPrefix.trim()) rawPrefix = largestFittingVersePrefix(verse, remaining, continuation, fits, pageContext);
 
     const chunk = rawPrefix;
     parts.push({
@@ -1546,22 +1569,104 @@ function findScriptureAnchorPage(pages, anchor) {
   return firstMatch;
 }
 
-function buildScripturePagesByFit(verses, fits = scripturePageFits) {
-  const expanded = verses.flatMap((verse) => splitOversizedScriptureVerse(verse, fits));
+function buildScripturePagesByFit(verses, fits = scripturePageFits, segments = []) {
+  const sourceVerses = Array.isArray(verses) ? verses : [];
+  const sourceSegments = Array.isArray(segments) ? segments.filter((segment) => (
+    segment && segment.start && segment.end && segment.label
+  )) : [];
+  const compareLocation = (verse, location) => {
+    const chapterDifference = Number(verse.chapter) - Number(location.chapter);
+    return chapterDifference || (Number(verse.number) - Number(location.verse));
+  };
+  const segmentGroups = sourceSegments.map((segment) => sourceVerses.filter((verse) => (
+    compareLocation(verse, segment.start) >= 0 && compareLocation(verse, segment.end) <= 0
+  )));
+  const assignedKeys = segmentGroups.flat().map((verse) => verse.key);
+  const segmentationIsComplete = sourceSegments.length > 0 &&
+    segmentGroups.every((group) => group.length > 0) &&
+    assignedKeys.length === sourceVerses.length &&
+    new Set(assignedKeys).size === new Set(sourceVerses.map((verse) => verse.key)).size;
+  const activeSegments = segmentationIsComplete ? sourceSegments : [];
+  const groups = segmentationIsComplete ? segmentGroups : [sourceVerses];
   const pages = [];
-  let current = [];
 
-  expanded.forEach((verse) => {
-    const candidate = [...current, verse];
-    if (!current.length || fits(candidate)) {
-      current = candidate;
-      return;
-    }
-    pages.push({ type: 'scripture', verses: current });
-    current = [verse];
+  groups.forEach((group, segmentIndex) => {
+    const segment = activeSegments[segmentIndex] || null;
+    const nextSegment = activeSegments[segmentIndex + 1] || null;
+    const readerLabel = segment ? `第 ${segmentIndex + 1} 位・${segment.label}` : '';
+    const finalNotice = segment
+      ? (nextSegment
+        ? `本段結束・下一位第 ${segmentIndex + 2} 位：${nextSegment.label}`
+        : '經文閱讀完成')
+      : '';
+    const continuationNotice = segment ? '本段尚未讀完・下一頁繼續閱讀' : '';
+    const measurementContext = {
+      readerLabel,
+      notice: finalNotice.length >= continuationNotice.length ? finalNotice : continuationNotice,
+      noticeKind: 'measure'
+    };
+    const expanded = group.flatMap((verse) => splitOversizedScriptureVerse(verse, fits, measurementContext));
+    const segmentPages = [];
+    let current = [];
+
+    expanded.forEach((verse) => {
+      const candidate = [...current, verse];
+      if (!current.length || fits(candidate, measurementContext)) {
+        current = candidate;
+        return;
+      }
+      segmentPages.push({ type: 'scripture', verses: current });
+      current = [verse];
+    });
+    if (current.length) segmentPages.push({ type: 'scripture', verses: current });
+    if (!segmentPages.length) segmentPages.push({ type: 'scripture', verses: [] });
+
+    segmentPages.forEach((page, pageIndex) => {
+      if (!segment) {
+        pages.push(page);
+        return;
+      }
+      const nextPage = segmentPages[pageIndex + 1] || null;
+      let notice = finalNotice;
+      let noticeKind = nextSegment ? 'boundary' : 'complete';
+      if (nextPage) {
+        const currentLast = page.verses[page.verses.length - 1];
+        const nextVerse = nextPage.verses[0];
+        const crossesChapter = Number(segment.start.chapter) !== Number(segment.end.chapter);
+        const nextReference = crossesChapter
+          ? `${nextVerse.chapter}:${nextVerse.number}`
+          : String(nextVerse.number);
+        const continuesSameVerse = Boolean(currentLast && nextVerse && currentLast.key === nextVerse.key);
+        notice = `本段尚未讀完・下一頁第 ${nextReference} 節${continuesSameVerse ? '（續）' : ''}`;
+        noticeKind = 'continue';
+      }
+      pages.push({
+        ...page,
+        readerIndex: segmentIndex + 1,
+        readerCount: activeSegments.length,
+        segmentLabel: segment.label,
+        segmentStart: segment.start,
+        segmentEnd: segment.end,
+        segmentPageIndex: pageIndex + 1,
+        segmentPageCount: segmentPages.length,
+        readerLabel,
+        notice,
+        noticeKind
+      });
+    });
   });
-  if (current.length) pages.push({ type: 'scripture', verses: current });
   return pages.length ? pages : [{ type: 'scripture', verses: [] }];
+}
+
+function currentScriptureSegments(ref = currentRefPayload()) {
+  try {
+    const shared = window.AssignmentShared;
+    return shared && typeof shared.scriptureSegments === 'function'
+      ? shared.scriptureSegments(ref, window.BIBLE)
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 function setFlowButtonLabel(buttonId, label) {
@@ -1591,7 +1696,9 @@ function updateFlowPageProgress() {
   }
   if (typeof info.setAttribute === 'function') {
     const section = flowStep === 'utmost' ? '竭誠獻上' : '經文';
-    info.setAttribute('aria-label', `${section}，第 ${current} 頁，共 ${total} 頁`);
+    const page = flowPages[flowPageIndex];
+    const reader = flowStep === 'scripture' && page && page.readerLabel ? `，${page.readerLabel}` : '';
+    info.setAttribute('aria-label', `${section}${reader}，第 ${current} 頁，共 ${total} 頁`);
   }
 }
 
@@ -1746,7 +1853,7 @@ function scheduleFlowLayoutRefresh() {
     const anchor = scripturePageAnchor(flowPages, flowPageIndex);
     if (!await waitForFlowLayout(navigationToken) || flowStep !== 'scripture') return;
     const verses = parseScriptureVerses(cachedBible.body || '', currentRefPayload());
-    const pages = buildScripturePagesByFit(verses);
+    const pages = buildScripturePagesByFit(verses, scripturePageFits, currentScriptureSegments());
     if (navigationToken !== flowNavigationToken || flowStep !== 'scripture') return;
     flowPages = pages;
     flowPageScales = pages.map(() => 1);
@@ -1852,7 +1959,7 @@ async function showScriptureFlow(navigationToken) {
     });
     if (!await waitForFlowLayout(navigationToken)) return false;
     const verses = parseScriptureVerses(data.body || '', currentRefPayload());
-    const pages = buildScripturePagesByFit(verses);
+    const pages = buildScripturePagesByFit(verses, scripturePageFits, currentScriptureSegments());
     if (navigationToken !== flowNavigationToken) return false;
     flowLoading = false;
     setFlowContent({

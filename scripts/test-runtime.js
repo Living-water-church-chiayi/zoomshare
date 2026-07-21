@@ -6,6 +6,7 @@ const path = require('path');
 const vm = require('vm');
 const crypto = require('crypto');
 const { pathToFileURL } = require('url');
+const { scriptureSegments } = require('../src/assignment-shared');
 
 const projectRoot = path.resolve(__dirname, '..');
 const mainSource = fs.readFileSync(path.join(projectRoot, 'src', 'main.js'), 'utf8');
@@ -226,7 +227,17 @@ test('fetches a safe YouTube title with oEmbed and yt-dlp fallback', async () =>
   let execCall = null;
   const functions = loadFunctions(
     mainSource,
-    ['normalizeMediaRequest', 'sanitizeMediaTitle', 'fetchYouTubeMetadata'],
+    [
+      'normalizeMediaRequest',
+      'sanitizeMediaTitle',
+      'stripWorshipTitleNoise',
+      'worshipTitleIdentity',
+      'worshipMetadataPart',
+      'inferWorshipSongTitle',
+      'parseYtDlpWorshipMetadata',
+      'fetchYtDlpWorshipMetadata',
+      'fetchYouTubeMetadata'
+    ],
     {
       httpGetJson: async (url) => {
         requestedOEmbedUrl = url;
@@ -264,6 +275,94 @@ test('fetches a safe YouTube title with oEmbed and yt-dlp fallback', async () =>
     () => functions.fetchYouTubeMetadata('https://youtube.com.evil.example/watch?v=abc123'),
     /YouTube/
   );
+});
+
+test('keeps only the song name when YouTube metadata identifies artist, album or format labels', async () => {
+  const names = [
+    'sanitizeMediaTitle',
+    'stripWorshipTitleNoise',
+    'worshipTitleIdentity',
+    'worshipMetadataPart',
+    'inferWorshipSongTitle'
+  ];
+  const functions = loadFunctions(mainSource, names);
+
+  assert.deepEqual(plain(functions.inferWorshipSongTitle({
+    title: '讚美之泉 Stream of Praise - 美好的創造 (Official MV)',
+    authorName: '讚美之泉 Stream of Praise'
+  })), { title: '美好的創造', confident: true });
+  assert.deepEqual(plain(functions.inferWorshipSongTitle({
+    title: '【美好的創造 Beautifully Made】官方歌詞版MV (Official Lyrics MV) - 讚美之泉敬拜讚美 (22)',
+    uploader: '讚美之泉 Stream Of Praise Music Ministries'
+  })), { title: '美好的創造 Beautifully Made', confident: true });
+  assert.deepEqual(plain(functions.inferWorshipSongTitle({
+    title: 'Goodness of God (Lyrics) - Bethel Music',
+    uploader: 'Bethel Music'
+  })), { title: 'Goodness of God', confident: true });
+  assert.deepEqual(plain(functions.inferWorshipSongTitle({
+    title: '依然愛我｜盛曉玫《幸福》專輯',
+    artist: '盛曉玫',
+    album: '幸福'
+  })), { title: '依然愛我', confident: true });
+  assert.deepEqual(plain(functions.inferWorshipSongTitle({
+    title: '依然愛我 You still love me 盛曉玫 Amy Sand 泥土音樂專輯 8：不變的愛',
+    uploader: '泥土音樂Clay Music'
+  })), { title: '依然愛我', confident: true });
+  assert.deepEqual(plain(functions.inferWorshipSongTitle({
+    title: '幸福/ Blessed, 盛曉玫 / Amy Sand, 泥土音樂專輯 6：幸福',
+    uploader: '泥土音樂Clay Music'
+  })), { title: '幸福', confident: true });
+  assert.deepEqual(plain(functions.inferWorshipSongTitle({
+    title: '歌名 - 特別版本',
+    track: '真正歌名（2026 重製版）',
+    artist: '歌手'
+  })), { title: '真正歌名（2026 重製版）', confident: true });
+  assert.deepEqual(plain(functions.inferWorshipSongTitle({
+    title: '祢愛永不止息 - Acoustic Version'
+  })), { title: '祢愛永不止息 - Acoustic Version', confident: false }, 'ambiguous punctuation must be preserved');
+  assert.equal(functions.stripWorshipTitleNoise('【敬拜讚美】新的事將要成就【官方動態歌詞】'), '新的事將要成就');
+});
+
+test('asks yt-dlp for structured song metadata only when oEmbed is ambiguous', async () => {
+  let execArgs = null;
+  const functions = loadFunctions(
+    mainSource,
+    [
+      'normalizeMediaRequest',
+      'sanitizeMediaTitle',
+      'stripWorshipTitleNoise',
+      'worshipTitleIdentity',
+      'worshipMetadataPart',
+      'inferWorshipSongTitle',
+      'parseYtDlpWorshipMetadata',
+      'fetchYtDlpWorshipMetadata',
+      'fetchYouTubeMetadata'
+    ],
+    {
+      httpGetJson: async () => ({ title: '歌手 - 原始影片標題 - 專輯', author_name: '不相同的頻道' }),
+      execFileP: async (...args) => {
+        execArgs = args;
+        return { stdout: JSON.stringify({
+          title: '歌手 - 原始影片標題 - 專輯',
+          track: '原始影片標題',
+          artist: '歌手',
+          album: '專輯',
+          uploader: '官方頻道'
+        }) };
+      },
+      resolveYtDlpPath: () => 'yt-dlp-test',
+      spawnEnv: () => ({ NO_COLOR: '1' }),
+      YOUTUBE_OEMBED_TIMEOUT_MS: 5_000,
+      YOUTUBE_METADATA_TIMEOUT_MS: 15_000
+    }
+  );
+
+  assert.deepEqual(plain(await functions.fetchYouTubeMetadata('https://youtu.be/abc123')), {
+    title: '原始影片標題',
+    url: 'https://youtu.be/abc123'
+  });
+  assert.ok(execArgs, 'ambiguous oEmbed title should request structured metadata');
+  assert.ok(execArgs[1].includes('%(.{title,track,artist,album,uploader,channel})j'));
 });
 
 test('validates custom worship presets with the same YouTube policy', () => {
@@ -852,6 +951,88 @@ test('obeys measured scripture capacity even on a small viewport', () => {
     pages.flatMap((page) => page.verses.map((verse) => verse.key)),
     input.map((verse) => verse.key)
   );
+});
+
+test('keeps reader assignments intact when a six-verse segment crosses a visual page', () => {
+  const pageFits = (verses) => verses.length <= 5;
+  const { buildScripturePagesByFit } = loadScripturePaginationFunctions(pageFits);
+  const input = scriptureFixture(22);
+  const segments = scriptureSegments(
+    { book: '測試書', startCh: 1, startV: 1, endCh: 1, endV: 22 },
+    [{ n: '測試書', v: [22] }]
+  );
+  const pages = plain(buildScripturePagesByFit(input, pageFits, segments));
+
+  assert.deepEqual(segments.map((segment) => segment.label), ['1–5 節', '6–10 節', '11–16 節', '17–22 節']);
+  assert.deepEqual(pages.map((page) => page.verses.map((verse) => verse.number)), [
+    [1, 2, 3, 4, 5],
+    [6, 7, 8, 9, 10],
+    [11, 12, 13, 14, 15],
+    [16],
+    [17, 18, 19, 20, 21],
+    [22]
+  ]);
+  assert.equal(pages[2].readerLabel, '第 3 位・11–16 節');
+  assert.equal(pages[2].notice, '本段尚未讀完・下一頁第 16 節');
+  assert.equal(pages[3].readerLabel, '第 3 位・11–16 節');
+  assert.equal(pages[3].notice, '本段結束・下一位第 4 位：17–22 節');
+  assert.equal(pages[4].readerLabel, '第 4 位・17–22 節');
+  assert.equal(pages[5].notice, '經文閱讀完成');
+  assert.ok(pages.every((page) => new Set(page.verses.map((verse) => verse.key)).size <= 5));
+});
+
+test('uses full chapter references when a reader segment itself crosses chapters', () => {
+  const pageFits = (verses) => verses.length <= 2;
+  const { buildScripturePagesByFit } = loadScripturePaginationFunctions(pageFits);
+  const input = [
+    ...scriptureFixture(2).map((verse, index) => ({ ...verse, chapter: 1, number: 30 + index, key: `1:${30 + index}:${index}` })),
+    ...scriptureFixture(5).map((verse, index) => ({ ...verse, chapter: 2, number: index + 1, key: `2:${index + 1}:${index + 2}` }))
+  ];
+  const segments = scriptureSegments(
+    { book: '測試書', startCh: 1, startV: 30, endCh: 2, endV: 5 },
+    [{ n: '測試書', v: [31, 25] }]
+  );
+  const pages = plain(buildScripturePagesByFit(input, pageFits, segments));
+
+  assert.deepEqual(segments.map((segment) => segment.label), ['1:30–2:1', '2:2–5']);
+  assert.equal(pages[0].readerLabel, '第 1 位・1:30–2:1');
+  assert.equal(pages[0].notice, '本段尚未讀完・下一頁第 2:1 節');
+  assert.equal(pages[1].notice, '本段結束・下一位第 2 位：2:2–5');
+});
+
+test('marks an oversized verse as continuing within the same reader segment', () => {
+  const fits = (verses) => verses.length === 1 && Array.from(verses[0].text).length <= 4;
+  const functions = loadFunctions(
+    rendererSource,
+    [
+      'scriptureSentenceTokens',
+      'largestFittingVersePrefix',
+      'splitOversizedScriptureVerse',
+      'buildScripturePagesByFit'
+    ],
+    { scripturePageFits: fits }
+  );
+  const verse = {
+    chapter: 1,
+    number: 1,
+    text: '甲乙丙丁戊己庚辛',
+    continuation: false,
+    startsChapter: true,
+    key: '1:1:0'
+  };
+  const segments = [{
+    label: '1–1 節',
+    start: { chapter: 1, verse: 1 },
+    end: { chapter: 1, verse: 1 },
+    count: 1
+  }];
+  const pages = plain(functions.buildScripturePagesByFit([verse], fits, segments));
+
+  assert.ok(pages.length > 1);
+  assert.equal(pages[0].readerLabel, '第 1 位・1–1 節');
+  assert.equal(pages[0].notice, '本段尚未讀完・下一頁第 1 節（續）');
+  assert.equal(pages.at(-1).notice, '經文閱讀完成');
+  assert.equal(pages.flatMap((page) => page.verses).map((part) => part.text).join(''), verse.text);
 });
 
 test('keeps the same oversized-verse position when Scripture is repaginated', () => {
