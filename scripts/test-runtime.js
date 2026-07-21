@@ -789,6 +789,33 @@ test('parses scripture verses across chapter boundaries without losing chapter i
   );
 });
 
+test('does not render a leading chapter number as the first verse number', () => {
+  const { normalizeBibleLeadingReferenceLine } = loadFunctions(
+    mainSource,
+    ['normalizeBibleLeadingReferenceLine']
+  );
+  const ref = { book: '約翰福音', startCh: 4, startV: 1, endCh: 4, endV: 2 };
+  assert.equal(normalizeBibleLeadingReferenceLine('4 1 第一節內容', ref, true), '1 第一節內容');
+  assert.equal(normalizeBibleLeadingReferenceLine('4 第一節內容', ref, true), '1 第一節內容');
+  assert.equal(normalizeBibleLeadingReferenceLine('4 1 第一節內容', ref, false), '4 1 第一節內容');
+
+  const { parseScriptureVerses } = loadFunctions(
+    rendererSource,
+    ['parseScriptureVerses'],
+    { window: { BIBLE: [{ n: '約翰福音', v: [51, 25, 36, 54] }] } }
+  );
+  const verses = plain(parseScriptureVerses('4 1 第一節內容\n2 第二節內容', ref));
+  assert.deepEqual(verses.map(({ chapter, number, text }) => [chapter, number, text]), [
+    [4, 1, '第一節內容'],
+    [4, 2, '第二節內容']
+  ]);
+  const chapterNumberOnly = plain(parseScriptureVerses('4 第一節內容\n2 第二節內容', ref));
+  assert.deepEqual(chapterNumberOnly.map(({ chapter, number, text }) => [chapter, number, text]), [
+    [4, 1, '第一節內容'],
+    [4, 2, '第二節內容']
+  ]);
+});
+
 test('fills each Scripture page to measured capacity before starting the next', () => {
   const measuredCapacity = 9;
   const pageFits = (verses) => verses.length <= measuredCapacity;

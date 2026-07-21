@@ -190,18 +190,22 @@ function renderEligibleList(kind, derived) {
     button.className = 'candidate-button';
     button.dataset.memberId = memberId;
     button.dataset.kind = kind;
-    const selectedHere = selected[kind][activeSlots[kind]] === memberId;
-    if (selectedHere) button.classList.add('selected');
-    if (stats.readYesterday && !selectedHere) {
+    const assignedIndex = selected[kind].indexOf(memberId);
+    const selectedHere = assignedIndex === activeSlots[kind];
+    const selectedAnywhere = assignedIndex >= 0;
+    if (selectedAnywhere) button.classList.add('selected');
+    if (selectedHere) button.classList.add('selected-here');
+    button.setAttribute('aria-pressed', String(selectedAnywhere));
+    if (stats.readYesterday && !selectedAnywhere) {
       button.disabled = true;
       button.classList.add('recently-read');
     }
     const name = document.createElement('strong');
     name.textContent = member.name;
     const details = document.createElement('small');
-    details.textContent = stats.readYesterday
-      ? `昨天有讀過・今天暫停安排・本週 ${stats.totalCount} 次`
-      : `昨天沒有讀・本週經文 ${stats.scriptureCount} 次・竭誠 ${stats.utmostCount} 次`;
+    details.textContent = selectedAnywhere
+      ? `已安排・本週閱讀 ${stats.totalCount} 次`
+      : (stats.readYesterday ? `昨天已讀・本週閱讀 ${stats.totalCount} 次` : `本週閱讀 ${stats.totalCount} 次`);
     button.append(name, details);
     container.appendChild(button);
   }
@@ -284,8 +288,12 @@ function renderState(state) {
   const presentation = connectionPresentation(state.connection);
   $('connectionBadge').textContent = presentation.text;
   $('connectionBadge').className = `status-badge ${presentation.className}`.trim();
-  $('meetingState').textContent = snapshot.status === 'active' ? `Zoom 會議進行中・${snapshot.meetingNumber}` : '尚未偵測到 Zoom 會議';
-  $('onlineCount').textContent = `${derived.participants.length} 人在線`;
+  const hasMeetingSummary = Boolean(snapshot.meetingNumber);
+  $('meetingState').textContent = snapshot.status === 'active'
+    ? `Zoom 會議進行中・${snapshot.meetingNumber}`
+    : (hasMeetingSummary ? `Zoom 會議已結束・${snapshot.meetingNumber}` : '尚未偵測到 Zoom 會議');
+  const peakParticipants = Math.max(Number(snapshot.peakParticipants || 0), derived.participants.length);
+  $('onlineCount').textContent = hasMeetingSummary ? `本次會議最高 ${peakParticipants} 人在線` : '0 人在線';
   $('allOnlineCount').textContent = String(derived.participants.length);
   const reference = scriptureReference(scriptureSource);
   $('scriptureRangeSummary').textContent = `${reference ? `${reference}・` : ''}${currentScriptureSegments.length > 1 ? `${currentScriptureSegments.length} 人較合適` : '1 人較合適'}`;

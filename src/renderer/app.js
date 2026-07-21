@@ -1248,7 +1248,13 @@ function parseScriptureVerses(text, ref = currentRefPayload()) {
     verses.push(current);
   };
 
-  lines.forEach((line) => {
+  lines.forEach((originalLine) => {
+    let line = originalLine;
+    const combinedStart = !current && !verses.length && line.match(/^(\d+)\s+(\d+)\s+(.+)$/);
+    const startVerse = Math.max(1, Number(ref.startV) || 1);
+    if (combinedStart && Number(combinedStart[1]) === startChapter && Number(combinedStart[2]) === startVerse && startChapter !== startVerse) {
+      line = `${combinedStart[2]} ${combinedStart[3]}`;
+    }
     const match = line.match(/^(\d+)\s*[.)、]?\s*(.+)$/);
     if (!match) {
       if (current) current.text += ` ${line}`;
@@ -1256,7 +1262,9 @@ function parseScriptureVerses(text, ref = currentRefPayload()) {
     }
 
     pushCurrent();
-    const number = Number(match[1]);
+    let number = Number(match[1]);
+    const parsingFirstVerse = verses.length === 0;
+    if (parsingFirstVerse && startVerse === 1 && startChapter !== 1 && number === startChapter) number = 1;
     let expectedLocation = null;
     for (let index = expectedIndex; index < expected.length; index++) {
       if (expected[index].number !== number) continue;

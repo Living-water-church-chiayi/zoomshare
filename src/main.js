@@ -259,8 +259,8 @@ function htmlToText(html) {
   return decodeHtml(String(html || '')
     .replace(/<script[\s\S]*?<\/script>/gi, '')
     .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<sup[^>]*class="[^"]*versenum[^"]*"[^>]*>\s*(\d+)\s*<\/sup>/gi, '\n$1')
-    .replace(/<span[^>]*class="[^"]*chapternum[^"]*"[^>]*>\s*(\d+)\s*<\/span>/gi, '\n$1')
+    .replace(/<sup\b[^>]*class\s*=\s*["'][^"']*\bversenum\b[^"']*["'][^>]*>\s*(\d+)\s*<\/sup>/gi, '\n$1')
+    .replace(/<span\b[^>]*class\s*=\s*["'][^"']*\bchapternum\b[^"']*["'][^>]*>\s*(\d+)\s*<\/span>/gi, '\n$1')
     .replace(/<h[1-6][^>]*>/gi, '\n')
     .replace(/<\/p>|<br\s*\/?>|<\/div>/gi, '\n')
     .replace(/<[^>]+>/g, '')
@@ -281,6 +281,22 @@ function cleanBibleText(text, ref) {
   return cleanBibleTextV2(text, ref);
 }
 
+function normalizeBibleLeadingReferenceLine(line, ref, beforeFirstVerse) {
+  if (!beforeFirstVerse) return line;
+  const startChapter = Math.max(1, Number(ref && ref.startCh) || 1);
+  const startVerse = Math.max(1, Number(ref && ref.startV) || 1);
+  const combinedStart = String(line || '').match(/^(\d+)\s+(\d+)\s+(.+)$/);
+  if (combinedStart && startChapter !== startVerse
+    && Number(combinedStart[1]) === startChapter && Number(combinedStart[2]) === startVerse) {
+    return `${combinedStart[2]} ${combinedStart[3]}`;
+  }
+  const chapterOnlyStart = String(line || '').match(/^(\d+)\s+(.+)$/);
+  if (chapterOnlyStart && startVerse === 1 && startChapter !== 1 && Number(chapterOnlyStart[1]) === startChapter) {
+    return `1 ${chapterOnlyStart[2]}`;
+  }
+  return line;
+}
+
 function cleanBibleTextV2(text, ref) {
   const navRe = /^(menu|account|read|study|plus|Bible Gateway|Available Versions|Audio Bibles|Reading Plans|Advanced Search|Read full chapter|Next|Previous|Prev)$/i;
   const stopRe = /^(?:Footnotes?|Cross references?|Crossrefs?|腳註|註腳|串珠|交叉參照|交叉引用)(?:\b|$|[:：])/i;
@@ -291,7 +307,8 @@ function cleanBibleTextV2(text, ref) {
     .filter(Boolean);
   const verses = [];
   let cur = '';
-  for (const line of lines) {
+  for (const originalLine of lines) {
+    const line = normalizeBibleLeadingReferenceLine(originalLine, ref, !cur);
     if (stopRe.test(line)) break;
     if (navRe.test(line)) continue;
     if (/^\d+\s*\S/.test(line)) {

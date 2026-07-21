@@ -117,7 +117,7 @@ test('keeps two connections from the same signed-in Zoom user', () => {
   assert.equal(snapshotFromMeeting(state.meeting).participants.length, 2);
 });
 
-test('maintains an idempotent current-only meeting snapshot', () => {
+test('maintains an idempotent meeting snapshot and keeps the final peak count', () => {
   const start = { type: 'meeting.started', meetingNumber: '777', meetingUuid: 'm1', eventTs: 10 };
   const joined = {
     type: 'meeting.participant_joined', meetingNumber: '777', meetingUuid: 'm1', eventTs: 20,
@@ -128,13 +128,21 @@ test('maintains an idempotent current-only meeting snapshot', () => {
   let state = applyMeetingMutation(null, {}, start);
   state = applyMeetingMutation(state.meeting, state.versions, joined);
   assert.deepEqual(snapshotFromMeeting(state.meeting).participants.map((item) => item.displayName), ['王小明']);
+  assert.equal(snapshotFromMeeting(state.meeting).peakParticipants, 1);
   state = applyMeetingMutation(state.meeting, state.versions, staleLeave);
   assert.equal(snapshotFromMeeting(state.meeting).participants.length, 1);
   state = applyMeetingMutation(state.meeting, state.versions, leave);
   assert.equal(snapshotFromMeeting(state.meeting).participants.length, 0);
   state = applyMeetingMutation(state.meeting, state.versions, { type: 'meeting.ended', meetingUuid: 'm1', eventTs: 40 });
-  assert.equal(state.meeting, null);
+  assert.equal(state.meeting.status, 'ended');
   assert.deepEqual(state.versions, {});
+  assert.deepEqual(snapshotFromMeeting(state.meeting), {
+    status: 'idle',
+    meetingNumber: '777',
+    meetingUuid: 'm1',
+    peakParticipants: 1,
+    participants: []
+  });
 });
 
 test('generates Zoom-compatible HMAC values', async () => {
