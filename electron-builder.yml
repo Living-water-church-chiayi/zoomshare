@@ -59,6 +59,7 @@ mac:
     - Contents/Resources/bin/deno
     - Contents/Resources/bin/ffmpeg
     - Contents/Resources/bin/ffprobe
+    - Contents/Resources/bin/lingxiu-audio-player
   extraResources:
     - from: resources/bin/mac
       to: bin

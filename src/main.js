@@ -105,6 +105,67 @@ function spawnEnv() {
   return { ...process.env, NO_COLOR: '1', PATH: bundledBinDir() + sep + (process.env.PATH || '') };
 }
 
+// Chromium 在 ZoomAudioDevice 成為預設裝置時，可能把純播放串流當成
+// 雙向 CoreAudio 串流，因而讓 macOS 顯示麥克風權限。macOS 版改由一個
+// 只使用 AVPlayer 輸出的原生小幫手播放聲音，renderer 只負責靜音畫面。
+class NativeMacAudioController {
+  constructor(options = {}) {
+    this.platform = options.platform || process.platform;
+    this.spawnProcess = options.spawnProcess || spawn;
+    this.exists = options.exists || fs.existsSync;
+    this.child = null;
+  }
+
+  helperPath() {
+    if (app.isPackaged) return path.join(process.resourcesPath, 'bin', 'lingxiu-audio-player');
+    return path.join(__dirname, '..', 'resources', 'bin', 'mac', 'lingxiu-audio-player');
+  }
+
+  available() {
+    return this.platform === 'darwin' && this.exists(this.helperPath());
+  }
+
+  ensureProcess() {
+    if (this.child && this.child.exitCode === null && !this.child.killed) return this.child;
+    if (!this.available()) throw new Error('找不到 macOS 原生音訊播放器');
+    const child = this.spawnProcess(this.helperPath(), [], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true
+    });
+    this.child = child;
+    child.stdin.on('error', () => {});
+    child.stdout.on('data', () => {});
+    child.stderr.on('data', (chunk) => {
+      const message = String(chunk || '').trim();
+      if (message) console.warn('原生音訊播放器：', message);
+    });
+    child.on('error', (error) => {
+      console.warn('原生音訊播放器啟動失敗：', error.message);
+      if (this.child === child) this.child = null;
+    });
+    child.on('exit', () => { if (this.child === child) this.child = null; });
+    return child;
+  }
+
+  send(command) {
+    const child = this.ensureProcess();
+    child.stdin.write(`${JSON.stringify(command)}\n`);
+    return { ok: true };
+  }
+
+  close() {
+    const child = this.child;
+    this.child = null;
+    if (!child || child.killed) return;
+    try { child.stdin.write('{"action":"shutdown"}\n'); } catch {}
+    try { child.stdin.end(); } catch {}
+    const timer = setTimeout(() => { try { child.kill(); } catch {} }, 800);
+    if (typeof timer.unref === 'function') timer.unref();
+  }
+}
+
+const nativeMacAudio = new NativeMacAudioController();
+
 // ---------- yt-dlp 自動更新 ----------
 async function ensureWritableYtDlp() {
   const userCopy = userBinPath();
@@ -813,6 +874,7 @@ function findCachedFile(url, kind, quality) {
     const completed = [];
     for (const name of fs.readdirSync(CACHE_DIR())) {
       if (!name.startsWith(base)) continue;
+      if (name.includes('.visual-only.')) continue;
       const filePath = path.join(CACHE_DIR(), name);
       let stat;
       try { stat = fs.statSync(filePath); } catch { continue; }
@@ -827,6 +889,7 @@ function findCachedFile(url, kind, quality) {
 function fileUrl(p) { return pathToFileURL(p).href; }
 
 const inflight = new Map(); // cacheKey -> Promise<path>
+const visualOnlyInflight = new Map(); // 原始影片路徑 -> Promise<無音軌影片路徑>
 
 function cleanIncompleteFilesForKey(key) {
   const prefix = key + '.';
@@ -917,6 +980,48 @@ async function ensureMedia(url, kind, quality) {
   const p = downloadMedia(url, kind, quality).finally(() => inflight.delete(key));
   inflight.set(key, p);
   return p;
+}
+
+async function ensureVisualOnlyVideo(sourcePath) {
+  if (process.platform !== 'darwin') return sourcePath;
+  const ext = path.extname(sourcePath).toLowerCase();
+  if (!FINAL_MEDIA_EXTENSIONS.has(ext)) throw new Error('敬拜影片格式無法建立純畫面版本');
+  const destination = sourcePath.slice(0, -ext.length) + `.visual-only${ext}`;
+  try {
+    const stat = await fsp.stat(destination);
+    if (stat.isFile() && stat.size > 0) return destination;
+  } catch {}
+  if (visualOnlyInflight.has(sourcePath)) return visualOnlyInflight.get(sourcePath);
+
+  const operation = (async () => {
+    const ffmpegPath = path.join(bundledBinDir(), 'ffmpeg');
+    if (!fs.existsSync(ffmpegPath)) throw new Error('找不到 macOS 影片處理工具');
+    const temporary = sourcePath.slice(0, -ext.length) + `.visual-only.tmp${ext}`;
+    await fsp.unlink(temporary).catch(() => {});
+    try {
+      const args = [
+        '-hide_banner', '-loglevel', 'error', '-y',
+        '-i', sourcePath,
+        '-map', '0:v:0', '-c:v', 'copy', '-an'
+      ];
+      if (['.mp4', '.mov', '.m4v'].includes(ext)) args.push('-movflags', '+faststart');
+      args.push(temporary);
+      await execFileP(ffmpegPath, args, {
+        windowsHide: true,
+        env: spawnEnv(),
+        timeout: 120_000,
+        maxBuffer: 2 * 1024 * 1024
+      });
+      const stat = await fsp.stat(temporary);
+      if (!stat.isFile() || stat.size === 0) throw new Error('純畫面影片輸出為空');
+      await fsp.rename(temporary, destination);
+      return destination;
+    } finally {
+      await fsp.unlink(temporary).catch(() => {});
+    }
+  })().finally(() => visualOnlyInflight.delete(sourcePath));
+  visualOnlyInflight.set(sourcePath, operation);
+  return operation;
 }
 
 // ---------- 快取管理 ----------
@@ -1141,6 +1246,51 @@ function sameFilePath(a, b) {
   return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
 }
 
+function pathInside(parentPath, candidatePath) {
+  const relative = path.relative(parentPath, candidatePath);
+  return relative !== '' && !relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative);
+}
+
+async function normalizeNativeAudioCommand(request) {
+  if (!isPlainObject(request)) throw new Error('原生音訊指令格式不正確');
+  const action = String(request.action || '');
+  const channel = String(request.channel || '');
+  if (!['load', 'play', 'pause', 'seek', 'volume', 'stop'].includes(action)) {
+    throw new Error('原生音訊動作不正確');
+  }
+  if (!['music', 'worship'].includes(channel)) throw new Error('原生音訊頻道不正確');
+
+  const command = { action, channel };
+  if (action === 'load') {
+    let parsed;
+    try { parsed = new URL(String(request.source || '')); }
+    catch { throw new Error('原生音訊來源不正確'); }
+    if (parsed.protocol !== 'file:') throw new Error('原生音訊只允許本機快取檔案');
+    const sourcePath = await fsp.realpath(fileURLToPath(parsed));
+    const cachePath = await fsp.realpath(CACHE_DIR());
+    const stat = await fsp.stat(sourcePath);
+    if (!stat.isFile() || (!sameFilePath(sourcePath, cachePath) && !pathInside(cachePath, sourcePath))) {
+      throw new Error('原生音訊來源不在媒體快取內');
+    }
+    command.path = sourcePath;
+    command.loop = request.loop === true;
+    command.autoplay = request.autoplay !== false;
+  }
+  if (action === 'load' || action === 'volume') {
+    const volume = Number(request.volume);
+    if (!Number.isFinite(volume) || volume < 0 || volume > 1) throw new Error('原生音訊音量不正確');
+    command.volume = volume;
+  }
+  if (action === 'load' || action === 'seek') {
+    const position = Number(request.position || 0);
+    if (!Number.isFinite(position) || position < 0 || position > 24 * 60 * 60) {
+      throw new Error('原生音訊位置不正確');
+    }
+    command.position = position;
+  }
+  return command;
+}
+
 function isTrustedRendererUrl(value, expectedPath = RENDERER_ENTRY_PATH) {
   try {
     const parsed = new URL(value);
@@ -1290,7 +1440,12 @@ function registerIpc() {
   trustedHandle('media:ensure', async (request) => {
     try {
       if (!isPlainObject(request)) throw new Error('媒體要求格式不正確');
-      return { ok: true, path: fileUrl(await ensureMedia(request.url, request.kind, request.quality)) };
+      const mediaPath = await ensureMedia(request.url, request.kind, request.quality);
+      const response = { ok: true, path: fileUrl(mediaPath) };
+      if (process.platform === 'darwin' && request.kind === 'video') {
+        response.visualPath = fileUrl(await ensureVisualOnlyVideo(mediaPath));
+      }
+      return response;
     }
     catch (e) { return { ok: false, error: e.message }; }
   });
@@ -1305,6 +1460,12 @@ function registerIpc() {
       };
     }
     catch { return { cached: false }; }
+  });
+  trustedHandle('native-audio:available', () => nativeMacAudio.available());
+  trustedHandle('native-audio:command', async (request) => {
+    if (process.platform !== 'darwin') return { ok: false, unsupported: true };
+    try { return nativeMacAudio.send(await normalizeNativeAudioCommand(request)); }
+    catch (error) { return { ok: false, error: error.message }; }
   });
   trustedHandle('youtube:metadata', async (url) => {
     try { return { ok: true, ...(await fetchYouTubeMetadata(url)) }; }
@@ -1653,5 +1814,8 @@ app.whenReady().then(async () => {
   if (app.isPackaged && process.platform !== 'darwin') autoUpdater.checkForUpdates().catch(() => {});
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
-app.on('before-quit', () => presenceManager.stop());
+app.on('before-quit', () => {
+  nativeMacAudio.close();
+  presenceManager.stop();
+});
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

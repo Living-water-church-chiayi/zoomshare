@@ -165,6 +165,16 @@ test('creates a valid file URL for spaces, Unicode, #, ? and %', () => {
   assert.match(actual, /%25/);
 });
 
+test('accepts only descendants of the media cache for native audio playback', () => {
+  const { pathInside } = loadFunctions(mainSource, ['pathInside'], { path });
+  const cache = path.join(projectRoot, 'cache-root');
+
+  assert.equal(pathInside(cache, path.join(cache, 'song.m4a')), true);
+  assert.equal(pathInside(cache, path.join(cache, 'nested', 'worship.mp4')), true);
+  assert.equal(pathInside(cache, cache), false);
+  assert.equal(pathInside(cache, path.resolve(cache, '..', 'outside.m4a')), false);
+});
+
 test('denies renderer capture permissions because playback never needs recording access', () => {
   let checkHandler = null;
   let requestHandler = null;
@@ -460,6 +470,7 @@ test('advances directly to Scripture when the worship video finishes', () => {
     $: (id) => elements[id],
     fmtTime: () => '0:00',
     setWorshipPlayState: () => {},
+    sendNativeAudio: () => {},
     backToCover: (options) => returns.push(plain(options)),
     toast: () => {},
     clearTimeout: () => {},
@@ -1895,6 +1906,7 @@ test('keeps the cover silent after Utmost while preserving manual music playback
       musicFadeTimer: 99,
       clearInterval: () => { clearedFade++; },
       setMusicSwitchState: (on) => switchStates.push(on),
+      sendNativeAudio: () => {},
       resolveAndPlayMusic: () => { playRequests++; },
       fadeOutMusic: () => assert.fail('manual playback was mistaken for a fade-out')
     }
@@ -1983,6 +1995,9 @@ test('still completes the programmatic music resume while the cover window settl
       musicPlaying: false,
       musicRequestToken: 0,
       musicFadeTimer: null,
+      USE_NATIVE_MAC_AUDIO: false,
+      nativeAudioCommand: async () => ({ ok: true }),
+      sendNativeAudio: () => {},
       setMusicSwitchState: () => {},
       showBadge: () => {},
       hideBadge: () => {},
@@ -2060,6 +2075,7 @@ test('keeps the post-Utmost silence latch when navigating back before the cover'
     startWorship: async () => true,
     showToolbar: () => {},
     setMusicSwitchState: () => {},
+    sendNativeAudio: () => {},
     resolveAndPlayMusic: () => { playRequests++; }
   });
 

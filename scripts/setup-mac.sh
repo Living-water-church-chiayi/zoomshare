@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Prepare reproducible universal macOS helper binaries in resources/bin/mac/.
-# Requires macOS 12+ command-line tools (curl, unzip, lipo, codesign, shasum).
+# Requires macOS 12+ command-line tools (curl, unzip, lipo, codesign, shasum, Swift).
 set -euo pipefail
 IFS=$'\n\t'
 
@@ -24,7 +24,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 readonly PROJECT_ROOT
 readonly DEST="$PROJECT_ROOT/resources/bin/mac"
 
-for required_command in curl unzip lipo shasum codesign xattr install; do
+for required_command in curl unzip lipo shasum codesign xattr install xcrun; do
   if ! command -v "$required_command" >/dev/null 2>&1; then
     echo "Missing required command: $required_command" >&2
     exit 1
@@ -88,6 +88,9 @@ readonly FFMPEG_ARM64_DOWNLOAD="$TMP_DIR/ffmpeg-arm64"
 readonly FFMPEG_X64_DOWNLOAD="$TMP_DIR/ffmpeg-x64"
 readonly FFPROBE_ARM64_DOWNLOAD="$TMP_DIR/ffprobe-arm64"
 readonly FFPROBE_X64_DOWNLOAD="$TMP_DIR/ffprobe-x64"
+readonly NATIVE_AUDIO_SOURCE="$PROJECT_ROOT/native/macos/main.swift"
+readonly NATIVE_AUDIO_ARM64="$TMP_DIR/lingxiu-audio-player-arm64"
+readonly NATIVE_AUDIO_X64="$TMP_DIR/lingxiu-audio-player-x64"
 
 download_verified \
   "yt-dlp $YT_DLP_VERSION" \
@@ -128,13 +131,24 @@ require_arch "$FFMPEG_X64_DOWNLOAD" "x86_64"
 require_arch "$FFPROBE_ARM64_DOWNLOAD" "arm64"
 require_arch "$FFPROBE_X64_DOWNLOAD" "x86_64"
 
+echo "Building playback-only AVPlayer helper ..."
+xcrun --sdk macosx swiftc -swift-version 5 -O \
+  -target arm64-apple-macos12.0 "$NATIVE_AUDIO_SOURCE" \
+  -o "$NATIVE_AUDIO_ARM64"
+xcrun --sdk macosx swiftc -swift-version 5 -O \
+  -target x86_64-apple-macos12.0 "$NATIVE_AUDIO_SOURCE" \
+  -o "$NATIVE_AUDIO_X64"
+require_arch "$NATIVE_AUDIO_ARM64" "arm64"
+require_arch "$NATIVE_AUDIO_X64" "x86_64"
+
 cp "$YT_DLP_DOWNLOAD" "$STAGE/yt-dlp_macos"
 lipo -create "$TMP_DIR/deno-arm64/deno" "$TMP_DIR/deno-x64/deno" -output "$STAGE/deno"
 lipo -create "$FFMPEG_ARM64_DOWNLOAD" "$FFMPEG_X64_DOWNLOAD" -output "$STAGE/ffmpeg"
 lipo -create "$FFPROBE_ARM64_DOWNLOAD" "$FFPROBE_X64_DOWNLOAD" -output "$STAGE/ffprobe"
+lipo -create "$NATIVE_AUDIO_ARM64" "$NATIVE_AUDIO_X64" -output "$STAGE/lingxiu-audio-player"
 
 xattr -dr com.apple.quarantine "$STAGE" 2>/dev/null || true
-for binary_name in yt-dlp_macos deno ffmpeg ffprobe; do
+for binary_name in yt-dlp_macos deno ffmpeg ffprobe lingxiu-audio-player; do
   binary="$STAGE/$binary_name"
   chmod 0755 "$binary"
   require_universal "$binary"
@@ -169,9 +183,10 @@ if [[ "$ffprobe_version_line" != ffprobe\ version\ * ]]; then
   echo "Observed: $ffprobe_version_line" >&2
   exit 1
 fi
+printf '%s\n' '{"action":"shutdown"}' | "$STAGE/lingxiu-audio-player"
 
 mkdir -p "$DEST"
-for binary_name in yt-dlp_macos deno ffmpeg ffprobe; do
+for binary_name in yt-dlp_macos deno ffmpeg ffprobe lingxiu-audio-player; do
   install -m 0755 "$STAGE/$binary_name" "$DEST/$binary_name"
   require_universal "$DEST/$binary_name"
   codesign --verify --strict "$DEST/$binary_name"
@@ -182,7 +197,9 @@ echo "Prepared pinned universal macOS helpers in $DEST"
 echo "  yt-dlp: $YT_DLP_VERSION"
 echo "  deno:   $DENO_VERSION"
 echo "  ffmpeg: ${FFMPEG_STATIC_VERSION#b}"
+echo "  audio:  native AVPlayer (playback only)"
 lipo -info "$DEST/yt-dlp_macos"
 lipo -info "$DEST/deno"
 lipo -info "$DEST/ffmpeg"
 lipo -info "$DEST/ffprobe"
+lipo -info "$DEST/lingxiu-audio-player"

@@ -1,6 +1,7 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
+const USE_NATIVE_MAC_AUDIO = window.api.platform === 'darwin';
 
 let cfg = null;
 let musicPlaying = false;
@@ -49,6 +50,17 @@ function toast(msg, ms = 2200) {
   t.classList.remove('hidden');
   clearTimeout(toast._t);
   toast._t = setTimeout(() => t.classList.add('hidden'), ms);
+}
+
+async function nativeAudioCommand(channel, action, options = {}) {
+  if (!USE_NATIVE_MAC_AUDIO) return { ok: true, native: false };
+  try { return await window.api.nativeAudioCommand({ channel, action, ...options }); }
+  catch (error) { return { ok: false, error: error.message }; }
+}
+
+function sendNativeAudio(channel, action, options = {}) {
+  if (!USE_NATIVE_MAC_AUDIO) return;
+  nativeAudioCommand(channel, action, options).catch(() => {});
 }
 
 function systemDateMD() {
@@ -928,6 +940,7 @@ function onSettingsChanged() {
   collectSettings();
   applyCover(null);
   $('bgAudio').volume = cfg.musicVolume;
+  if (musicPlaying) sendNativeAudio('music', 'volume', { volume: cfg.musicVolume });
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => window.api.setConfig(cfg), 300);
 }
@@ -974,8 +987,33 @@ async function resolveAndPlayMusic() {
   const resolvedSrc = normalizeMediaUrl(r.path);
   if (normalizeMediaUrl(a.src) !== resolvedSrc) a.src = resolvedSrc;
   a.volume = cfg.musicVolume;
-  try { await a.play(); } catch (e) { musicDesired = false; setMusicSwitchState(false); toast('播放失敗：' + e.message, 3000); return; }
-  if (requestToken !== musicRequestToken || !musicDesired || !isMainCover()) { a.pause(); return; }
+  try {
+    if (USE_NATIVE_MAC_AUDIO) {
+      a.pause();
+      const nativeResult = await nativeAudioCommand('music', 'load', {
+        source: resolvedSrc,
+        loop: true,
+        autoplay: true,
+        position: 0,
+        volume: cfg.musicVolume
+      });
+      if (!nativeResult.ok) throw new Error(nativeResult.error || 'macOS 原生音訊播放器無法啟動');
+    } else {
+      await a.play();
+    }
+  } catch (e) {
+    a.pause();
+    sendNativeAudio('music', 'stop');
+    musicDesired = false;
+    setMusicSwitchState(false);
+    toast('播放失敗：' + e.message, 3000);
+    return;
+  }
+  if (requestToken !== musicRequestToken || !musicDesired || !isMainCover()) {
+    a.pause();
+    sendNativeAudio('music', 'stop');
+    return;
+  }
   musicPlaying = true;
   setMusicSwitchState(true);
   if (needDownload) toast('背景音樂已準備好，開始播放', 3000);
@@ -1000,12 +1038,14 @@ function fadeOutMusic(done) {
       clearInterval(musicFadeTimer);
       musicFadeTimer = null;
       a.pause();
+      sendNativeAudio('music', 'pause');
       a.volume = cfg.musicVolume;
       musicPlaying = false;
       setMusicSwitchState(false);
       if (done) done();
     } else {
       a.volume = Math.max(0, v);
+      sendNativeAudio('music', 'volume', { volume: a.volume });
     }
   }, 40);
 }
@@ -1020,6 +1060,7 @@ function pauseMusicForFlow() {
   musicDesired = false;
   setMusicSwitchState(false);
   if (musicPlaying && !musicFadeTimer) fadeOutMusic();
+  else if (!musicPlaying) sendNativeAudio('music', 'stop');
 }
 
 function resumeMusicOnCover() {
@@ -1034,6 +1075,7 @@ function resumeMusicOnCover() {
       musicFadeTimer = null;
     }
     a.pause();
+    sendNativeAudio('music', 'stop');
     a.volume = cfg.musicVolume;
     musicPlaying = false;
     setMusicSwitchState(false);
@@ -1048,6 +1090,7 @@ function resumeMusicOnCover() {
     musicFadeTimer = null;
     a.volume = cfg.musicVolume;
     if (!a.paused) {
+      sendNativeAudio('music', 'volume', { volume: cfg.musicVolume });
       musicDesired = true;
       musicPlaying = true;
       setMusicSwitchState(true);
@@ -1088,17 +1131,32 @@ function toggleMusicPlayPause() {
   if (flowTransitioning || !isMainCover()) return;
   const a = $('bgAudio');
   if (!a.src) { resolveAndPlayMusic(); return; }
-  if (a.paused) {
+  const paused = USE_NATIVE_MAC_AUDIO ? !musicPlaying : a.paused;
+  if (paused) {
     musicDesired = true;
     setMusicSwitchState(true);
-    a.play().then(() => { musicPlaying = true; }).catch((e) => {
+    const resume = USE_NATIVE_MAC_AUDIO
+      ? nativeAudioCommand('music', 'play')
+      : a.play().then(() => ({ ok: true }));
+    resume.then((nativeResult) => {
+      if (!nativeResult.ok) throw new Error(nativeResult.error || 'macOS 原生音訊播放器無法啟動');
+      musicPlaying = true;
+    }).catch((e) => {
       musicDesired = false;
       musicPlaying = false;
       setMusicSwitchState(false);
+      a.pause();
+      sendNativeAudio('music', 'stop');
       toast('播放失敗：' + e.message, 3000);
     });
   }
-  else { musicDesired = false; setMusicSwitchState(false); a.pause(); musicPlaying = false; }
+  else {
+    musicDesired = false;
+    setMusicSwitchState(false);
+    a.pause();
+    sendNativeAudio('music', 'pause');
+    musicPlaying = false;
+  }
 }
 
 // ---------- 閱讀流程 ----------
@@ -2187,26 +2245,39 @@ async function startWorship() {
     await backToCover();
     return false;
   }
-  playWorshipVideo(r.path, false, requestToken);
+  playWorshipVideo(r.visualPath || r.path, r.path, false, requestToken);
   return true;
 }
 
 // 明確 load 後播放；首次失敗會重試一次，再提示使用者手動播放。
-function playWorshipVideo(src, retried, requestToken = worshipRequestToken) {
+function playWorshipVideo(src, audioSrc, retried, requestToken = worshipRequestToken) {
   const video = $('worshipVideo');
   if (worshipPlayRetryTimer) clearTimeout(worshipPlayRetryTimer);
   worshipPlayRetryTimer = null;
   video.pause();
+  sendNativeAudio('worship', 'stop');
   video.src = src;
   video.load();
   video.volume = 1;
-  video.play().then(() => {
+  video.muted = USE_NATIVE_MAC_AUDIO;
+  Promise.all([
+    video.play(),
+    nativeAudioCommand('worship', 'load', {
+      source: normalizeMediaUrl(audioSrc),
+      loop: false,
+      autoplay: true,
+      position: 0,
+      volume: 1
+    })
+  ]).then(([, nativeResult]) => {
+    if (!nativeResult.ok) throw new Error(nativeResult.error || 'macOS 原生音訊播放器無法啟動');
     if (requestToken !== worshipRequestToken || !worshipActive) return;
     $('worshipLoading').classList.add('hidden');
-  }).catch(() => {
+  }).catch((error) => {
+    sendNativeAudio('worship', 'stop');
     if (requestToken !== worshipRequestToken || !worshipActive) return;
     if (!retried && worshipActive && requestToken === worshipRequestToken) {
-      worshipPlayRetryTimer = setTimeout(() => playWorshipVideo(src, true, requestToken), 300);
+      worshipPlayRetryTimer = setTimeout(() => playWorshipVideo(src, audioSrc, true, requestToken), 300);
       return;
     }
     if (worshipActive) {
@@ -2218,12 +2289,21 @@ function playWorshipVideo(src, retried, requestToken = worshipRequestToken) {
   });
 }
 
+async function resumeWorshipPlayback(video) {
+  await video.play();
+  const seekResult = await nativeAudioCommand('worship', 'seek', { position: video.currentTime || 0 });
+  if (!seekResult.ok) throw new Error(seekResult.error || 'macOS 原生音訊播放器無法定位');
+  const playResult = await nativeAudioCommand('worship', 'play');
+  if (!playResult.ok) throw new Error(playResult.error || 'macOS 原生音訊播放器無法播放');
+}
+
 function stopWorshipPlayback() {
   worshipRequestToken++;
   if (worshipPlayRetryTimer) clearTimeout(worshipPlayRetryTimer);
   worshipPlayRetryTimer = null;
   const video = $('worshipVideo');
   video.pause();
+  sendNativeAudio('worship', 'stop');
   video.removeAttribute('src');
   video.load();
   worshipControlsHovered = false;
@@ -2489,21 +2569,30 @@ function setupWorshipControls() {
   });
   v.addEventListener('play', () => setWorshipPlayState(true));
   v.addEventListener('playing', () => $('worshipLoading').classList.add('hidden'));
-  v.addEventListener('pause', () => setWorshipPlayState(false));
+  v.addEventListener('pause', () => {
+    setWorshipPlayState(false);
+    sendNativeAudio('worship', 'pause');
+  });
   v.addEventListener('error', () => {
     if (!worshipActive) return;
     $('worshipLoading').textContent = '影片播放失敗，請返回後再試一次';
     $('worshipLoading').classList.remove('hidden');
     showToolbar();
   });
-  v.addEventListener('ended', () => backToCover({ nextAfterWorship: true }));
+  v.addEventListener('ended', () => {
+    sendNativeAudio('worship', 'stop');
+    backToCover({ nextAfterWorship: true });
+  });
   seek.addEventListener('input', () => {
-    if (v.duration) v.currentTime = (parseFloat(seek.value) / 1000) * v.duration;
+    if (v.duration) {
+      v.currentTime = (parseFloat(seek.value) / 1000) * v.duration;
+      sendNativeAudio('worship', 'seek', { position: v.currentTime });
+    }
   });
   $('wPlay').addEventListener('click', async () => {
     if (!v.paused) { v.pause(); return; }
     try {
-      await v.play();
+      await resumeWorshipPlayback(v);
       $('worshipLoading').classList.add('hidden');
     } catch (e) {
       $('worshipLoading').textContent = '播放失敗，請稍後再試';
@@ -2991,7 +3080,7 @@ async function init() {
     if (worshipActive) {
       const v = $('worshipVideo');
       if (v.paused) {
-        v.play().catch((error) => {
+        resumeWorshipPlayback(v).catch((error) => {
           $('worshipLoading').textContent = '播放失敗，請稍後再試';
           $('worshipLoading').classList.remove('hidden');
           toast('影片播放失敗：' + error.message, 3200);
