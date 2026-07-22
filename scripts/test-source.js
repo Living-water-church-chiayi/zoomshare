@@ -299,6 +299,7 @@ assert.equal(packageJson.scripts['test:host-layout'], 'electron scripts/test-hos
 assert.match(ciWorkflow, /npm run test:layout/, 'cross-platform CI must run the Electron reading layout test');
 assert.match(ciWorkflow, /npm run test:host-layout/, 'cross-platform CI must run the host console layout test');
 assert.match(ciWorkflow, /test-packaged-smoke\.js/, 'Windows CI must launch the packaged Electron application');
+assert.match(ciWorkflow, /ffprobe lingxiu-audio-player/, 'macOS CI must verify that the native audio helper is packaged');
 assert.match(
   builderConfig,
   /^\s*artifactName:\s*lingxiu-cover-setup-\$\{version\}\.\$\{ext\}\s*$/m,

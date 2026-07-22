@@ -112,7 +112,7 @@ jobs:
             echo "Expected universal executable, got: $architectures"
             exit 1
           }
-          for helper in yt-dlp_macos deno ffmpeg ffprobe; do
+          for helper in yt-dlp_macos deno ffmpeg ffprobe lingxiu-audio-player; do
             test -f "$app_dir/Contents/Resources/bin/$helper" || {
               echo "Packaged helper is missing: $helper"
               exit 1
