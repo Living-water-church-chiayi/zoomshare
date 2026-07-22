@@ -64,6 +64,16 @@ assert.match(
 );
 assert.match(
   main,
+  /configurePlaybackOnlyAudio\(app\);[\s\S]*?requestSingleInstanceLock\(\)/,
+  'macOS audio input must be disabled before Electron creates child processes'
+);
+assert.match(
+  main,
+  /platform === 'darwin'[\s\S]*?appendSwitch\('disable-audio-input'\)/,
+  'playback-only macOS builds must force microphone streams onto a fake device'
+);
+assert.match(
+  main,
   /configureRendererPermissions\(session\.defaultSession\);/,
   'renderer permissions must be denied before any application window is created'
 );

@@ -18,6 +18,14 @@ const { PresenceManager } = require('./presence');
 const presenceManager = new PresenceManager();
 const APP_ICON_PATH = path.join(__dirname, 'renderer', 'images', 'app-icon.png');
 
+// macOS 上 Zoom「分享聲音」可能讓 Chromium 將虛擬音訊裝置當成輸入端。
+// 本程式只播放媒體，因此在 AudioManager 建立前強制所有輸入串流使用假裝置，
+// 保留正常音訊輸出，同時避免觸發系統麥克風權限。
+function configurePlaybackOnlyAudio(electronApp, platform = process.platform) {
+  if (platform === 'darwin') electronApp.commandLine.appendSwitch('disable-audio-input');
+}
+configurePlaybackOnlyAudio(app);
+
 // 允許背景音樂與敬拜影片在沒有使用者手勢時自動播放。
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 

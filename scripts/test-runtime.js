@@ -185,6 +185,26 @@ test('denies renderer capture permissions because playback never needs recording
   assert.equal(granted, false);
 });
 
+test('forces macOS audio input streams onto a fake device without disabling playback', () => {
+  const switches = [];
+  const fakeApp = {
+    commandLine: {
+      appendSwitch(name, value) { switches.push([name, value]); }
+    }
+  };
+  const { configurePlaybackOnlyAudio } = loadFunctions(
+    mainSource,
+    ['configurePlaybackOnlyAudio']
+  );
+
+  configurePlaybackOnlyAudio(fakeApp, 'darwin');
+  assert.deepEqual(switches, [['disable-audio-input', undefined]]);
+
+  switches.length = 0;
+  configurePlaybackOnlyAudio(fakeApp, 'win32');
+  assert.deepEqual(switches, []);
+});
+
 test('reports pointer movement over the main window without resizing it', () => {
   const cursorPoints = [
     { x: 150, y: 250 },
