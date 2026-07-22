@@ -24,8 +24,9 @@ let scriptureRequestToken = 0;
 let flowNavigationToken = 0;
 let flowPageRenderToken = 0;
 let flowTransitioning = false;
-let flowResizeTimer = null;
 let flowFooterHideTimer = null;
+let flowFooterHovered = false;
+let settingsPointerStartedOutside = false;
 let utmostFinishConfirmUntil = 0;
 let utmostFinishConfirmTimer = null;
 let flowWheelDelta = 0;
@@ -33,6 +34,10 @@ let flowWheelGestureLocked = false;
 let flowWheelResetTimer = null;
 let worshipRequestToken = 0;
 const FLOW_ORDER = ['cover', 'worship', 'scripture', 'utmost'];
+const FLOW_LAYOUT_WIDTH = 405;
+const FLOW_LAYOUT_HEIGHT = 720;
+const FLOW_MIN_CONTROL_SIZE = 44;
+const FLOW_MIN_ICON_SIZE = 19;
 const UTMOST_FINISH_CONFIRM_MS = 3500;
 const FLOW_WHEEL_THRESHOLD = 36;
 const FLOW_WHEEL_IDLE_MS = 300;
@@ -1106,6 +1111,21 @@ function setFlowVisible(visible) {
   document.querySelector('.overlay-bottom').classList.toggle('hidden', visible);
 }
 
+function updateFlowDisplayScale() {
+  const screen = $('flowScreen');
+  if (!screen) return 1;
+  const viewportWidth = Math.max(1, Number(window.innerWidth) || FLOW_LAYOUT_WIDTH);
+  const viewportHeight = Math.max(1, Number(window.innerHeight) || FLOW_LAYOUT_HEIGHT);
+  const scale = Math.max(0.01, Math.min(
+    viewportWidth / FLOW_LAYOUT_WIDTH,
+    viewportHeight / FLOW_LAYOUT_HEIGHT
+  ));
+  screen.style.setProperty('--flow-display-scale', scale.toFixed(6));
+  screen.style.setProperty('--flow-control-min-size', `${(FLOW_MIN_CONTROL_SIZE / scale).toFixed(3)}px`);
+  screen.style.setProperty('--flow-icon-min-size', `${(FLOW_MIN_ICON_SIZE / scale).toFixed(3)}px`);
+  return scale;
+}
+
 function isReadingFlowStep(step = flowStep) {
   return step === 'scripture' || step === 'utmost';
 }
@@ -1121,6 +1141,7 @@ function hideFlowFooterImmediately() {
   ) document.activeElement.blur();
   if (flowFooterHideTimer) clearTimeout(flowFooterHideTimer);
   flowFooterHideTimer = null;
+  flowFooterHovered = false;
   if (screen) screen.classList.remove('footer-visible');
   if (footer) footer.classList.remove('footer-visible');
 }
@@ -1140,8 +1161,10 @@ function revealFlowFooter() {
 
 function scheduleFlowFooterHide() {
   if (flowFooterHideTimer) clearTimeout(flowFooterHideTimer);
+  flowFooterHideTimer = null;
   const scheduledStep = flowStep;
   const screen = $('flowScreen');
+  const footer = document.querySelector('.flow-footer');
   if (
     !isReadingFlowStep(scheduledStep) ||
     !screen ||
@@ -1151,12 +1174,18 @@ function scheduleFlowFooterHide() {
     hideFlowFooterImmediately();
     return;
   }
+  if (flowFooterHovered || (footer && footer.contains(document.activeElement))) {
+    revealFlowFooter();
+    return;
+  }
   flowFooterHideTimer = setTimeout(() => {
     flowFooterHideTimer = null;
     if (
       flowStep === scheduledStep &&
       screen.dataset.step === scheduledStep &&
-      !screen.classList.contains('hidden')
+      !screen.classList.contains('hidden') &&
+      !flowFooterHovered &&
+      !(footer && footer.contains(document.activeElement))
     ) hideFlowFooterImmediately();
   }, 1000);
 }
@@ -1174,8 +1203,18 @@ function setupFlowFooterReveal() {
     screen.addEventListener('pointerleave', scheduleFlowFooterHide);
   }
   if (!footer) return;
+  footer.addEventListener('pointerenter', () => {
+    flowFooterHovered = true;
+    revealFlowFooter();
+  });
+  footer.addEventListener('pointerleave', () => {
+    flowFooterHovered = false;
+    scheduleFlowFooterHide();
+  });
   footer.addEventListener('focusin', revealFlowFooter);
-  footer.addEventListener('pointerup', scheduleFlowFooterHide);
+  footer.addEventListener('pointerup', () => {
+    if (!flowFooterHovered) scheduleFlowFooterHide();
+  });
   footer.addEventListener('focusout', (event) => {
     if (event.relatedTarget && footer.contains(event.relatedTarget)) return;
     scheduleFlowFooterHide();
@@ -1187,7 +1226,6 @@ function setupFlowFooterReveal() {
   if (hoverQuery && typeof hoverQuery.addEventListener === 'function') {
     hoverQuery.addEventListener('change', () => {
       hideFlowFooterImmediately();
-      if (typeof scheduleFlowLayoutRefresh === 'function') scheduleFlowLayoutRefresh();
     });
   }
 }
@@ -1537,34 +1575,6 @@ function logicalVerseCount(verses) {
   return new Set(verses.map((verse) => verse.key)).size;
 }
 
-function scripturePageAnchor(pages, pageIndex) {
-  const firstVerse = pages[pageIndex] && pages[pageIndex].verses && pages[pageIndex].verses[0];
-  if (!firstVerse) return null;
-  let offset = 0;
-  for (let index = 0; index < pageIndex; index++) {
-    for (const verse of pages[index].verses || []) {
-      if (verse.key === firstVerse.key) offset += Array.from(verse.text || '').length;
-    }
-  }
-  return { key: firstVerse.key, offset };
-}
-
-function findScriptureAnchorPage(pages, anchor) {
-  if (!anchor) return -1;
-  let offset = 0;
-  let firstMatch = -1;
-  for (let pageIndex = 0; pageIndex < pages.length; pageIndex++) {
-    for (const verse of pages[pageIndex].verses || []) {
-      if (verse.key !== anchor.key) continue;
-      if (firstMatch < 0) firstMatch = pageIndex;
-      const length = Math.max(1, Array.from(verse.text || '').length);
-      if (anchor.offset < offset + length) return pageIndex;
-      offset += length;
-    }
-  }
-  return firstMatch;
-}
-
 function buildScripturePagesByFit(verses, fits = scripturePageFits, segments = []) {
   const sourceVerses = Array.isArray(verses) ? verses : [];
   const sourceSegments = Array.isArray(segments) ? segments.filter((segment) => (
@@ -1647,6 +1657,19 @@ function currentScriptureSegments(ref = currentRefPayload()) {
   } catch {
     return [];
   }
+}
+
+function handleReadingPointerActivity() {
+  const surface = $('flowScreen');
+  if (
+    !isReadingFlowStep() ||
+    !surface ||
+    surface.classList.contains('hidden') ||
+    surface.dataset.step !== flowStep
+  ) return false;
+  revealFlowFooter();
+  scheduleFlowFooterHide();
+  return true;
 }
 
 function setFlowButtonLabel(buttonId, label) {
@@ -1800,47 +1823,15 @@ async function waitForFlowLayout(navigationToken) {
       if (frame >= 1) break;
       continue;
     }
-    const rect = screen.getBoundingClientRect();
-    if (Math.abs(rect.width - lastWidth) < 0.5 && Math.abs(rect.height - lastHeight) < 0.5) stableFrames++;
+    const width = screen.clientWidth;
+    const height = screen.clientHeight;
+    if (Math.abs(width - lastWidth) < 0.5 && Math.abs(height - lastHeight) < 0.5) stableFrames++;
     else stableFrames = 0;
-    lastWidth = rect.width;
-    lastHeight = rect.height;
+    lastWidth = width;
+    lastHeight = height;
     if (frame >= 4 && stableFrames >= 3) break;
   }
   return navigationToken === flowNavigationToken;
-}
-
-function scheduleFlowLayoutRefresh() {
-  if (flowResizeTimer) clearTimeout(flowResizeTimer);
-  const navigationToken = flowNavigationToken;
-  flowResizeTimer = setTimeout(async () => {
-    flowResizeTimer = null;
-    if (
-      navigationToken !== flowNavigationToken ||
-      flowLoading ||
-      flowTransitioning ||
-      $('flowScreen').classList.contains('hidden')
-    ) return;
-
-    if (flowStep === 'utmost') {
-      renderFlowPage();
-      const pageRenderToken = flowPageRenderToken;
-      await fitCurrentFlowPageToScreen(UTMOST_MIN_REGULAR_SCALE, navigationToken, pageRenderToken);
-      return;
-    }
-
-    if (flowStep !== 'scripture' || !cachedBible) return;
-    const anchor = scripturePageAnchor(flowPages, flowPageIndex);
-    if (!await waitForFlowLayout(navigationToken) || flowStep !== 'scripture') return;
-    const verses = parseScriptureVerses(cachedBible.body || '', currentRefPayload());
-    const pages = buildScripturePagesByFit(verses, scripturePageFits, currentScriptureSegments());
-    if (navigationToken !== flowNavigationToken || flowStep !== 'scripture') return;
-    flowPages = pages;
-    flowPageScales = pages.map(() => 1);
-    const anchoredPage = findScriptureAnchorPage(pages, anchor);
-    flowPageIndex = anchoredPage >= 0 ? anchoredPage : Math.min(flowPageIndex, pages.length - 1);
-    renderFlowPage();
-  }, 180);
 }
 
 function scriptureRefKey(ref = currentRefPayload()) {
@@ -2024,6 +2015,7 @@ async function goFlowStep(step) {
     $('flowScreen').dataset.step = step;
     await window.api.setWindowMode(step === 'scripture' || step === 'utmost' ? 'mobile' : 'wide');
     if (navigationToken !== flowNavigationToken) return false;
+    updateFlowDisplayScale();
     if (!await waitForFlowLayout(navigationToken)) return false;
     if (step === 'scripture') return await showScriptureFlow(navigationToken);
     if (step === 'utmost') return await showUtmostFlow(navigationToken);
@@ -2234,8 +2226,12 @@ function stopWorshipPlayback() {
   video.pause();
   video.removeAttribute('src');
   video.load();
+  worshipControlsHovered = false;
+  if (hideTimer) clearTimeout(hideTimer);
+  hideTimer = null;
   worshipActive = false;
   $('worshipControls').classList.remove('show');
+  $('wBackTop').classList.remove('show');
   $('worshipLayer').classList.add('hidden');
   $('worshipLoading').classList.add('hidden');
   $('btnBack').classList.add('hidden');
@@ -2395,21 +2391,50 @@ function setupDragDrop() {
 
 // ---------- 自動顯示與隱藏工具列 ----------
 let hideTimer = null;
+let worshipControlsHovered = false;
+const MAIN_TOOLBAR_HIDE_MS = 2200;
+const WORSHIP_CONTROLS_HIDE_MS = 1000;
+
 function showToolbar() {
   if (!worshipActive && !$('flowScreen').classList.contains('hidden')) {
     $('toolbar').classList.remove('show');
     $('worshipControls').classList.remove('show');
+    $('wBackTop').classList.remove('show');
     clearTimeout(hideTimer);
     return;
   }
   const bar = worshipActive ? $('worshipControls') : $('toolbar');
   bar.classList.add('show');
+  if (worshipActive) $('wBackTop').classList.add('show');
   clearTimeout(hideTimer);
+  hideTimer = null;
   hideTimer = setTimeout(() => {
+    hideTimer = null;
     if (!$('settingsPanel').classList.contains('hidden')) return;
+    if (worshipActive && worshipControlsHovered) return;
     $('toolbar').classList.remove('show');
     $('worshipControls').classList.remove('show');
-  }, 2200);
+    $('wBackTop').classList.remove('show');
+  }, worshipActive ? WORSHIP_CONTROLS_HIDE_MS : MAIN_TOOLBAR_HIDE_MS);
+}
+
+function handleToolbarPointerMove(event) {
+  if (!worshipActive) {
+    showToolbar();
+    return;
+  }
+  const controls = $('worshipControls');
+  const hotzone = $('worshipHotzone');
+  const back = $('wBackTop');
+  const backHotzone = $('worshipBackHotzone');
+  const target = event && event.target;
+  if (
+    target &&
+    ((controls && controls.contains(target)) ||
+      (hotzone && hotzone.contains(target)) ||
+      (back && back.contains(target)) ||
+      (backHotzone && backHotzone.contains(target)))
+  ) showToolbar();
 }
 
 function fmtTime(s) {
@@ -2437,6 +2462,8 @@ function setWorshipReturnButton(nextToScripture) {
 function setupWorshipControls() {
   const v = $('worshipVideo');
   const seek = $('wSeek');
+  const controls = $('worshipControls');
+  const back = $('wBackTop');
   v.addEventListener('loadedmetadata', () => { $('wDur').textContent = fmtTime(v.duration); });
   v.addEventListener('timeupdate', () => {
     if (v.duration) seek.value = String((v.currentTime / v.duration) * 1000);
@@ -2451,7 +2478,7 @@ function setupWorshipControls() {
     $('worshipLoading').classList.remove('hidden');
     showToolbar();
   });
-  v.addEventListener('ended', () => backToCover());
+  v.addEventListener('ended', () => backToCover({ nextAfterWorship: true }));
   seek.addEventListener('input', () => {
     if (v.duration) v.currentTime = (parseFloat(seek.value) / 1000) * v.duration;
   });
@@ -2466,18 +2493,113 @@ function setupWorshipControls() {
       toast('影片播放失敗：' + e.message, 3200);
     }
   });
-  $('wBackTop').addEventListener('click', () => backToCover());
+  back.addEventListener('click', () => backToCover());
   $('wReturn').addEventListener('click', () => backToCover({ nextAfterWorship: true }));
+  const holdWorshipChrome = () => {
+    worshipControlsHovered = true;
+    clearTimeout(hideTimer);
+    hideTimer = null;
+    if (worshipActive) {
+      controls.classList.add('show');
+      back.classList.add('show');
+    }
+  };
+  const releaseWorshipChrome = () => {
+    worshipControlsHovered = false;
+    if (worshipActive) showToolbar();
+  };
+  controls.addEventListener('pointerenter', holdWorshipChrome);
+  controls.addEventListener('pointerleave', releaseWorshipChrome);
+  back.addEventListener('pointerenter', holdWorshipChrome);
+  back.addEventListener('pointerleave', releaseWorshipChrome);
 }
 
 // ---------- 設定面板 ----------
+function isSettingsOutsideTarget(target) {
+  const panel = $('settingsPanel');
+  if (!panel || panel.classList.contains('hidden') || !target) return false;
+  if (panel.contains(target)) return false;
+  return !(typeof target.closest === 'function' && target.closest('#btnSettings'));
+}
+
+function shouldDismissSettingsFromPointer(pointerStartedOutside, releaseTarget) {
+  return Boolean(pointerStartedOutside && isSettingsOutsideTarget(releaseTarget));
+}
+
+function settingsTextSelectionAnchor(field) {
+  const start = Math.max(0, Number(field && field.selectionStart) || 0);
+  const end = Math.max(start, Number(field && field.selectionEnd) || start);
+  return field && field.selectionDirection === 'backward' ? end : start;
+}
+
+function extendSettingsTextSelectionToBoundary(field, anchor, clientX) {
+  if (!field || typeof field.setSelectionRange !== 'function') return false;
+  const rect = field.getBoundingClientRect();
+  let focus = null;
+  if (clientX <= rect.left) focus = 0;
+  else if (clientX >= rect.right) focus = String(field.value || '').length;
+  if (focus === null) return false;
+  const safeAnchor = Math.max(0, Math.min(String(field.value || '').length, Number(anchor) || 0));
+  field.setSelectionRange(
+    Math.min(safeAnchor, focus),
+    Math.max(safeAnchor, focus),
+    focus < safeAnchor ? 'backward' : 'forward'
+  );
+  return true;
+}
+
+function setupSettingsTextSelection() {
+  const panel = $('settingsPanel');
+  if (!panel) return;
+  let drag = null;
+
+  const finishDrag = (event) => {
+    if (!drag || (event && event.pointerId !== drag.pointerId)) return;
+    const current = drag;
+    drag = null;
+    try {
+      if (
+        typeof current.field.hasPointerCapture === 'function' &&
+        current.field.hasPointerCapture(current.pointerId)
+      ) current.field.releasePointerCapture(current.pointerId);
+    } catch { /* Pointer capture may already have ended outside the window. */ }
+  };
+
+  panel.addEventListener('pointerdown', (event) => {
+    const target = event.target;
+    const field = target && typeof target.closest === 'function'
+      ? target.closest('input[type="text"], textarea')
+      : null;
+    if (!field || event.button !== 0) return;
+    drag = { field, pointerId: event.pointerId, anchor: null };
+    try { field.setPointerCapture(event.pointerId); }
+    catch { /* Native selection remains available if capture is unsupported. */ }
+    setTimeout(() => {
+      if (drag && drag.field === field && drag.pointerId === event.pointerId) {
+        drag.anchor = settingsTextSelectionAnchor(field);
+      }
+    }, 0);
+  });
+
+  panel.addEventListener('pointermove', (event) => {
+    if (!drag || event.pointerId !== drag.pointerId || !(event.buttons & 1)) return;
+    if (drag.anchor === null) drag.anchor = settingsTextSelectionAnchor(drag.field);
+    extendSettingsTextSelectionToBoundary(drag.field, drag.anchor, event.clientX);
+  });
+  panel.addEventListener('pointerup', finishDrag);
+  panel.addEventListener('pointercancel', finishDrag);
+  panel.addEventListener('lostpointercapture', finishDrag);
+}
+
 function openSettings() {
+  settingsPointerStartedOutside = false;
   fillSettings();
   $('settingsPanel').classList.remove('hidden');
   $('settingsBackdrop').classList.remove('hidden');
   $('toolbar').classList.add('show');
 }
 function closeSettings() {
+  settingsPointerStartedOutside = false;
   $('settingsPanel').classList.add('hidden');
   $('settingsBackdrop').classList.add('hidden');
 }
@@ -2693,6 +2815,7 @@ function setupCustomWorshipList() {
 async function init() {
   // 依平台套用原生風格字型與外觀。
   document.body.classList.add(window.api.platform === 'darwin' ? 'plat-mac' : 'plat-win');
+  updateFlowDisplayScale();
   const { cfg: loaded, backgroundUrl } = await window.api.getConfig();
   cfg = loaded;
   cfg.fillMode = 'blur';
@@ -2720,6 +2843,8 @@ async function init() {
     if (flowStep === 'end') returnToMainCover();
   });
   setupFlowFooterReveal();
+  setupSettingsTextSelection();
+  window.api.onWindowPointerActivity(handleReadingPointerActivity);
   $('btnMin').addEventListener('click', () => window.api.minimizeWindow());
   $('btnClose').addEventListener('click', () => window.api.closeWindow());
   $('btnPasteMusic').addEventListener('click', () => pasteInto('inMusicUrl'));
@@ -2819,21 +2944,20 @@ async function init() {
   $('bkEndCh').addEventListener('change', () => onScriptureChange('endCh'));
   $('bkEndV').addEventListener('change', () => onScriptureChange('endV'));
 
-  // 點擊遮罩時關閉設定面板。
-  $('settingsBackdrop').addEventListener('click', closeSettings);
-
-  // 點擊設定面板以外的區域時關閉面板。
+  // 只有從設定面板外開始、也在外面結束的完整點擊才關閉面板。
+  // 從輸入框拖曳選取文字後在面板外放開，不應被誤判成外部點擊。
+  document.addEventListener('pointerdown', (e) => {
+    settingsPointerStartedOutside = isSettingsOutsideTarget(e.target);
+  }, true);
   document.addEventListener('click', (e) => {
-    const panel = $('settingsPanel');
-    if (panel.classList.contains('hidden')) return;
-    if (panel.contains(e.target)) return;
-    if (e.target.closest('#btnSettings')) return;
-    closeSettings();
+    const shouldClose = shouldDismissSettingsFromPointer(settingsPointerStartedOutside, e.target);
+    settingsPointerStartedOutside = false;
+    if (shouldClose) closeSettings();
   });
 
   // 滑鼠、滾輪與 Escape 鍵導覽。
-  window.addEventListener('mousemove', showToolbar);
-  window.addEventListener('resize', scheduleFlowLayoutRefresh);
+  window.addEventListener('mousemove', handleToolbarPointerMove);
+  window.addEventListener('resize', updateFlowDisplayScale);
   window.addEventListener('wheel', handleFlowWheelNavigation, { passive: false });
   window.addEventListener('keydown', handleFlowArrowNavigation);
   window.addEventListener('keydown', handleEscapeNavigation);

@@ -1,6 +1,6 @@
 ﻿'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, screen, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = require('fs/promises');
@@ -1403,6 +1403,43 @@ function registerIpc() {
 let mainWindow = null;
 let hostWindow = null;
 let lastWideBounds = null;
+let pointerMonitorTimer = null;
+let lastPointerPoint = null;
+
+function pointInsideBounds(point, bounds) {
+  return point.x >= bounds.x && point.x < bounds.x + bounds.width &&
+    point.y >= bounds.y && point.y < bounds.y + bounds.height;
+}
+
+function pollMainWindowPointer() {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
+  const point = screen.getCursorScreenPoint();
+  const moved = !lastPointerPoint || point.x !== lastPointerPoint.x || point.y !== lastPointerPoint.y;
+  lastPointerPoint = point;
+  if (moved && pointInsideBounds(point, mainWindow.getBounds())) {
+    mainWindow.webContents.send('win:pointer-activity');
+  }
+}
+
+function startMainWindowPointerMonitor() {
+  if (pointerMonitorTimer) clearInterval(pointerMonitorTimer);
+  lastPointerPoint = null;
+  pointerMonitorTimer = setInterval(pollMainWindowPointer, 50);
+}
+
+function stopMainWindowPointerMonitor() {
+  if (pointerMonitorTimer) clearInterval(pointerMonitorTimer);
+  pointerMonitorTimer = null;
+  lastPointerPoint = null;
+}
+
+// 本程式只會播放本機媒體，不需要麥克風、攝影機或螢幕擷取。
+// 明確拒絕 renderer 的裝置權限，避免媒體切換時 Chromium／系統顯示錄音詢問。
+function configureRendererPermissions(ses) {
+  ses.setPermissionCheckHandler(() => false);
+  ses.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+}
+
 app.on('second-instance', () => {
   if (!mainWindow || mainWindow.isDestroyed()) {
     if (app.isReady()) createWindow();
@@ -1434,6 +1471,7 @@ function createWindow() {
     }
   });
   mainWindow = window;
+  startMainWindowPointerMonitor();
   window.setAspectRatio(16 / 9);
   window.removeMenu();
 
@@ -1465,6 +1503,7 @@ function createWindow() {
 
   window.webContents.once('did-finish-load', () => { checkLatestVersion(); });
   window.on('closed', () => {
+    stopMainWindowPointerMonitor();
     if (mainWindow === window) mainWindow = null;
     if (hostWindow && !hostWindow.isDestroyed()) hostWindow.close();
   });
@@ -1589,6 +1628,7 @@ async function checkLatestVersion() {
 }
 
 app.whenReady().then(async () => {
+  configureRendererPermissions(session.defaultSession);
   registerIpc();
   presenceManager.on('state', sendPresenceState);
   await ensureWritableYtDlp();

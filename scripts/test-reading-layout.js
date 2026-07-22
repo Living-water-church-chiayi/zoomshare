@@ -189,6 +189,7 @@ function extractConst(source, name) {
 function rendererHarnessSource() {
   const functionNames = [
     'systemDateChinese',
+    'updateFlowDisplayScale',
     'nextPaint',
     'textPage',
     'createScripturePageElement',
@@ -214,6 +215,10 @@ function rendererHarnessSource() {
   const implementations = functionNames.map((name) => extractFunction(rendererSource, name)).join('\n\n');
   return `(() => {
     const $ = (id) => document.getElementById(id);
+    ${extractConst(rendererSource, 'FLOW_LAYOUT_WIDTH')}
+    ${extractConst(rendererSource, 'FLOW_LAYOUT_HEIGHT')}
+    ${extractConst(rendererSource, 'FLOW_MIN_CONTROL_SIZE')}
+    ${extractConst(rendererSource, 'FLOW_MIN_ICON_SIZE')}
     ${extractConst(rendererSource, 'UTMOST_MIN_REGULAR_SCALE')}
     let flowPages = [];
     let flowPageScales = [];
@@ -222,6 +227,7 @@ function rendererHarnessSource() {
     let flowPageRenderToken = 0;
     let flowStep = 'cover';
     let flowFooterHideTimer = null;
+    let flowFooterHovered = false;
     ${implementations}
 
     const prepare = (step) => {
@@ -231,6 +237,7 @@ function rendererHarnessSource() {
       const screen = $('flowScreen');
       screen.classList.remove('hidden');
       screen.dataset.step = step;
+      updateFlowDisplayScale();
       screen.style.setProperty('--flow-font-scale', '1');
       $('flowEyebrow').textContent = '';
       $('flowTitle').textContent = step === 'scripture' ? '提摩太前書 5:1–6:2' : '';
@@ -311,6 +318,7 @@ function rendererHarnessSource() {
       async exerciseFlowFooterAutoHide(step) {
         prepare(step);
         const screen = $('flowScreen');
+        const footer = document.querySelector('.flow-footer');
 
         hideFlowFooterImmediately();
         const hiddenInitially = !screen.classList.contains('footer-visible');
@@ -320,8 +328,14 @@ function rendererHarnessSource() {
         hideFlowFooterImmediately();
         revealFlowFooter();
         const directRevealWorked = screen.classList.contains('footer-visible');
-        const startedAt = performance.now();
+
+        footer.dispatchEvent(new PointerEvent('pointerenter', { pointerType: 'mouse' }));
         scheduleFlowFooterHide();
+        await new Promise((resolve) => setTimeout(resolve, 1150));
+        const stayedVisibleWhileHovered = screen.classList.contains('footer-visible');
+
+        footer.dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'mouse' }));
+        const startedAt = performance.now();
         while (screen.classList.contains('footer-visible') && performance.now() - startedAt < 1800) {
           await new Promise((resolve) => setTimeout(resolve, 20));
         }
@@ -332,6 +346,7 @@ function rendererHarnessSource() {
           hiddenInitially,
           setupRevealWorked,
           directRevealWorked,
+          stayedVisibleWhileHovered,
           hiddenAfterSchedule,
           hideElapsed
         };
@@ -346,6 +361,30 @@ function measurementScript(fixture) {
     const rectData = (element) => {
       const rect = element.getBoundingClientRect();
       return { top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left, width: rect.width, height: rect.height };
+    };
+    const textWrapSignature = (element) => {
+      const lineStarts = [];
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      const range = document.createRange();
+      let textOffset = 0;
+      let previousTop = null;
+      let node;
+      while ((node = walker.nextNode())) {
+        for (let index = 0; index < node.data.length; index++) {
+          range.setStart(node, index);
+          range.setEnd(node, index + 1);
+          const rect = range.getBoundingClientRect();
+          if (rect.width > 0 || rect.height > 0) {
+            if (previousTop === null || Math.abs(rect.top - previousTop) > 0.75) {
+              lineStarts.push(textOffset + index);
+              previousTop = rect.top;
+            }
+          }
+        }
+        textOffset += node.data.length;
+      }
+      range.detach();
+      return { length: textOffset, lineStarts };
     };
     return (async () => {
       const harness = window.__readingLayoutHarness;
@@ -371,6 +410,8 @@ function measurementScript(fixture) {
       const contentStyle = getComputedStyle(content);
       const contentRect = content.getBoundingClientRect();
       const screen = document.getElementById('flowScreen');
+      const screenRect = screen.getBoundingClientRect();
+      const displayScale = screen.clientWidth ? screenRect.width / screen.clientWidth : 1;
       const topbar = document.querySelector('.flow-topbar');
       const heading = document.querySelector('.flow-heading');
       const footer = document.querySelector('.flow-footer');
@@ -425,10 +466,10 @@ function measurementScript(fixture) {
         finishFooterAnimations();
       }
       const visibleBounds = {
-        top: contentRect.top + (Number.parseFloat(contentStyle.paddingTop) || 0),
-        right: contentRect.right - (Number.parseFloat(contentStyle.paddingRight) || 0),
-        bottom: contentRect.bottom - (Number.parseFloat(contentStyle.paddingBottom) || 0),
-        left: contentRect.left + (Number.parseFloat(contentStyle.paddingLeft) || 0)
+        top: contentRect.top + (Number.parseFloat(contentStyle.paddingTop) || 0) * displayScale,
+        right: contentRect.right - (Number.parseFloat(contentStyle.paddingRight) || 0) * displayScale,
+        bottom: contentRect.bottom - (Number.parseFloat(contentStyle.paddingBottom) || 0) * displayScale,
+        left: contentRect.left + (Number.parseFloat(contentStyle.paddingLeft) || 0) * displayScale
       };
       const lastParagraph = content.querySelector('.utmost-paragraph:last-child');
       const continuation = content.querySelector('.scripture-continuation');
@@ -460,6 +501,11 @@ function measurementScript(fixture) {
       const appRegion = (element) => element
         ? getComputedStyle(element).getPropertyValue('-webkit-app-region').trim()
         : '';
+      const wrapTargets = fixture.kind === 'scripture'
+        ? Array.from(content.querySelectorAll('.scripture-verse-text'))
+        : (fixture.kind === 'utmost-normal'
+            ? Array.from(content.querySelectorAll('.utmost-title, .utmost-verse-quote, .utmost-paragraph'))
+            : []);
 
       return {
         kind: fixture.kind,
@@ -470,6 +516,13 @@ function measurementScript(fixture) {
           scrollWidth: content.scrollWidth,
           scrollHeight: content.scrollHeight
         },
+        flowCanvas: {
+          clientWidth: screen.clientWidth,
+          clientHeight: screen.clientHeight,
+          rect: rectData(screen),
+          displayScale
+        },
+        wrapSignature: wrapTargets.map(textWrapSignature),
         visibleBounds,
         visualRoot: rectData(visualRoot),
         lastParagraph: lastParagraph ? rectData(lastParagraph) : null,
@@ -639,6 +692,17 @@ function verifyMetrics(metrics, fixture, expectedViewport) {
   );
   assert.equal(metrics.fontStatus, 'loaded', `${label}: fonts did not finish loading`);
   assert.equal(metrics.fontLoaded, true, `${label}: bundled SHSans-Bold was not loaded`);
+  assert.equal(metrics.flowCanvas.clientWidth, 405, `${label}: reading canvas logical width changed`);
+  assert.equal(metrics.flowCanvas.clientHeight, 720, `${label}: reading canvas logical height changed`);
+  const expectedDisplayScale = Math.min(expectedViewport.width / 405, expectedViewport.height / 720);
+  assert.ok(
+    Math.abs(metrics.flowCanvas.displayScale - expectedDisplayScale) <= 0.001,
+    `${label}: expected display scale ${expectedDisplayScale}, observed ${metrics.flowCanvas.displayScale}`
+  );
+  assert.ok(metrics.flowCanvas.rect.left >= -1, `${label}: scaled reading canvas crosses the left viewport edge`);
+  assert.ok(metrics.flowCanvas.rect.right <= metrics.viewport.width + 1, `${label}: scaled reading canvas crosses the right viewport edge`);
+  assert.ok(metrics.flowCanvas.rect.top >= -1, `${label}: scaled reading canvas crosses the top viewport edge`);
+  assert.ok(metrics.flowCanvas.rect.bottom <= metrics.viewport.height + 1, `${label}: scaled reading canvas crosses the bottom viewport edge`);
   assert.ok(metrics.documentScrollWidth <= metrics.viewport.width + 1, `${label}: document overflows horizontally`);
   assert.equal(metrics.horizontalViolations.length, 0, `${label}: elements exceed flow content horizontally: ${JSON.stringify(metrics.horizontalViolations)}`);
   assert.ok(metrics.visualRoot.left >= metrics.visibleBounds.left - 1.5, `${label}: content crosses the left bound`);
@@ -648,8 +712,8 @@ function verifyMetrics(metrics, fixture, expectedViewport) {
     `${label}: content bottom ${metrics.visualRoot.bottom.toFixed(1)} exceeds visible bottom ${metrics.visibleBounds.bottom.toFixed(1)}`
   );
   assert.ok(metrics.footerMetrics, `${label}: missing footer style measurements`);
-  assert.equal(metrics.appRegions.screen, 'drag', `${label}: reading screen cannot drag the window`);
-  assert.equal(metrics.appRegions.content, 'drag', `${label}: reading content cannot drag the window`);
+  assert.equal(metrics.appRegions.screen, 'drag', `${label}: reading screen cannot drag the window natively`);
+  assert.equal(metrics.appRegions.content, 'drag', `${label}: reading content cannot drag the window natively`);
   assert.equal(metrics.appRegions.previousButton, 'no-drag', `${label}: previous button became a drag region`);
   assert.equal(metrics.appRegions.nextButton, 'no-drag', `${label}: next button became a drag region`);
   assert.equal(
@@ -843,6 +907,8 @@ async function run() {
     });
 
     let passed = 0;
+    const wrapBaselines = new Map();
+    let scripturePaginationBaseline = null;
     for (const viewport of coverViewports) {
       await window.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', {
         width: viewport.width,
@@ -887,6 +953,33 @@ async function run() {
           `${fixture.kind} ${viewport.width}x${viewport.height}@${viewport.deviceScaleFactor || 1}x`
         );
         verifyMetrics(metrics, fixture, viewport);
+        if (metrics.wrapSignature.length) {
+          if (!wrapBaselines.has(fixture.kind)) wrapBaselines.set(fixture.kind, metrics.wrapSignature);
+          else assert.deepEqual(
+            metrics.wrapSignature,
+            wrapBaselines.get(fixture.kind),
+            `${fixture.kind} text wrapped at different character positions after resizing`
+          );
+        }
+        if (fixture.kind === 'scripture') {
+          const paginationSignature = {
+            short: {
+              pageCount: metrics.scripturePagination.short.pageCount,
+              distribution: metrics.scripturePagination.short.distribution
+            },
+            mixed: {
+              pageCount: metrics.scripturePagination.mixed.pageCount,
+              distribution: metrics.scripturePagination.mixed.distribution,
+              logicalKeys: metrics.scripturePagination.mixed.logicalKeys
+            }
+          };
+          if (!scripturePaginationBaseline) scripturePaginationBaseline = paginationSignature;
+          else assert.deepEqual(
+            paginationSignature,
+            scripturePaginationBaseline,
+            'Scripture pagination changed after resizing the fixed reading canvas'
+          );
+        }
         passed++;
         const fitting = fixture.kind === 'scripture'
           ? 'native + continuation'
@@ -907,6 +1000,7 @@ async function run() {
       assert.equal(footerLifecycle.hiddenInitially, true, `${step} footer lifecycle: footer did not start hidden`);
       assert.equal(footerLifecycle.setupRevealWorked, true, `${step} footer lifecycle: mouse movement did not reveal the arrows`);
       assert.equal(footerLifecycle.directRevealWorked, true, `${step} footer lifecycle: revealFlowFooter did not reveal the footer`);
+      assert.equal(footerLifecycle.stayedVisibleWhileHovered, true, `${step} footer lifecycle: footer disappeared while the pointer was over it`);
       assert.equal(footerLifecycle.hiddenAfterSchedule, true, `${step} footer lifecycle: scheduled hide did not hide the footer`);
       assert.ok(
         footerLifecycle.hideElapsed >= 850 && footerLifecycle.hideElapsed <= 1750,

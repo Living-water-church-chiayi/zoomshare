@@ -165,6 +165,147 @@ test('creates a valid file URL for spaces, Unicode, #, ? and %', () => {
   assert.match(actual, /%25/);
 });
 
+test('denies renderer capture permissions because playback never needs recording access', () => {
+  let checkHandler = null;
+  let requestHandler = null;
+  const fakeSession = {
+    setPermissionCheckHandler(handler) { checkHandler = handler; },
+    setPermissionRequestHandler(handler) { requestHandler = handler; }
+  };
+  const { configureRendererPermissions } = loadFunctions(
+    mainSource,
+    ['configureRendererPermissions']
+  );
+
+  configureRendererPermissions(fakeSession);
+  assert.equal(checkHandler(null, 'media', 'file:///renderer/index.html', { mediaType: 'audio' }), false);
+
+  let granted = null;
+  requestHandler(null, 'media', (allowed) => { granted = allowed; }, { mediaTypes: ['audio'] });
+  assert.equal(granted, false);
+});
+
+test('reports pointer movement over the main window without resizing it', () => {
+  const cursorPoints = [
+    { x: 150, y: 250 },
+    { x: 150, y: 250 },
+    { x: 151, y: 250 },
+    { x: 900, y: 900 }
+  ];
+  const messages = [];
+  const fakeWindow = {
+    isDestroyed: () => false,
+    getBounds: () => ({ x: 100, y: 200, width: 405, height: 720 }),
+    setBounds: () => assert.fail('pointer observation resized the reading window'),
+    setPosition: () => assert.fail('pointer observation manually moved the reading window'),
+    webContents: {
+      isDestroyed: () => false,
+      send: (channel) => messages.push(channel)
+    }
+  };
+  const functions = loadFunctions(
+    mainSource,
+    ['pointInsideBounds', 'pollMainWindowPointer'],
+    {
+      mainWindow: fakeWindow,
+      lastPointerPoint: null,
+      screen: { getCursorScreenPoint: () => cursorPoints.shift() }
+    }
+  );
+
+  functions.pollMainWindowPointer();
+  functions.pollMainWindowPointer();
+  functions.pollMainWindowPointer();
+  functions.pollMainWindowPointer();
+  assert.deepEqual(messages, ['win:pointer-activity', 'win:pointer-activity']);
+});
+
+test('reveals reading navigation from pointer activity across a native drag region', () => {
+  let hidden = false;
+  const calls = [];
+  const surface = {
+    dataset: { step: 'scripture' },
+    classList: { contains: (name) => name === 'hidden' ? hidden : false }
+  };
+  const { handleReadingPointerActivity } = loadFunctions(
+    rendererSource,
+    ['handleReadingPointerActivity'],
+    {
+      $: () => surface,
+      flowStep: 'scripture',
+      isReadingFlowStep: () => true,
+      revealFlowFooter: () => calls.push('reveal'),
+      scheduleFlowFooterHide: () => calls.push('schedule')
+    },
+  );
+
+  assert.equal(handleReadingPointerActivity(), true);
+  assert.deepEqual(calls, ['reveal', 'schedule']);
+  hidden = true;
+  assert.equal(handleReadingPointerActivity(), false);
+  assert.deepEqual(calls, ['reveal', 'schedule']);
+});
+
+test('native reading drag regions exclude navigation buttons', () => {
+  const css = fs.readFileSync(path.join(projectRoot, 'src', 'renderer', 'style.css'), 'utf8');
+  assert.match(
+    css,
+    /flow-screen:is\(\[data-step="scripture"\], \[data-step="utmost"\]\)[\s\S]*?-webkit-app-region: drag;/,
+    'reading surfaces must use native window dragging'
+  );
+  assert.match(
+    css,
+    /flow-screen:is\(\[data-step="scripture"\], \[data-step="utmost"\]\) \.flow-footer[\s\S]*?-webkit-app-region: no-drag;/,
+    'reading navigation must remain clickable'
+  );
+});
+
+test('does not close settings when text selection starts inside the panel', () => {
+  const input = { closest: () => null };
+  const backdrop = { closest: () => null };
+  const settingsButton = { closest: (selector) => selector === '#btnSettings' ? settingsButton : null };
+  const panel = {
+    classList: { contains: () => false },
+    contains: (target) => target === input
+  };
+  const { isSettingsOutsideTarget, shouldDismissSettingsFromPointer } = loadFunctions(
+    rendererSource,
+    ['isSettingsOutsideTarget', 'shouldDismissSettingsFromPointer'],
+    { $: (id) => id === 'settingsPanel' ? panel : null }
+  );
+
+  assert.equal(isSettingsOutsideTarget(input), false);
+  assert.equal(isSettingsOutsideTarget(backdrop), true);
+  assert.equal(isSettingsOutsideTarget(settingsButton), false);
+  assert.equal(shouldDismissSettingsFromPointer(false, backdrop), false, 'inside-to-outside selection closed settings');
+  assert.equal(shouldDismissSettingsFromPointer(true, input), false, 'outside-to-inside drag closed settings');
+  assert.equal(shouldDismissSettingsFromPointer(true, backdrop), true, 'a deliberate outside click no longer closes settings');
+});
+
+test('extends fast settings-field drags to either end of the text', () => {
+  const selections = [];
+  const field = {
+    value: 'https://example.test/video',
+    selectionStart: 8,
+    selectionEnd: 8,
+    selectionDirection: 'none',
+    getBoundingClientRect: () => ({ left: 100, right: 300 }),
+    setSelectionRange: (...selection) => selections.push(selection)
+  };
+  const { settingsTextSelectionAnchor, extendSettingsTextSelectionToBoundary } = loadFunctions(
+    rendererSource,
+    ['settingsTextSelectionAnchor', 'extendSettingsTextSelectionToBoundary']
+  );
+
+  assert.equal(settingsTextSelectionAnchor(field), 8);
+  assert.equal(extendSettingsTextSelectionToBoundary(field, 8, 99), true);
+  assert.deepEqual(selections.pop(), [0, 8, 'backward']);
+  assert.equal(extendSettingsTextSelectionToBoundary(field, 8, 301), true);
+  assert.deepEqual(selections.pop(), [8, field.value.length, 'forward']);
+  assert.equal(extendSettingsTextSelectionToBoundary(field, 8, 200), false);
+  assert.equal(selections.length, 0);
+});
+
 test('converts only exact Zoom hosts or their subdomains', () => {
   const { zoomLaunchUrl } = loadFunctions(rendererSource, ['zoomLaunchUrl']);
   const valid = 'https://us06web.zoom.us/j/77730692079?pwd=A%20B%2F%3D';
@@ -275,6 +416,131 @@ test('fetches a safe YouTube title with oEmbed and yt-dlp fallback', async () =>
     () => functions.fetchYouTubeMetadata('https://youtube.com.evil.example/watch?v=abc123'),
     /YouTube/
   );
+});
+
+test('advances directly to Scripture when the worship video finishes', () => {
+  const videoListeners = {};
+  const elements = {};
+  const listenerElement = (listeners = {}) => ({
+    addEventListener(type, handler) { listeners[type] = handler; },
+    classList: { add() {}, remove() {}, toggle() {} },
+    setAttribute() {}
+  });
+  elements.worshipVideo = listenerElement(videoListeners);
+  elements.wSeek = listenerElement();
+  elements.wDur = { textContent: '' };
+  elements.wCur = { textContent: '' };
+  elements.worshipLoading = { textContent: '', classList: { add() {}, remove() {} } };
+  elements.wPlay = listenerElement();
+  elements.wBackTop = listenerElement();
+  elements.wReturn = listenerElement();
+  elements.worshipControls = listenerElement();
+  const returns = [];
+  const { setupWorshipControls } = loadFunctions(rendererSource, ['setupWorshipControls'], {
+    $: (id) => elements[id],
+    fmtTime: () => '0:00',
+    setWorshipPlayState: () => {},
+    backToCover: (options) => returns.push(plain(options)),
+    toast: () => {},
+    clearTimeout: () => {},
+    showToolbar: () => {},
+    worshipActive: true,
+    worshipControlsHovered: false,
+    hideTimer: null
+  });
+
+  setupWorshipControls();
+  videoListeners.ended();
+  assert.deepEqual(returns, [{ nextAfterWorship: true }]);
+});
+
+test('only reveals worship chrome near the bottom or the top-left return area', () => {
+  const controlsTarget = {};
+  const hotzoneTarget = {};
+  const backTarget = {};
+  const backHotzoneTarget = {};
+  const upperVideoTarget = {};
+  let revealCalls = 0;
+  const { handleToolbarPointerMove } = loadFunctions(
+    rendererSource,
+    ['handleToolbarPointerMove'],
+    {
+      worshipActive: true,
+      $: (id) => ({
+        contains: (target) => ({
+          worshipControls: controlsTarget,
+          worshipHotzone: hotzoneTarget,
+          wBackTop: backTarget,
+          worshipBackHotzone: backHotzoneTarget
+        })[id] === target
+      }),
+      showToolbar: () => { revealCalls++; }
+    }
+  );
+
+  handleToolbarPointerMove({ target: upperVideoTarget });
+  assert.equal(revealCalls, 0, 'ordinary movement over the video should stay unobtrusive');
+  handleToolbarPointerMove({ target: hotzoneTarget });
+  handleToolbarPointerMove({ target: controlsTarget });
+  handleToolbarPointerMove({ target: backHotzoneTarget });
+  handleToolbarPointerMove({ target: backTarget });
+  assert.equal(revealCalls, 4, 'bottom and top-left worship controls should reveal together');
+});
+
+test('keeps worship controls visible while hovered and otherwise hides them after one second', () => {
+  const runScenario = (hovered) => {
+    const visible = new Set();
+    let timer = null;
+    let delay = null;
+    const elements = {
+      toolbar: {
+        classList: {
+          add: (name) => visible.add(`toolbar:${name}`),
+          remove: (name) => visible.delete(`toolbar:${name}`)
+        }
+      },
+      worshipControls: {
+        classList: {
+          add: (name) => visible.add(`worship:${name}`),
+          remove: (name) => visible.delete(`worship:${name}`)
+        }
+      },
+      wBackTop: {
+        classList: {
+          add: (name) => visible.add(`back:${name}`),
+          remove: (name) => visible.delete(`back:${name}`)
+        }
+      },
+      settingsPanel: { classList: { contains: (name) => name === 'hidden' } }
+    };
+    const { showToolbar } = loadFunctions(rendererSource, ['showToolbar'], {
+      $: (id) => elements[id],
+      worshipActive: true,
+      worshipControlsHovered: hovered,
+      hideTimer: null,
+      MAIN_TOOLBAR_HIDE_MS: 2200,
+      WORSHIP_CONTROLS_HIDE_MS: 1000,
+      clearTimeout: () => {},
+      setTimeout: (callback, milliseconds) => {
+        timer = callback;
+        delay = milliseconds;
+        return 1;
+      }
+    });
+
+    showToolbar();
+    assert.equal(visible.has('worship:show'), true);
+    assert.equal(visible.has('back:show'), true);
+    timer();
+    return {
+      delay,
+      controlsVisible: visible.has('worship:show'),
+      backVisible: visible.has('back:show')
+    };
+  };
+
+  assert.deepEqual(runScenario(true), { delay: 1000, controlsVisible: true, backVisible: true });
+  assert.deepEqual(runScenario(false), { delay: 1000, controlsVisible: false, backVisible: false });
 });
 
 test('keeps only the song name when YouTube metadata identifies artist, album or format labels', async () => {
@@ -1038,25 +1304,26 @@ test('marks an oversized verse as continuing within the same reader segment', ()
   assert.equal(pages.flatMap((page) => page.verses).map((part) => part.text).join(''), verse.text);
 });
 
-test('keeps the same oversized-verse position when Scripture is repaginated', () => {
-  const { scripturePageAnchor, findScriptureAnchorPage } = loadFunctions(
+test('scales the fixed reading canvas without changing its logical dimensions', () => {
+  const properties = new Map();
+  const screen = { style: { setProperty: (name, value) => properties.set(name, value) } };
+  const { updateFlowDisplayScale } = loadFunctions(
     rendererSource,
-    ['scripturePageAnchor', 'findScriptureAnchorPage']
+    ['updateFlowDisplayScale'],
+    {
+      $: (id) => id === 'flowScreen' ? screen : null,
+      window: { innerWidth: 608, innerHeight: 1080 },
+      FLOW_LAYOUT_WIDTH: 405,
+      FLOW_LAYOUT_HEIGHT: 720,
+      FLOW_MIN_CONTROL_SIZE: 44,
+      FLOW_MIN_ICON_SIZE: 19
+    }
   );
-  const fragment = (text, continuation = true) => ({ key: '1:1:0', text, continuation });
-  const oldPages = [
-    { verses: [fragment('甲乙丙丁', false)] },
-    { verses: [fragment('戊己庚辛')] },
-    { verses: [fragment('壬癸子丑')] }
-  ];
-  const newPages = [
-    { verses: [fragment('甲乙丙丁戊己', false)] },
-    { verses: [fragment('庚辛壬癸子丑')] }
-  ];
 
-  const anchor = plain(scripturePageAnchor(oldPages, 2));
-  assert.deepEqual(anchor, { key: '1:1:0', offset: 8 });
-  assert.equal(findScriptureAnchorPage(newPages, anchor), 1);
+  assert.equal(updateFlowDisplayScale(), 1.5);
+  assert.equal(properties.get('--flow-display-scale'), '1.500000');
+  assert.equal(properties.get('--flow-control-min-size'), '29.333px');
+  assert.equal(properties.get('--flow-icon-min-size'), '12.667px');
 });
 
 test('splits an oversized scripture verse without losing text or chapter context', () => {
@@ -1749,6 +2016,7 @@ test('keeps the post-Utmost silence latch when navigating back before the cover'
     stopWorshipPlayback: () => {},
     pauseMusicForFlow: () => {},
     setFlowVisible: () => {},
+    updateFlowDisplayScale: () => 1,
     waitForFlowLayout: async () => true,
     showScriptureFlow: async () => true,
     showUtmostFlow: async () => true,

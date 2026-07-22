@@ -62,6 +62,11 @@ assert.match(
 );
 assert.match(
   main,
+  /configureRendererPermissions\(session\.defaultSession\);/,
+  'renderer permissions must be denied before any application window is created'
+);
+assert.match(
+  main,
   /^\s*const candidateParts\s*=/m,
   'version comparison must define parsed candidate parts as executable code'
 );
@@ -101,6 +106,24 @@ assert.match(
   renderer,
   /window\.addEventListener\('wheel', handleFlowWheelNavigation, \{ passive: false \}\);/,
   'reading flow must register its gesture-aware wheel handler'
+);
+assert.match(
+  renderer,
+  /footer\.addEventListener\('pointerenter',[\s\S]*?flowFooterHovered = true;[\s\S]*?footer\.addEventListener\('pointerleave',[\s\S]*?flowFooterHovered = false;/,
+  'reading navigation must remain visible while the pointer is over it'
+);
+assert.match(renderer, /onWindowPointerActivity\(handleReadingPointerActivity\);/, 'reading flow must receive pointer activity across native drag regions');
+assert.match(main, /setInterval\(pollMainWindowPointer, 50\)/, 'native dragging needs a lightweight pointer activity monitor');
+assert.match(
+  renderer,
+  /v\.addEventListener\('ended', \(\) => backToCover\(\{ nextAfterWorship: true \}\)\);/,
+  'worship completion must advance directly to Scripture'
+);
+assert.match(renderer, /const WORSHIP_CONTROLS_HIDE_MS = 1000;/, 'worship controls must hide after one second');
+assert.match(
+  renderer,
+  /wBackTop'\)\.classList\.add\('show'\)[\s\S]*?wBackTop'\)\.classList\.remove\('show'\)/,
+  'worship back button must share the controls visibility lifecycle'
 );
 assert.match(
   renderer,
@@ -189,6 +212,15 @@ for (const selector of [
 assert.match(renderer, /type:\s*'scripture'/, 'scripture pages must use structured page objects');
 assert.match(renderer, /type:\s*'utmost'/, 'Utmost must use a structured page object');
 assert.match(renderer, /const UTMOST_MIN_REGULAR_SCALE = 0\.48;/, 'Utmost regular scaling must stop at 48%');
+assert.match(
+  css,
+  /\.flow-screen:is\(\[data-step="scripture"\], \[data-step="utmost"\]\)\s*\{[\s\S]*?width:\s*405px;[\s\S]*?height:\s*720px;[\s\S]*?container-type:\s*size;[\s\S]*?scale\(var\(--flow-display-scale, 1\)\)/,
+  'reading views must keep a fixed logical canvas and scale it as one unit'
+);
+assert.match(renderer, /window\.addEventListener\('resize', updateFlowDisplayScale\)/, 'window resizing must only update the reading display scale');
+assert.doesNotMatch(renderer, /scheduleFlowLayoutRefresh/, 'window resizing must not repaginate reading content');
+assert.match(renderer, /setupSettingsTextSelection\(\)/, 'settings text fields must preserve fast drag selection beyond their edges');
+assert.match(css, /\.settings input\[type="text"\][\s\S]*?-webkit-user-select:\s*text;/, 'settings text fields must explicitly allow text selection');
 assert.doesNotMatch(
   section(renderer, 'function buildScripturePagesByFit', 'function renderFlowPage'),
   /SCRIPTURE_MAX_VERSES_PER_PAGE/,

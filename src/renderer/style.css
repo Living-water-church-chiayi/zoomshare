@@ -67,7 +67,7 @@ html, body {
 }
 
 body { -webkit-app-region: drag; }
-.toolbar, .settings, .flow-screen, .worship-controls, .worship-hotzone, .worship-back, .update-banner,
+.toolbar, .settings, .flow-screen, .worship-controls, .worship-hotzone, .worship-back-hotzone, .worship-back, .update-banner,
 button, input, select, textarea, a { -webkit-app-region: no-drag; }
 .flow-topbar, .settings-head { -webkit-app-region: drag; }
 .flow-home-btn, .settings-head button { -webkit-app-region: no-drag; }
@@ -206,7 +206,7 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
   background: var(--paper);
   color: var(--ink);
   font-family: var(--ui);
-  --flow-footer-h: clamp(52px, 7.2cqh, 66px);
+  --flow-footer-h: max(calc(var(--flow-control-min-size, 44px) + 6px), clamp(52px, 7.2cqh, 66px));
   --flow-font-scale: 1;
 }
 .canvas:has(.flow-screen:not(.hidden)) { background: var(--paper); }
@@ -324,10 +324,10 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
 .flow-btn {
   display: grid;
   place-items: center;
-  width: clamp(44px, 5.35cqh, 52px);
-  height: clamp(44px, 5.35cqh, 52px);
-  min-width: 44px;
-  min-height: 44px;
+  width: max(var(--flow-control-min-size, 44px), 5.35cqh);
+  height: max(var(--flow-control-min-size, 44px), 5.35cqh);
+  min-width: var(--flow-control-min-size, 44px);
+  min-height: var(--flow-control-min-size, 44px);
   border: 1.5px solid var(--line-strong);
   border-radius: 50%;
   padding: 0;
@@ -337,10 +337,10 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
   transition: transform .1s ease, border-color .14s ease, box-shadow .14s ease;
 }
 .flow-btn svg {
-  width: clamp(19px, 2.45cqh, 24px);
-  height: clamp(19px, 2.45cqh, 24px);
-  min-width: 19px;
-  min-height: 19px;
+  width: max(var(--flow-icon-min-size, 19px), 2.45cqh);
+  height: max(var(--flow-icon-min-size, 19px), 2.45cqh);
+  min-width: var(--flow-icon-min-size, 19px);
+  min-height: var(--flow-icon-min-size, 19px);
   fill: none;
   stroke: currentColor;
   stroke-width: 2.25;
@@ -402,10 +402,22 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
 #flowNextPage { grid-column: 2; grid-row: 1; }
 .flow-screen:not([data-step="scripture"]) .flow-page-info { display: none; }
 
-/* Reading pages are presentation-only surfaces, so keep their full canvas draggable. */
+/* Keep native full-page dragging for a smooth OS-level window move. Pointer
+   activity is observed by the main process so navigation can still be revealed. */
+.flow-screen:is([data-step="scripture"], [data-step="utmost"]) {
+  inset: 50% auto auto 50%;
+  width: 405px;
+  height: 720px;
+  container-type: size;
+  transform: translate(-50%, -50%) scale(var(--flow-display-scale, 1));
+  transform-origin: center;
+}
 .flow-screen:is([data-step="scripture"], [data-step="utmost"]),
 .flow-screen:is([data-step="scripture"], [data-step="utmost"]) .flow-content {
   -webkit-app-region: drag;
+}
+.flow-screen:is([data-step="scripture"], [data-step="utmost"]) .flow-footer {
+  -webkit-app-region: no-drag;
 }
 
 .flow-screen[data-step="scripture"] .flow-content {
@@ -732,7 +744,24 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
   box-shadow: var(--elev);
   backdrop-filter: var(--bar-blur);
 }
-.worship-hotzone { position: absolute; left: 0; right: 0; bottom: 0; height: 16cqh; z-index: 5; background: transparent; }
+.worship-hotzone {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: clamp(82px, 13.5cqh, 104px);
+  z-index: 5;
+  background: transparent;
+}
+.worship-back-hotzone {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 6;
+  width: 86px;
+  height: 86px;
+  background: transparent;
+}
 .worship-back {
   position: absolute;
   top: 18px;
@@ -753,8 +782,12 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
   cursor: pointer;
   backdrop-filter: var(--bar-blur);
   box-shadow: var(--elev-soft);
-  transition: background .15s, transform .1s, opacity .2s;
+  opacity: 0;
+  transform: translateY(-6px);
+  pointer-events: none;
+  transition: background .15s, transform .18s, opacity .18s;
 }
+.worship-back.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
 .worship-back:hover { background: #fff; transform: translateY(-1px); box-shadow: 0 7px 16px rgba(47,41,51,.16); }
 .worship-back:active { transform: scale(1.04); }
 .worship-controls {
@@ -766,15 +799,15 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  background: rgba(255,255,255,.82);
-  border: 1px solid rgba(255,255,255,.58);
+  background: rgba(24,22,27,.52);
+  border: 1px solid rgba(255,255,255,.16);
   border-radius: 28px;
-  box-shadow: var(--elev);
-  backdrop-filter: var(--bar-blur);
+  box-shadow: 0 8px 26px rgba(0,0,0,.2);
+  backdrop-filter: saturate(.85) blur(14px);
   z-index: 6;
   opacity: 0;
   transform: translateY(6px);
-  transition: opacity .3s ease, transform .3s ease;
+  transition: opacity .18s ease, transform .18s ease;
   pointer-events: none;
 }
 .worship-controls.show { opacity: 1; pointer-events: auto; transform: translateY(0); }
@@ -797,9 +830,9 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
   padding: 0;
   display: grid;
   place-items: center;
-  background: #fff;
-  color: #111;
-  border: 0;
+  background: rgba(255,255,255,.16);
+  color: rgba(255,255,255,.92);
+  border: 1px solid rgba(255,255,255,.24);
   border-radius: 50%;
 }
 .worship-play-btn svg {
@@ -828,30 +861,30 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
   align-items: center;
   justify-content: center;
   gap: 8px;
-  background: var(--primary);
-  color: #fff;
-  border-color: var(--primary);
+  background: rgba(255,255,255,.14);
+  color: rgba(255,255,255,.9);
+  border-color: rgba(255,255,255,.2);
 }
 .worship-controls .worship-next-btn:hover {
-  background: var(--primary);
+  background: rgba(255,255,255,.22);
   color: #fff;
-  border-color: var(--primary);
+  border-color: rgba(255,255,255,.32);
 }
-.worship-controls .wbtn:hover { background: #fff; border-color: var(--primary); transform: translateY(-1px); box-shadow: 0 7px 16px rgba(47,41,51,.12); }
+.worship-controls .wbtn:hover { background: rgba(255,255,255,.22); color: #fff; border-color: rgba(255,255,255,.32); transform: translateY(-1px); box-shadow: 0 7px 16px rgba(0,0,0,.18); }
 .worship-controls .worship-next-btn:hover {
-  background: var(--primary);
+  background: rgba(255,255,255,.22);
   color: #fff;
-  border-color: var(--primary);
+  border-color: rgba(255,255,255,.32);
 }
 .worship-controls .wbtn:active { transform: scale(1.04); }
 .worship-controls .wtime {
-  color: var(--ink-soft);
+  color: rgba(255,255,255,.74);
   font-size: 13px;
   min-width: 48px;
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
-.worship-controls .wseek { flex: 1; height: 7px; cursor: pointer; accent-color: var(--primary); }
+.worship-controls .wseek { flex: 1; height: 7px; cursor: pointer; accent-color: rgba(255,255,255,.72); }
 
 .toolbar {
   position: fixed;
@@ -1158,6 +1191,12 @@ body.plat-mac .settings.hidden { transform: translateX(calc(100% + 38px)); }
   font-size: 14px;
   font-weight: 700;
   transition: border-color .15s ease, box-shadow .15s ease, background .15s;
+}
+.settings input[type="text"],
+.settings textarea {
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
 }
 .settings textarea { min-height: 92px; resize: vertical; }
 .settings input[type="text"]:focus,
