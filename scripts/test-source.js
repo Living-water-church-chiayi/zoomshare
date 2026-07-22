@@ -11,12 +11,14 @@ const sourceFiles = [
   'package.json',
   'package-lock.json',
   'electron-builder.yml',
+  'build/entitlements.mac.plist',
   'README.md',
   '.github/workflows/ci.yml',
   '.github/workflows/build-mac.yml',
   'scripts/setup-win.sh',
   'scripts/setup-mac.sh',
   'scripts/test-announce.js',
+  'scripts/after-pack.js',
   'scripts/test-packaged-smoke.js',
   'scripts/test-reading-layout.js',
   'scripts/test-host-layout.js',
@@ -76,6 +78,23 @@ assert.match(
   'initial data refresh must be executable code'
 );
 console.log('OK critical statements are executable');
+
+const macBuilderConfig = read('electron-builder.yml');
+const afterPack = read('scripts/after-pack.js');
+const macEntitlements = read('build/entitlements.mac.plist');
+assert.match(macBuilderConfig, /^afterPack: scripts\/after-pack\.js$/m, 'macOS packaging must run the permission cleanup hook');
+assert.match(macBuilderConfig, /^\s+entitlements: build\/entitlements\.mac\.plist$/m, 'macOS signing must use explicit entitlements');
+assert.match(macBuilderConfig, /^\s+entitlementsInherit: build\/entitlements\.mac\.plist$/m, 'macOS helper signing must use explicit entitlements');
+for (const key of [
+  'NSMicrophoneUsageDescription',
+  'NSCameraUsageDescription',
+  'NSAudioCaptureUsageDescription'
+]) {
+  assert.ok(afterPack.includes(`'${key}'`), `afterPack must remove ${key}`);
+}
+assert.match(afterPack, /remaining\.length > 0/, 'afterPack must fail if a media usage key survives cleanup');
+assert.doesNotMatch(macEntitlements, /audio-input|microphone|camera/i, 'macOS signing must not grant capture capabilities');
+console.log('OK macOS packages declare no unused media capture permissions');
 
 const section = (contents, start, end) => {
   const startIndex = contents.indexOf(start);

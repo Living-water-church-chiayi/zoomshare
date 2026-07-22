@@ -7,6 +7,7 @@ publish:
   releaseType: release
 directories:
   output: dist
+afterPack: scripts/after-pack.js
 files:
   - src/**/*
   - "!**/*.map"
@@ -37,6 +38,10 @@ nsis:
   createDesktopShortcut: true
 mac:
   icon: build/icon.icns
+  # Playback-only app: keep native capture capabilities out of every signed
+  # process. The afterPack hook also removes Electron's bundled usage strings.
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
   target:
     - target: dmg
       arch:
