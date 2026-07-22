@@ -2239,16 +2239,34 @@ function stopWorshipPlayback() {
   setWorshipPlayState(false);
 }
 
-async function backToCover(options = {}) {
+function showScriptureTransitionSurface() {
+  hideFlowFooterImmediately();
+  $('toolbar').classList.remove('show');
+  $('worshipControls').classList.remove('show');
+  $('flowScreen').dataset.step = 'scripture';
+  updateFlowDisplayScale();
+  setFlowContent({
+    eyebrow: '',
+    title: formatScriptureBookTitle(),
+    meta: '',
+    pages: [textPage('正在準備今日經文…')]
+  });
+}
+
+async function backToCover(options) {
+  options = options || {};
   const shouldContinueToScripture = flowStep === 'worship' && options.nextAfterWorship;
-  stopWorshipPlayback();
   if (shouldContinueToScripture) {
+    // Prepare the reading surface underneath the worship layer first. Hiding
+    // the video then reveals Scripture instead of briefly exposing the cover toolbar.
+    showScriptureTransitionSurface();
+    stopWorshipPlayback();
     flowNavigationToken++;
     flowTransitioning = false;
     flowLoading = false;
-    $('toolbar').classList.remove('show');
     await goFlowStep('scripture');
   } else {
+    stopWorshipPlayback();
     await returnToMainCover();
   }
 }

@@ -454,6 +454,23 @@ test('advances directly to Scripture when the worship video finishes', () => {
   assert.deepEqual(returns, [{ nextAfterWorship: true }]);
 });
 
+test('covers worship with the Scripture surface before stopping video playback', async () => {
+  const calls = [];
+  const { backToCover } = loadFunctions(rendererSource, ['backToCover'], {
+    flowStep: 'worship',
+    flowNavigationToken: 0,
+    flowTransitioning: false,
+    flowLoading: false,
+    showScriptureTransitionSurface: () => calls.push('show-scripture'),
+    stopWorshipPlayback: () => calls.push('stop-worship'),
+    goFlowStep: async (step) => { calls.push(`go-${step}`); return true; },
+    returnToMainCover: async () => calls.push('cover')
+  });
+
+  await backToCover({ nextAfterWorship: true });
+  assert.deepEqual(calls, ['show-scripture', 'stop-worship', 'go-scripture']);
+});
+
 test('only reveals worship chrome near the bottom or the top-left return area', () => {
   const controlsTarget = {};
   const hotzoneTarget = {};
