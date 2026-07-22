@@ -15,8 +15,10 @@ const sourceFiles = [
   'README.md',
   '.github/workflows/ci.yml',
   '.github/workflows/build-mac.yml',
+  '.github/workflows/build-windows.yml',
   'scripts/setup-win.sh',
   'scripts/setup-mac.sh',
+  'scripts/create-self-signed-mac-cert.sh',
   'scripts/test-announce.js',
   'scripts/after-pack.js',
   'scripts/test-packaged-smoke.js',
@@ -116,9 +118,13 @@ assert.match(nativeMacAudio, /wantsPlayback/, 'native macOS audio callbacks must
 assert.match(nativeMacAudio, /AudioQueueReset/, 'native seek must flush queued output buffers');
 assert.match(nativeMacAudio, /ExtAudioFileSeek/, 'native seek must move the CoreAudio decoder position');
 assert.match(nativeMacAudio, /AudioQueueDispose/, 'native stop must dispose the CoreAudio output queue');
-assert.doesNotMatch(macBuildWorkflow, /publishing an unsigned|notarize=false/, 'public macOS releases must never fall back to unsigned artifacts');
-assert.match(macBuildWorkflow, /Developer ID signing and notarization secrets are required[\s\S]*?exit 1/, 'public macOS releases must fail closed when signing secrets are missing');
-assert.match(macBuildWorkflow, /--publish always -c\.mac\.notarize=true/, 'public macOS releases must require notarization');
+assert.doesNotMatch(macBuildWorkflow, /CSC_IDENTITY_AUTO_DISCOVERY:\s*"?false"?/, 'public macOS releases must never allow unsigned artifacts');
+assert.match(macBuildWorkflow, /Signature=adhoc[\s\S]*?exit 1/, 'public macOS releases must fail verification for ad-hoc signatures');
+assert.match(macBuildWorkflow, /MAC_SELF_SIGNED_CSC_LINK/, 'public macOS releases must support the stable self-signed signing fallback');
+assert.match(macBuildWorkflow, /Mac releases require either Developer ID secrets or stable self-signed signing secrets[\s\S]*?exit 1/, 'public macOS releases must fail closed when all signing secrets are missing');
+assert.match(macBuildWorkflow, /-c\.mac\.notarize=true/, 'Developer ID macOS releases must require notarization');
+assert.match(macBuildWorkflow, /-c\.mac\.notarize=false[\s\S]*?-c\.mac\.timestamp=none/, 'self-signed macOS releases must disable notarization and timestamping explicitly');
+assert.match(macBuildWorkflow, /Authority=Lingxiu Cover Stable Signing/, 'self-signed macOS artifacts must be verified against the stable authority');
 console.log('OK macOS packages declare no unused media capture permissions');
 
 const section = (contents, start, end) => {

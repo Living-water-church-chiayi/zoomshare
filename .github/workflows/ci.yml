@@ -38,6 +38,7 @@ jobs:
         run: |
           bash -n scripts/setup-win.sh
           bash -n scripts/setup-mac.sh
+          bash -n scripts/create-self-signed-mac-cert.sh
 
   package-windows:
     name: Package Windows x64

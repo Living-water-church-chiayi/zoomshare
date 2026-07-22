@@ -88,22 +88,121 @@ jobs:
         if: steps.preflight.outputs.should_build == 'true'
         run: bash scripts/setup-mac.sh
 
-      - name: Build and publish universal macOS artifacts
+      - name: Select macOS signing mode
         if: steps.preflight.outputs.should_build == 'true'
         shell: bash
         env:
-          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          MAC_APPLE_ID: ${{ secrets.APPLE_ID }}
+          MAC_APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          MAC_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MAC_SELF_SIGNED_CSC_LINK: ${{ secrets.MAC_SELF_SIGNED_CSC_LINK }}
+          MAC_SELF_SIGNED_CSC_KEY_PASSWORD: ${{ secrets.MAC_SELF_SIGNED_CSC_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          if [[ -z "${CSC_LINK:-}" || -z "${CSC_KEY_PASSWORD:-}" \
-                || -z "${APPLE_ID:-}" || -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" \
-                || -z "${APPLE_TEAM_ID:-}" ]]; then
-            echo "Developer ID signing and notarization secrets are required for a public macOS release." >&2
+          if [[ -n "${MAC_CSC_LINK:-}" && -n "${MAC_CSC_KEY_PASSWORD:-}" \
+                && -n "${MAC_APPLE_ID:-}" && -n "${MAC_APPLE_APP_SPECIFIC_PASSWORD:-}" \
+                && -n "${MAC_APPLE_TEAM_ID:-}" ]]; then
+            echo "MAC_SIGNING_MODE=developer-id" >> "$GITHUB_ENV"
+            echo "CSC_LINK=$MAC_CSC_LINK" >> "$GITHUB_ENV"
+            echo "CSC_KEY_PASSWORD=$MAC_CSC_KEY_PASSWORD" >> "$GITHUB_ENV"
+            echo "APPLE_ID=$MAC_APPLE_ID" >> "$GITHUB_ENV"
+            echo "APPLE_APP_SPECIFIC_PASSWORD=$MAC_APPLE_APP_SPECIFIC_PASSWORD" >> "$GITHUB_ENV"
+            echo "APPLE_TEAM_ID=$MAC_APPLE_TEAM_ID" >> "$GITHUB_ENV"
+            echo "Using Developer ID signing with Apple notarization."
+          elif [[ -n "${MAC_SELF_SIGNED_CSC_LINK:-}" && -n "${MAC_SELF_SIGNED_CSC_KEY_PASSWORD:-}" ]]; then
+            echo "MAC_SIGNING_MODE=self-signed" >> "$GITHUB_ENV"
+            echo "Using stable self-signed macOS signing without notarization."
+          else
+            echo "Mac releases require either Developer ID secrets or stable self-signed signing secrets." >&2
             exit 1
           fi
-          echo "Developer ID signing and Apple notarization are enabled."
-          npx electron-builder --mac --universal --publish always -c.mac.notarize=true
+
+      - name: Import stable self-signed signing certificate
+        if: steps.preflight.outputs.should_build == 'true'
+        shell: bash
+        env:
+          MAC_SELF_SIGNED_CSC_LINK: ${{ secrets.MAC_SELF_SIGNED_CSC_LINK }}
+          MAC_SELF_SIGNED_CSC_KEY_PASSWORD: ${{ secrets.MAC_SELF_SIGNED_CSC_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ "${MAC_SIGNING_MODE:-}" != "self-signed" ]]; then
+            echo "Skipping self-signed certificate import for signing mode: ${MAC_SIGNING_MODE:-unknown}"
+            exit 0
+          fi
+
+          keychain_password="$(openssl rand -hex 24)"
+          keychain_path="$RUNNER_TEMP/lingxiu-self-signed.keychain-db"
+          certificate_path="$RUNNER_TEMP/lingxiu-self-signed.p12"
+          certificate_pem="$RUNNER_TEMP/lingxiu-self-signed.pem"
+
+          printf '%s' "$MAC_SELF_SIGNED_CSC_LINK" | base64 -D > "$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" -k "$keychain_path" -P "$MAC_SELF_SIGNED_CSC_KEY_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain_path"
+
+          openssl pkcs12 -legacy -in "$certificate_path" -clcerts -nokeys \
+            -out "$certificate_pem" -passin "pass:$MAC_SELF_SIGNED_CSC_KEY_PASSWORD"
+          security add-trusted-cert -r trustRoot -k "$keychain_path" "$certificate_pem"
+          security list-keychains -d user -s "$keychain_path" login.keychain-db
+
+          if ! security find-identity -v -p codesigning | grep -Fq 'Lingxiu Cover Stable Signing'; then
+            echo "Stable self-signed signing identity was not imported successfully." >&2
+            exit 1
+          fi
+          echo "CSC_NAME=Lingxiu Cover Stable Signing" >> "$GITHUB_ENV"
+
+      - name: Build and publish universal macOS artifacts
+        if: steps.preflight.outputs.should_build == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$MAC_SIGNING_MODE" == "developer-id" ]]; then
+            echo "Developer ID signing and Apple notarization are enabled."
+            npx electron-builder --mac --universal --publish always -c.mac.notarize=true
+          elif [[ "$MAC_SIGNING_MODE" == "self-signed" ]]; then
+            echo "Stable self-signed signing is enabled; notarization and timestamping are disabled."
+            env -u CSC_LINK -u CSC_KEY_PASSWORD \
+              npx electron-builder --mac --universal --publish always \
+                -c.mac.notarize=false \
+                -c.mac.timestamp=none
+          else
+            echo "Unknown macOS signing mode: ${MAC_SIGNING_MODE:-}" >&2
+            exit 1
+          fi
+
+      - name: Verify stable macOS code signatures
+        if: steps.preflight.outputs.should_build == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path="dist/mac-universal/靈修封面.app"
+          test -d "$app_path" || { echo "Packaged app is missing: $app_path" >&2; exit 1; }
+
+          verify_item() {
+            local item="$1"
+            local details
+            codesign --verify --strict --verbose=2 "$item"
+            details="$(codesign -dv --verbose=4 "$item" 2>&1)"
+            echo "$details" | sed -n '1,40p'
+            if grep -Fq 'Signature=adhoc' <<< "$details"; then
+              echo "Ad-hoc signature is not allowed in public macOS artifacts: $item" >&2
+              exit 1
+            fi
+            if [[ "$MAC_SIGNING_MODE" == "self-signed" ]] && ! grep -Fq 'Authority=Lingxiu Cover Stable Signing' <<< "$details"; then
+              echo "Self-signed artifact is not signed by Lingxiu Cover Stable Signing: $item" >&2
+              exit 1
+            fi
+          }
+
+          verify_item "$app_path"
+          while IFS= read -r helper_app; do
+            verify_item "$helper_app"
+          done < <(find "$app_path/Contents/Frameworks" -maxdepth 1 -type d -name '*.app' -print | sort)
+
+          for helper in yt-dlp_macos deno ffmpeg ffprobe lingxiu-audio-player; do
+            verify_item "$app_path/Contents/Resources/bin/$helper"
+          done
