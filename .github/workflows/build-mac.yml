@@ -99,25 +99,11 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          args=(--mac --universal --publish always)
-          signing_enabled=false
-          if [[ -n "${CSC_LINK:-}" && -n "${CSC_KEY_PASSWORD:-}" ]]; then
-            signing_enabled=true
-          else
-            # Avoid handing electron-builder a half-configured certificate.
-            unset CSC_LINK CSC_KEY_PASSWORD
+          if [[ -z "${CSC_LINK:-}" || -z "${CSC_KEY_PASSWORD:-}" \
+                || -z "${APPLE_ID:-}" || -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" \
+                || -z "${APPLE_TEAM_ID:-}" ]]; then
+            echo "Developer ID signing and notarization secrets are required for a public macOS release." >&2
+            exit 1
           fi
-
-          if [[ "$signing_enabled" == true \
-                && -n "${APPLE_ID:-}" && -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" \
-                && -n "${APPLE_TEAM_ID:-}" ]]; then
-            echo "Developer ID signing and Apple notarization are enabled."
-            args+=(-c.mac.notarize=true)
-          elif [[ "$signing_enabled" == true ]]; then
-            echo "Developer ID signing is enabled; notarization secrets are incomplete."
-            args+=(-c.mac.notarize=false)
-          else
-            echo "Signing secrets are incomplete; publishing an unsigned build for manual updates only."
-            args+=(-c.mac.notarize=false)
-          fi
-          npx electron-builder "${args[@]}"
+          echo "Developer ID signing and Apple notarization are enabled."
+          npx electron-builder --mac --universal --publish always -c.mac.notarize=true

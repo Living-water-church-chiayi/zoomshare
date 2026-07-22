@@ -94,6 +94,7 @@ const macBuilderConfig = read('electron-builder.yml');
 const afterPack = read('scripts/after-pack.js');
 const macEntitlements = read('build/entitlements.mac.plist');
 const nativeMacAudio = read('native/macos/main.swift');
+const macBuildWorkflow = read('.github/workflows/build-mac.yml');
 assert.match(macBuilderConfig, /^afterPack: scripts\/after-pack\.js$/m, 'macOS packaging must run the permission cleanup hook');
 assert.match(macBuilderConfig, /^\s+entitlements: build\/entitlements\.mac\.plist$/m, 'macOS signing must use explicit entitlements');
 assert.match(macBuilderConfig, /^\s+entitlementsInherit: build\/entitlements\.mac\.plist$/m, 'macOS helper signing must use explicit entitlements');
@@ -107,8 +108,17 @@ for (const key of [
 assert.match(afterPack, /remaining\.length > 0/, 'afterPack must fail if a media usage key survives cleanup');
 assert.doesNotMatch(macEntitlements, /audio-input|microphone|camera/i, 'macOS signing must not grant capture capabilities');
 assert.match(macBuilderConfig, /Contents\/Resources\/bin\/lingxiu-audio-player/, 'macOS package must include the native audio helper');
-assert.match(nativeMacAudio, /AVPlayer/, 'native macOS audio helper must use Apple playback APIs');
-assert.doesNotMatch(nativeMacAudio, /AVCapture|AVAudioEngine|AudioQueueNewInput/, 'native macOS helper must not contain recording APIs');
+assert.match(nativeMacAudio, /AudioQueueNewOutput/, 'native macOS audio helper must use output-only CoreAudio playback');
+assert.match(nativeMacAudio, /ExtAudioFileRead/, 'native macOS audio helper must decode through CoreAudio file output APIs');
+assert.doesNotMatch(nativeMacAudio, /AVPlayer|AVCapture|AVAudioEngine|AudioQueueNewInput|AudioQueueNewInput/, 'native macOS helper must not contain recording or AVFoundation playback APIs');
+assert.match(nativeMacAudio, /playbackGeneration/, 'native macOS audio callbacks need a stale-playback generation guard');
+assert.match(nativeMacAudio, /wantsPlayback/, 'native macOS audio callbacks must honor the latest play or pause intent');
+assert.match(nativeMacAudio, /AudioQueueReset/, 'native seek must flush queued output buffers');
+assert.match(nativeMacAudio, /ExtAudioFileSeek/, 'native seek must move the CoreAudio decoder position');
+assert.match(nativeMacAudio, /AudioQueueDispose/, 'native stop must dispose the CoreAudio output queue');
+assert.doesNotMatch(macBuildWorkflow, /publishing an unsigned|notarize=false/, 'public macOS releases must never fall back to unsigned artifacts');
+assert.match(macBuildWorkflow, /Developer ID signing and notarization secrets are required[\s\S]*?exit 1/, 'public macOS releases must fail closed when signing secrets are missing');
+assert.match(macBuildWorkflow, /--publish always -c\.mac\.notarize=true/, 'public macOS releases must require notarization');
 console.log('OK macOS packages declare no unused media capture permissions');
 
 const section = (contents, start, end) => {
@@ -125,12 +135,22 @@ assert.ok(
 const findCachedSource = section(main, 'function findCachedFile', 'function fileUrl');
 assert.doesNotMatch(findCachedSource, /unlinkSync/, 'cache lookup must not delete active download fragments');
 assert.match(findCachedSource, /\.visual-only\./, 'cache lookup must never mistake the no-audio visual copy for source media');
+assert.match(findCachedSource, /\.audio-only\./, 'cache lookup must never mistake the audio-only copy for source media');
 const visualOnlySource = section(main, 'async function ensureVisualOnlyVideo', '// ---------- 快取管理');
 assert.match(visualOnlySource, /'-an'/, 'macOS visual playback file must be remuxed without an audio track');
-assert.match(renderer, /playWorshipVideo\(r\.visualPath \|\| r\.path, r\.path/, 'worship must separate the silent visual file from native audio');
+assert.match(main, /async function ensureAudioOnlyTrack[\s\S]*?'-c:a', 'aac'/, 'macOS worship audio must be remuxed to AAC for CoreAudio output');
+assert.match(renderer, /playWorshipVideo\(r\.visualPath \|\| r\.path, r\.audioPath \|\| r\.path/, 'worship must separate the silent visual file from native audio');
 const musicPlaybackSource = section(renderer, 'async function resolveAndPlayMusic', 'function normalizeMediaUrl');
 assert.match(musicPlaybackSource, /if \(USE_NATIVE_MAC_AUDIO\)[\s\S]*?nativeAudioCommand\('music', 'load'/, 'macOS background music must use native playback');
-assert.match(musicPlaybackSource, /else \{\s*await a\.play\(\);\s*\}/, 'HTML audio playback must remain restricted to non-macOS platforms');
+const nativeMusicBranch = musicPlaybackSource.indexOf('if (USE_NATIVE_MAC_AUDIO)');
+const domMusicBranch = musicPlaybackSource.indexOf('} else {', nativeMusicBranch);
+const domSourceAssignment = musicPlaybackSource.indexOf('a.src = resolvedSrc', nativeMusicBranch);
+assert.ok(nativeMusicBranch >= 0 && domMusicBranch > nativeMusicBranch, 'cannot locate macOS music playback branch');
+assert.ok(domSourceAssignment > domMusicBranch, 'HTML audio src must only be assigned in the non-macOS branch');
+assert.doesNotMatch(musicPlaybackSource.slice(nativeMusicBranch, domMusicBranch), /a\.src\s*=/, 'macOS must not assign a DOM audio src');
+assert.match(musicPlaybackSource.slice(domMusicBranch), /a\.src = resolvedSrc;[\s\S]*?await a\.play\(\);/, 'Windows must retain HTML audio source assignment and playback');
+const nativeControllerSource = section(main, 'class NativeMacAudioController', 'const nativeMacAudio');
+assert.match(nativeControllerSource, /!nativeAudioActionStartsHelper\(command\.action\)/, 'native controller must gate helper startup by action');
 const cleanCacheSource = section(main, 'async function cleanCache', '// ---------- 設定');
 assert.match(cleanCacheSource, /inflight\.keys\(\)/, 'cache cleanup must skip active downloads');
 assert.match(main, /const available = !!\(r && r\.isUpdateAvailable\)/, 'updater must honor electron-updater eligibility');
@@ -318,6 +338,7 @@ assert.match(
 assert.match(setupMac, /-target arm64-apple-macos12\.0/, 'macOS native audio helper must build for Apple Silicon');
 assert.match(setupMac, /-target x86_64-apple-macos12\.0/, 'macOS native audio helper must build for Intel');
 assert.match(setupMac, /lingxiu-audio-player/, 'macOS helper setup must package the native audio player');
+assert.match(setupMac, /--identifier com\.lingxiu\.cover\.audio-player/, 'native audio helper must keep a stable signing identifier');
 console.log('OK package metadata');
 
 console.log('\nAll source integrity checks passed.');

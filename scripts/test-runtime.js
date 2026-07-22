@@ -215,6 +215,76 @@ test('forces macOS audio input streams onto a fake device without disabling play
   assert.deepEqual(switches, []);
 });
 
+test('starts the native macOS audio helper only for a load command', () => {
+  const { nativeAudioActionStartsHelper } = loadFunctions(
+    mainSource,
+    ['nativeAudioActionStartsHelper']
+  );
+
+  assert.equal(nativeAudioActionStartsHelper('load'), true);
+  for (const action of ['play', 'pause', 'seek', 'volume', 'stop']) {
+    assert.equal(nativeAudioActionStartsHelper(action), false, `${action} must not start the helper`);
+  }
+});
+
+test('serializes native audio commands while an earlier load is being validated', async () => {
+  let releaseLoad;
+  const loadGate = new Promise((resolve) => { releaseLoad = resolve; });
+  const sent = [];
+  const { enqueueNativeAudioCommand } = loadFunctions(
+    mainSource,
+    ['enqueueNativeAudioCommand'],
+    {
+      nativeAudioCommandQueue: Promise.resolve(),
+      nativeAudioCommandGeneration: 0,
+      normalizeNativeAudioCommand: async (request) => {
+        if (request.action === 'load') await loadGate;
+        return request;
+      },
+      nativeMacAudio: { send(command) { sent.push(command.action); return { ok: true }; } }
+    }
+  );
+
+  const load = enqueueNativeAudioCommand({ action: 'load' });
+  const stop = enqueueNativeAudioCommand({ action: 'stop' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(sent, [], 'stop must wait rather than overtake a validating load');
+  releaseLoad();
+  await Promise.all([load, stop]);
+  assert.deepEqual(sent, ['load', 'stop']);
+});
+
+test('does not revive a validating native load after the window closes', async () => {
+  let releaseLoad;
+  const loadGate = new Promise((resolve) => { releaseLoad = resolve; });
+  const sent = [];
+  let closes = 0;
+  const { enqueueNativeAudioCommand, closeNativeAudio } = loadFunctions(
+    mainSource,
+    ['closeNativeAudio', 'enqueueNativeAudioCommand'],
+    {
+      nativeAudioCommandQueue: Promise.resolve(),
+      nativeAudioCommandGeneration: 0,
+      normalizeNativeAudioCommand: async (request) => {
+        await loadGate;
+        return request;
+      },
+      nativeMacAudio: {
+        send(command) { sent.push(command.action); return { ok: true }; },
+        close() { closes++; }
+      }
+    }
+  );
+
+  const load = enqueueNativeAudioCommand({ action: 'load' });
+  await new Promise((resolve) => setImmediate(resolve));
+  closeNativeAudio();
+  releaseLoad();
+  assert.deepEqual(plain(await load), { ok: false, cancelled: true });
+  assert.deepEqual(sent, []);
+  assert.equal(closes, 1);
+});
+
 test('reports pointer movement over the main window without resizing it', () => {
   const cursorPoints = [
     { x: 150, y: 250 },
@@ -1891,7 +1961,7 @@ test('keeps the cover silent after Utmost while preserving manual music playback
   };
   const { resumeMusicOnCover, toggleMusic } = loadFunctions(
     rendererSource,
-    ['resumeMusicOnCover', 'isMainCover', 'toggleMusic'],
+    ['stopNativeMusic', 'resumeMusicOnCover', 'isMainCover', 'toggleMusic'],
     {
       $: (id) => elements[id],
       cfg: { autoPlayMusic: true, musicUrl: 'file:///music.mp3', musicVolume: 0.42 },
@@ -1904,6 +1974,8 @@ test('keeps the cover silent after Utmost while preserving manual music playback
       musicPlaying: true,
       musicRequestToken: 7,
       musicFadeTimer: 99,
+      nativeMusicLoaded: false,
+      USE_NATIVE_MAC_AUDIO: false,
       clearInterval: () => { clearedFade++; },
       setMusicSwitchState: (on) => switchStates.push(on),
       sendNativeAudio: () => {},
@@ -1960,6 +2032,163 @@ test('blocks manual music controls until the cover window transition is settled'
   assert.equal(playRequests, 1);
 });
 
+test('updates paused native music volume without touching the renderer audio element', () => {
+  const nativeCommands = [];
+  let domAudioLookups = 0;
+  const { onSettingsChanged } = loadFunctions(rendererSource, ['onSettingsChanged'], {
+    $: (id) => {
+      if (id === 'bgAudio') domAudioLookups++;
+      return null;
+    },
+    cfg: { musicVolume: 0.28 },
+    USE_NATIVE_MAC_AUDIO: true,
+    nativeMusicLoaded: true,
+    musicPlaying: false,
+    saveTimer: null,
+    collectSettings: () => {},
+    applyCover: () => {},
+    sendNativeAudio: (channel, action, options) => nativeCommands.push({ channel, action, options }),
+    clearTimeout: () => {},
+    setTimeout: () => 1,
+    window: { api: { setConfig: () => {} } }
+  });
+
+  onSettingsChanged();
+  assert.equal(domAudioLookups, 0);
+  assert.deepEqual(plain(nativeCommands), [{ channel: 'music', action: 'volume', options: { volume: 0.28 } }]);
+});
+
+test('keeps macOS background music out of the renderer audio element', async () => {
+  let sourceAssignments = 0;
+  const nativeCommands = [];
+  const audio = {
+    _src: '',
+    volume: 1,
+    pauseCalls: 0,
+    playCalls: 0,
+    get src() { return this._src; },
+    set src(value) { this._src = value; sourceAssignments++; },
+    pause() { this.pauseCalls++; },
+    play() { this.playCalls++; return Promise.resolve(); }
+  };
+  const elements = {
+    flowScreen: { classList: { contains: (name) => name === 'hidden' } },
+    bgAudio: audio
+  };
+  const { resolveAndPlayMusic } = loadFunctions(
+    rendererSource,
+    ['isMainCover', 'normalizeMediaUrl', 'resolveAndPlayMusic'],
+    {
+      $: (id) => elements[id],
+      window: {
+        location: { href: 'file:///Applications/Lingxiu.app/Contents/Resources/app/index.html' },
+        api: {
+          mediaStatus: async () => ({ cached: true }),
+          ensureMedia: async () => ({ ok: true, path: 'file:///tmp/music.m4a' })
+        }
+      },
+      cfg: { musicUrl: 'https://youtu.be/music', musicVolume: 0.37 },
+      flowStep: 'cover',
+      worshipActive: false,
+      musicDesired: false,
+      musicPlaying: false,
+      musicRequestToken: 0,
+      nativeMusicLoaded: false,
+      USE_NATIVE_MAC_AUDIO: true,
+      nativeAudioCommand: async (channel, action, options) => {
+        nativeCommands.push({ channel, action, options });
+        return { ok: true };
+      },
+      stopNativeMusic: () => {},
+      setMusicSwitchState: () => {},
+      showBadge: () => {},
+      hideBadge: () => {},
+      toast: () => {},
+      openSettings: () => {}
+    }
+  );
+
+  await resolveAndPlayMusic();
+  assert.equal(sourceAssignments, 0, 'macOS must never assign bgAudio.src');
+  assert.equal(audio.src, '');
+  assert.equal(audio.playCalls, 0, 'macOS must never play through HTMLAudioElement');
+  assert.equal(audio.pauseCalls, 0, 'macOS must not touch a source-less HTMLAudioElement');
+  assert.equal(nativeCommands.length, 1);
+  assert.equal(nativeCommands[0].channel, 'music');
+  assert.equal(nativeCommands[0].action, 'load');
+  assert.equal(nativeCommands[0].options.source, 'file:///tmp/music.m4a');
+});
+
+test('stops and releases native music when the macOS fade completes', () => {
+  let tick = null;
+  const nativeActions = [];
+  const audio = {
+    volume: 1,
+    pauseCalls: 0,
+    pause() { this.pauseCalls++; }
+  };
+  const { fadeOutMusic } = loadFunctions(
+    rendererSource,
+    ['stopNativeMusic', 'fadeOutMusic'],
+    {
+      $: () => audio,
+      cfg: { musicVolume: 0.6 },
+      USE_NATIVE_MAC_AUDIO: true,
+      musicDesired: true,
+      musicPlaying: true,
+      musicRequestToken: 0,
+      musicFadeTimer: null,
+      nativeMusicLoaded: true,
+      setInterval: (callback) => { tick = callback; return 77; },
+      clearInterval: () => {},
+      sendNativeAudio: (_channel, action) => nativeActions.push(action),
+      setMusicSwitchState: () => {}
+    }
+  );
+
+  fadeOutMusic();
+  for (let i = 0; i < 20 && !nativeActions.includes('stop'); i++) tick();
+  assert.equal(nativeActions.at(-1), 'stop');
+  assert.equal(nativeActions.includes('pause'), false, 'fade completion must release rather than pause the native output queue');
+  assert.equal(audio.pauseCalls, 0);
+});
+
+test('keeps the Windows DOM audio source reusable after a fade', () => {
+  let tick = null;
+  const nativeActions = [];
+  const audio = {
+    src: 'file:///D:/cache/music.mp3',
+    volume: 0.6,
+    pauseCalls: 0,
+    pause() { this.pauseCalls++; }
+  };
+  const { fadeOutMusic } = loadFunctions(
+    rendererSource,
+    ['stopNativeMusic', 'fadeOutMusic'],
+    {
+      $: () => audio,
+      cfg: { musicVolume: 0.6 },
+      USE_NATIVE_MAC_AUDIO: false,
+      musicDesired: true,
+      musicPlaying: true,
+      musicRequestToken: 0,
+      musicFadeTimer: null,
+      nativeMusicLoaded: false,
+      setInterval: (callback) => { tick = callback; return 88; },
+      clearInterval: () => {},
+      sendNativeAudio: (_channel, action) => nativeActions.push(action),
+      setMusicSwitchState: () => {}
+    }
+  );
+
+  fadeOutMusic();
+  for (let i = 0; i < 20 && audio.pauseCalls === 0; i++) tick();
+  assert.equal(audio.pauseCalls, 1);
+  assert.equal(audio.src, 'file:///D:/cache/music.mp3');
+  assert.equal(audio.volume, 0.6);
+  assert.deepEqual(nativeActions, []);
+});
+
 test('still completes the programmatic music resume while the cover window settles', async () => {
   const audio = {
     src: '',
@@ -2011,6 +2240,7 @@ test('still completes the programmatic music resume while the cover window settl
   assert.equal(audio.playCalls, 1, 'programmatic cover resume was blocked by the transition guard');
   assert.equal(audio.pauseCalls, 0);
   assert.equal(audio.volume, 0.37);
+  assert.equal(audio.src, 'file:///D:/cache/music.mp3');
 });
 
 test('retains the previous cover music resume behavior before Utmost is reached', () => {
@@ -2046,7 +2276,7 @@ test('keeps the post-Utmost silence latch when navigating back before the cover'
     flowScreen: { dataset: {}, classList },
     bgAudio: audio
   };
-  const { goFlowStep } = loadFunctions(rendererSource, ['resumeMusicOnCover', 'goFlowStep'], {
+  const { goFlowStep } = loadFunctions(rendererSource, ['stopNativeMusic', 'resumeMusicOnCover', 'goFlowStep'], {
     $: (id) => elements[id],
     cfg: { autoPlayMusic: true, musicUrl: 'file:///music.mp3', musicVolume: 0.36 },
     window: { api: { setWindowMode: async () => {} } },
@@ -2062,6 +2292,8 @@ test('keeps the post-Utmost silence latch when navigating back before the cover'
     musicPlaying: false,
     musicRequestToken: 0,
     musicFadeTimer: null,
+    nativeMusicLoaded: false,
+    USE_NATIVE_MAC_AUDIO: false,
     resetUtmostFinishConfirmation: () => false,
     isReadingFlowStep: (step) => step === 'scripture' || step === 'utmost',
     hideFlowFooterImmediately: () => {},

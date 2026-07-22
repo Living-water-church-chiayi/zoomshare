@@ -8,6 +8,7 @@ let musicPlaying = false;
 let musicDesired = false;
 let musicRequestToken = 0;
 let musicFadeTimer = null;
+let nativeMusicLoaded = false;
 let musicResumeOnCover = false;
 let flowReachedUtmost = false;
 let worshipActive = false;
@@ -61,6 +62,11 @@ async function nativeAudioCommand(channel, action, options = {}) {
 function sendNativeAudio(channel, action, options = {}) {
   if (!USE_NATIVE_MAC_AUDIO) return;
   nativeAudioCommand(channel, action, options).catch(() => {});
+}
+
+function stopNativeMusic() {
+  nativeMusicLoaded = false;
+  sendNativeAudio('music', 'stop');
 }
 
 function systemDateMD() {
@@ -939,8 +945,11 @@ let saveTimer = null;
 function onSettingsChanged() {
   collectSettings();
   applyCover(null);
-  $('bgAudio').volume = cfg.musicVolume;
-  if (musicPlaying) sendNativeAudio('music', 'volume', { volume: cfg.musicVolume });
+  if (USE_NATIVE_MAC_AUDIO) {
+    if (nativeMusicLoaded) sendNativeAudio('music', 'volume', { volume: cfg.musicVolume });
+  } else {
+    $('bgAudio').volume = cfg.musicVolume;
+  }
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => window.api.setConfig(cfg), 300);
 }
@@ -985,11 +994,8 @@ async function resolveAndPlayMusic() {
   if (requestToken !== musicRequestToken || cfg.musicUrl !== requestedUrl || !musicDesired || !isMainCover()) return;
   if (!r.ok) { musicDesired = false; setMusicSwitchState(false); toast('背景音樂下載失敗：' + r.error, 4000); return; }
   const resolvedSrc = normalizeMediaUrl(r.path);
-  if (normalizeMediaUrl(a.src) !== resolvedSrc) a.src = resolvedSrc;
-  a.volume = cfg.musicVolume;
   try {
     if (USE_NATIVE_MAC_AUDIO) {
-      a.pause();
       const nativeResult = await nativeAudioCommand('music', 'load', {
         source: resolvedSrc,
         loop: true,
@@ -998,20 +1004,23 @@ async function resolveAndPlayMusic() {
         volume: cfg.musicVolume
       });
       if (!nativeResult.ok) throw new Error(nativeResult.error || 'macOS 原生音訊播放器無法啟動');
+      nativeMusicLoaded = true;
     } else {
+      if (normalizeMediaUrl(a.src) !== resolvedSrc) a.src = resolvedSrc;
+      a.volume = cfg.musicVolume;
       await a.play();
     }
   } catch (e) {
-    a.pause();
-    sendNativeAudio('music', 'stop');
+    if (!USE_NATIVE_MAC_AUDIO) a.pause();
+    stopNativeMusic();
     musicDesired = false;
     setMusicSwitchState(false);
     toast('播放失敗：' + e.message, 3000);
     return;
   }
   if (requestToken !== musicRequestToken || !musicDesired || !isMainCover()) {
-    a.pause();
-    sendNativeAudio('music', 'stop');
+    if (!USE_NATIVE_MAC_AUDIO) a.pause();
+    stopNativeMusic();
     return;
   }
   musicPlaying = true;
@@ -1029,7 +1038,7 @@ function fadeOutMusic(done) {
   musicDesired = false;
   musicRequestToken++;
   const a = $('bgAudio');
-  const start = a.volume;
+  const start = USE_NATIVE_MAC_AUDIO ? cfg.musicVolume : a.volume;
   let v = start;
   if (musicFadeTimer) clearInterval(musicFadeTimer);
   musicFadeTimer = setInterval(() => {
@@ -1037,15 +1046,18 @@ function fadeOutMusic(done) {
     if (v <= 0) {
       clearInterval(musicFadeTimer);
       musicFadeTimer = null;
-      a.pause();
-      sendNativeAudio('music', 'pause');
-      a.volume = cfg.musicVolume;
+      if (USE_NATIVE_MAC_AUDIO) stopNativeMusic();
+      else {
+        a.pause();
+        a.volume = cfg.musicVolume;
+      }
       musicPlaying = false;
       setMusicSwitchState(false);
       if (done) done();
     } else {
-      a.volume = Math.max(0, v);
-      sendNativeAudio('music', 'volume', { volume: a.volume });
+      const nextVolume = Math.max(0, v);
+      if (USE_NATIVE_MAC_AUDIO) sendNativeAudio('music', 'volume', { volume: nextVolume });
+      else a.volume = nextVolume;
     }
   }, 40);
 }
@@ -1060,7 +1072,7 @@ function pauseMusicForFlow() {
   musicDesired = false;
   setMusicSwitchState(false);
   if (musicPlaying && !musicFadeTimer) fadeOutMusic();
-  else if (!musicPlaying) sendNativeAudio('music', 'stop');
+  else if (!musicPlaying) stopNativeMusic();
 }
 
 function resumeMusicOnCover() {
@@ -1074,9 +1086,11 @@ function resumeMusicOnCover() {
       clearInterval(musicFadeTimer);
       musicFadeTimer = null;
     }
-    a.pause();
-    sendNativeAudio('music', 'stop');
-    a.volume = cfg.musicVolume;
+    stopNativeMusic();
+    if (!USE_NATIVE_MAC_AUDIO) {
+      a.pause();
+      a.volume = cfg.musicVolume;
+    }
     musicPlaying = false;
     setMusicSwitchState(false);
     return;
@@ -1088,13 +1102,23 @@ function resumeMusicOnCover() {
   if (musicFadeTimer) {
     clearInterval(musicFadeTimer);
     musicFadeTimer = null;
-    a.volume = cfg.musicVolume;
-    if (!a.paused) {
+    if (USE_NATIVE_MAC_AUDIO && nativeMusicLoaded) {
       sendNativeAudio('music', 'volume', { volume: cfg.musicVolume });
       musicDesired = true;
       musicPlaying = true;
       setMusicSwitchState(true);
       return;
+    }
+    if (!USE_NATIVE_MAC_AUDIO) {
+      a.volume = cfg.musicVolume;
+      if (!a.paused) {
+        musicDesired = true;
+        musicPlaying = true;
+        setMusicSwitchState(true);
+        return;
+      }
+    } else {
+      musicPlaying = false;
     }
   }
   if (!musicPlaying) resolveAndPlayMusic();
@@ -1130,7 +1154,8 @@ function toggleMusic() {
 function toggleMusicPlayPause() {
   if (flowTransitioning || !isMainCover()) return;
   const a = $('bgAudio');
-  if (!a.src) { resolveAndPlayMusic(); return; }
+  const hasLoadedSource = USE_NATIVE_MAC_AUDIO ? nativeMusicLoaded : Boolean(a.src);
+  if (!hasLoadedSource) { resolveAndPlayMusic(); return; }
   const paused = USE_NATIVE_MAC_AUDIO ? !musicPlaying : a.paused;
   if (paused) {
     musicDesired = true;
@@ -1145,16 +1170,16 @@ function toggleMusicPlayPause() {
       musicDesired = false;
       musicPlaying = false;
       setMusicSwitchState(false);
-      a.pause();
-      sendNativeAudio('music', 'stop');
+      if (!USE_NATIVE_MAC_AUDIO) a.pause();
+      stopNativeMusic();
       toast('播放失敗：' + e.message, 3000);
     });
   }
   else {
     musicDesired = false;
     setMusicSwitchState(false);
-    a.pause();
-    sendNativeAudio('music', 'pause');
+    if (USE_NATIVE_MAC_AUDIO) sendNativeAudio('music', 'pause');
+    else a.pause();
     musicPlaying = false;
   }
 }
@@ -2245,7 +2270,7 @@ async function startWorship() {
     await backToCover();
     return false;
   }
-  playWorshipVideo(r.visualPath || r.path, r.path, false, requestToken);
+  playWorshipVideo(r.visualPath || r.path, r.audioPath || r.path, false, requestToken);
   return true;
 }
 

@@ -131,7 +131,7 @@ require_arch "$FFMPEG_X64_DOWNLOAD" "x86_64"
 require_arch "$FFPROBE_ARM64_DOWNLOAD" "arm64"
 require_arch "$FFPROBE_X64_DOWNLOAD" "x86_64"
 
-echo "Building playback-only AVPlayer helper ..."
+echo "Building output-only CoreAudio helper ..."
 xcrun --sdk macosx swiftc -swift-version 5 -O \
   -target arm64-apple-macos12.0 "$NATIVE_AUDIO_SOURCE" \
   -o "$NATIVE_AUDIO_ARM64"
@@ -152,7 +152,11 @@ for binary_name in yt-dlp_macos deno ffmpeg ffprobe lingxiu-audio-player; do
   binary="$STAGE/$binary_name"
   chmod 0755 "$binary"
   require_universal "$binary"
-  codesign --force --sign - --timestamp=none "$binary"
+  if [[ "$binary_name" == "lingxiu-audio-player" ]]; then
+    codesign --force --sign - --identifier com.lingxiu.cover.audio-player --timestamp=none "$binary"
+  else
+    codesign --force --sign - --timestamp=none "$binary"
+  fi
   codesign --verify --strict "$binary"
 done
 
@@ -197,7 +201,7 @@ echo "Prepared pinned universal macOS helpers in $DEST"
 echo "  yt-dlp: $YT_DLP_VERSION"
 echo "  deno:   $DENO_VERSION"
 echo "  ffmpeg: ${FFMPEG_STATIC_VERSION#b}"
-echo "  audio:  native AVPlayer (playback only)"
+echo "  audio:  native CoreAudio AudioQueue output"
 lipo -info "$DEST/yt-dlp_macos"
 lipo -info "$DEST/deno"
 lipo -info "$DEST/ffmpeg"
