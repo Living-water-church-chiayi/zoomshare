@@ -179,7 +179,12 @@ assert.match(
   /footer\.addEventListener\('pointerenter',[\s\S]*?flowFooterHovered = true;[\s\S]*?footer\.addEventListener\('pointerleave',[\s\S]*?flowFooterHovered = false;/,
   'reading navigation must remain visible while the pointer is over it'
 );
-assert.match(renderer, /onWindowPointerActivity\(handleReadingPointerActivity\);/, 'reading flow must receive pointer activity across native drag regions');
+assert.match(renderer, /onWindowPointerActivity\(handleWindowPointerActivity\);/, 'native pointer activity must reveal inactive-window controls');
+assert.match(
+  renderer,
+  /function handleWindowPointerActivity\(\)[\s\S]*?handleReadingPointerActivity\(\)[\s\S]*?isMainCover\(\)[\s\S]*?showToolbar\(\)/,
+  'native pointer activity must cover both reading navigation and the cover toolbar'
+);
 assert.match(main, /setInterval\(pollMainWindowPointer, 50\)/, 'native dragging needs a lightweight pointer activity monitor');
 assert.match(
   renderer,

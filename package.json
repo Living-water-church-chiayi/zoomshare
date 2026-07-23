@@ -1,6 +1,6 @@
 {
   "name": "lingxiu-cover",
-  "version": "1.0.30",
+  "version": "1.0.31",
   "description": "靈修封面 — 晨更/靈修班開始前的 16:9 封面與背景音樂/敬拜播放工具 (Windows/Mac)",
   "main": "src/main.js",
   "author": "",

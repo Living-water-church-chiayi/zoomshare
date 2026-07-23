@@ -346,6 +346,38 @@ test('reveals reading navigation from pointer activity across a native drag regi
   assert.deepEqual(calls, ['reveal', 'schedule']);
 });
 
+test('reveals the cover toolbar from native pointer activity while the window is inactive', () => {
+  const calls = [];
+  const { handleWindowPointerActivity } = loadFunctions(
+    rendererSource,
+    ['handleWindowPointerActivity'],
+    {
+      handleReadingPointerActivity: () => false,
+      isMainCover: () => true,
+      showToolbar: () => calls.push('toolbar')
+    }
+  );
+
+  assert.equal(handleWindowPointerActivity(), true);
+  assert.deepEqual(calls, ['toolbar']);
+});
+
+test('does not show the cover toolbar when native pointer activity is handled by reading flow', () => {
+  const calls = [];
+  const { handleWindowPointerActivity } = loadFunctions(
+    rendererSource,
+    ['handleWindowPointerActivity'],
+    {
+      handleReadingPointerActivity: () => true,
+      isMainCover: () => true,
+      showToolbar: () => calls.push('toolbar')
+    }
+  );
+
+  assert.equal(handleWindowPointerActivity(), true);
+  assert.deepEqual(calls, []);
+});
+
 test('native reading drag regions exclude navigation buttons', () => {
   const css = fs.readFileSync(path.join(projectRoot, 'src', 'renderer', 'style.css'), 'utf8');
   assert.match(

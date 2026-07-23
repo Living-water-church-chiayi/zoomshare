@@ -1755,6 +1755,13 @@ function handleReadingPointerActivity() {
   return true;
 }
 
+function handleWindowPointerActivity() {
+  if (handleReadingPointerActivity()) return true;
+  if (!isMainCover()) return false;
+  showToolbar();
+  return true;
+}
+
 function setFlowButtonLabel(buttonId, label) {
   const button = $(buttonId);
   if (!button) return;
@@ -2976,7 +2983,7 @@ async function init() {
   });
   setupFlowFooterReveal();
   setupSettingsTextSelection();
-  window.api.onWindowPointerActivity(handleReadingPointerActivity);
+  window.api.onWindowPointerActivity(handleWindowPointerActivity);
   $('btnMin').addEventListener('click', () => window.api.minimizeWindow());
   $('btnClose').addEventListener('click', () => window.api.closeWindow());
   $('btnPasteMusic').addEventListener('click', () => pasteInto('inMusicUrl'));
