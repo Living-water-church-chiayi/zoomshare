@@ -4,7 +4,7 @@ const assert = require('assert/strict');
 const fs = require('fs');
 const path = require('path');
 const test = require('node:test');
-const { buildRosterMatcher, deriveRosterPresence, normalizeDisplayName } = require('../src/presence-shared');
+const { buildRosterMatcher, deriveRosterPresence, matchRosterMemberIds, normalizeDisplayName } = require('../src/presence-shared');
 const { smartSegmentSizes, scriptureSegments, utmostParagraphSegments } = require('../src/assignment-shared');
 
 const root = path.join(__dirname, '..');
@@ -91,6 +91,59 @@ test('does not guess when the same two-character fragment belongs to multiple me
   assert.equal(derived.participants[0].memberId, '');
 });
 
+test('allows an explicit shared Zoom account name to mark multiple roster members online', () => {
+  const roster = [
+    { memberId: '17', name: '鈺珍阿姨', aliases: ['黃鈺珍&沈星華'], canReadScripture: true, canReadUtmost: true, enabled: true, order: 17 },
+    { memberId: '18', name: '星華叔叔', aliases: ['黃鈺珍&沈星華'], canReadScripture: true, canReadUtmost: false, enabled: true, order: 18 }
+  ];
+  const matcher = buildRosterMatcher(roster);
+  const derived = deriveRosterPresence({
+    status: 'active',
+    participants: [{ sessionId: 'shared', displayName: '黃鈺珍&沈星華' }]
+  }, roster);
+
+  assert.deepEqual(matcher.errors, []);
+  assert.deepEqual(matchRosterMemberIds(matcher, '黃鈺珍&沈星華'), ['17', '18']);
+  assert.deepEqual(derived.participants[0].memberIds, ['17', '18']);
+  assert.deepEqual(derived.onlineMembers.map((member) => member.memberId), ['17', '18']);
+  assert.deepEqual(derived.scriptureCandidates.map((member) => member.memberId), ['17', '18']);
+  assert.deepEqual(derived.utmostCandidates.map((member) => member.memberId), ['17']);
+  assert.equal(derived.acceptedSharedDuplicateMessages.has('姓名或別名重複「黃鈺珍&沈星華」：17、18'), true);
+  assert.equal(derived.acceptedSharedDuplicateMessages.has('姓名片段重複「星華」：17、18'), true);
+});
+
+test('allows identical Zoom aliases as shared accounts but only for exact matches', () => {
+  const roster = [
+    { memberId: 'a', name: '甲', aliases: ['家用 iPad'], enabled: true, order: 1 },
+    { memberId: 'b', name: '乙', aliases: ['家用 iPad'], enabled: true, order: 2 }
+  ];
+  const matcher = buildRosterMatcher(roster);
+  const derived = deriveRosterPresence({
+    status: 'active',
+    participants: [
+      { sessionId: 'exact', displayName: '家用 iPad' },
+      { sessionId: 'fuzzy', displayName: '今天用家用 iPad 加入' }
+    ]
+  }, roster);
+
+  assert.deepEqual(matcher.errors, []);
+  assert.deepEqual(matchRosterMemberIds(matcher, '家用 iPad'), ['a', 'b']);
+  assert.deepEqual(derived.participants[0].memberIds, ['a', 'b']);
+  assert.deepEqual(derived.participants[1].memberIds, []);
+  assert.deepEqual(derived.onlineMembers.map((member) => member.memberId), ['a', 'b']);
+});
+
+test('reports duplicate roster names instead of treating them as a shared account', () => {
+  const roster = [
+    { memberId: 'a', name: '王小明', aliases: [], enabled: true },
+    { memberId: 'b', name: '王小明', aliases: [], enabled: true }
+  ];
+  const matcher = buildRosterMatcher(roster);
+  assert.equal(matcher.matchByName.has('王小明'), false);
+  assert.deepEqual(matchRosterMemberIds(matcher, '王小明'), []);
+  assert.match(matcher.errors.join('\n'), /王小明/);
+});
+
 test('keeps a member online until all matching Zoom sessions leave', () => {
   const roster = [{
     memberId: 'member-1', name: '王小明', aliases: [], canReadScripture: true,
@@ -111,14 +164,14 @@ test('keeps a member online until all matching Zoom sessions leave', () => {
   assert.equal(deriveRosterPresence({ status: 'active', participants: [] }, roster).onlineMembers.length, 0);
 });
 
-test('disables ambiguous aliases instead of guessing', () => {
+test('reports duplicate names instead of guessing', () => {
   const roster = [
-    { memberId: 'a', name: '甲', aliases: ['家用 iPad'], enabled: true },
-    { memberId: 'b', name: '乙', aliases: ['家用 iPad'], enabled: true }
+    { memberId: 'a', name: '甲', aliases: [], enabled: true },
+    { memberId: 'b', name: '甲', aliases: [], enabled: true }
   ];
   const matcher = buildRosterMatcher(roster);
-  assert.equal(matcher.matchByName.has('家用 ipad'), false);
-  assert.match(matcher.errors.join('\n'), /家用 ipad/);
+  assert.equal(matcher.matchByName.has('甲'), false);
+  assert.match(matcher.errors.join('\n'), /甲/);
 });
 
 test('keeps device secrets out of renderer bridges', () => {

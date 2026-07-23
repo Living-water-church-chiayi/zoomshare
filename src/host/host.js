@@ -1,7 +1,7 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
-const { buildRosterMatcher, deriveRosterPresence, matchRosterMember } = window.PresenceShared;
+const { buildRosterMatcher, deriveRosterPresence, matchRosterMemberIds } = window.PresenceShared;
 const { scriptureSegments, utmostParagraphSegments } = window.AssignmentShared;
 
 let currentState = null;
@@ -75,11 +75,11 @@ function todaySharerMemberIds() {
   const sharing = currentState && currentState.utmostSharing;
   if (!sharing || !sharing.found || !sharing.sharer) return new Set();
   const matcher = buildRosterMatcher(currentState.roster || []);
-  const labels = String(sharing.sharer).split(/[、/／+＋]|(?:\s*[及和]\s*)/).map((value) => value.trim()).filter(Boolean);
   const memberIds = new Set();
+  for (const memberId of matchRosterMemberIds(matcher, sharing.sharer)) memberIds.add(String(memberId));
+  const labels = String(sharing.sharer).split(/[、/／+＋]|(?:\s*[及和]\s*)/).map((value) => value.trim()).filter(Boolean);
   for (const label of labels) {
-    const memberId = matchRosterMember(matcher, label);
-    if (memberId) memberIds.add(String(memberId));
+    for (const memberId of matchRosterMemberIds(matcher, label)) memberIds.add(String(memberId));
   }
   return memberIds;
 }
@@ -229,12 +229,16 @@ function renderAllOnline(derived) {
     dot.className = 'online-dot';
     name.append(dot, document.createTextNode(participant.displayName || '未提供名稱'));
     const details = document.createElement('small');
-    if (participant.memberId) {
-      const member = derived.membersById.get(participant.memberId);
+    const matchedMemberIds = Array.isArray(participant.memberIds) && participant.memberIds.length
+      ? participant.memberIds
+      : (participant.memberId ? [participant.memberId] : []);
+    if (matchedMemberIds.length) {
+      const matchedMembers = matchedMemberIds.map((memberId) => derived.membersById.get(memberId)).filter(Boolean);
       const roles = [];
-      if (member && member.canReadScripture) roles.push('讀經文');
-      if (member && member.canReadUtmost) roles.push('讀竭誠獻上');
-      details.textContent = roles.join('、') || '服務名單成員';
+      if (matchedMembers.some((member) => member.canReadScripture)) roles.push('讀經文');
+      if (matchedMembers.some((member) => member.canReadUtmost)) roles.push('讀竭誠獻上');
+      const memberNames = matchedMembers.map((member) => member.name).join('、');
+      details.textContent = `${memberNames || '服務名單成員'}${roles.length ? `・${roles.join('、')}` : ''}`;
     } else details.textContent = '未列入服務名單';
     row.append(name, details);
     container.appendChild(row);
@@ -307,7 +311,9 @@ function renderState(state) {
   renderEligibleList('utmost', derived);
   renderAllOnline(derived);
 
-  const errors = [...new Set([...(state.rosterErrors || []), ...derived.errors])];
+  const acceptedSharedDuplicateMessages = derived.acceptedSharedDuplicateMessages || new Set();
+  const errors = [...new Set([...(state.rosterErrors || []), ...derived.errors])]
+    .filter((error) => !acceptedSharedDuplicateMessages.has(error));
   $('rosterErrors').textContent = errors.length ? `名單需要檢查：\n${errors.join('\n')}` : '';
   setHidden($('rosterErrors'), errors.length === 0);
   $('deviceDescription').textContent = `${state.deviceLabel || '這台主持人電腦'}・${state.serviceUrl}${state.stale ? '・使用離線資料' : ''}`;

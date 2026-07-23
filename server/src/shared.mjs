@@ -20,6 +20,20 @@ export function parseBoolean(value, defaultValue = false) {
   return defaultValue;
 }
 
+function sameStringSet(left, right) {
+  if (!left || !right || left.size !== right.size) return false;
+  for (const item of left) {
+    if (!right.has(item)) return false;
+  }
+  return true;
+}
+
+function sharedAccountDisplayName(value) {
+  const normalized = normalizePersonName(value);
+  if (!normalized) return false;
+  return /[&＆+＋/／、]/.test(normalized) || /[\p{Script=Han}](?:和|及)[\p{Script=Han}]/u.test(normalized);
+}
+
 export function parseRosterRows(rows) {
   if (!Array.isArray(rows) || rows.length === 0) return { roster: [], errors: ['服務名單沒有資料'] };
   const headers = rows[0].map((value) => String(value ?? '').trim());
@@ -63,15 +77,22 @@ export function parseRosterRows(rows) {
 
   const owners = new Map();
   for (const member of roster.filter((item) => item.enabled)) {
-    for (const label of [member.name, ...member.aliases]) {
-      const key = normalizePersonName(label);
+    const labels = [
+      { value: member.name, alias: false },
+      ...member.aliases.map((alias) => ({ value: alias, alias: true }))
+    ];
+    for (const label of labels) {
+      const key = normalizePersonName(label.value);
       if (!key) continue;
-      if (!owners.has(key)) owners.set(key, new Set());
-      owners.get(key).add(member.memberId);
+      if (!owners.has(key)) owners.set(key, { memberIds: new Set(), aliasMemberIds: new Set() });
+      owners.get(key).memberIds.add(member.memberId);
+      if (label.alias) owners.get(key).aliasMemberIds.add(member.memberId);
     }
   }
-  for (const [key, memberIds] of owners) {
-    if (memberIds.size > 1) errors.push(`姓名或別名重複「${key}」：${[...memberIds].join('、')}`);
+  for (const [key, owner] of owners) {
+    if (owner.memberIds.size > 1 && !sharedAccountDisplayName(key) && !sameStringSet(owner.aliasMemberIds, owner.memberIds)) {
+      errors.push(`姓名或別名重複「${key}」：${[...owner.memberIds].join('、')}`);
+    }
   }
 
   roster.sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, 'zh-Hant'));

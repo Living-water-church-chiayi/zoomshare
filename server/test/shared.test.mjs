@@ -17,17 +17,27 @@ test('normalizes names without fuzzy matching', () => {
   assert.notEqual(normalizePersonName('王小明'), normalizePersonName('王小民'));
 });
 
-test('parses roster flags, aliases, ordering, and reports duplicate aliases', () => {
+test('parses roster flags, aliases, ordering, and reports duplicate names', () => {
   const result = parseRosterRows([
     ['編號', '姓名', 'Zoom別名', '可讀經文', '可讀竭誠獻上', '啟用', '排序'],
-    ['b', '王小明', '小明、Amy', '是', '否', '是', '2'],
-    ['a', '林平安', 'Amy', '1', 'TRUE', '', '1'],
+    ['b', '王小明', '小明', '是', '否', '是', '2'],
+    ['a', '王小明', 'Amy', '1', 'TRUE', '', '1'],
     ['off', '停用者', '', '是', '是', '否', '3']
   ]);
   assert.deepEqual(result.roster.map((item) => item.memberId), ['a', 'b', 'off']);
   assert.equal(result.roster[0].canReadScripture, true);
   assert.equal(result.roster[0].canReadUtmost, true);
-  assert.match(result.errors.join('\n'), /amy/i);
+  assert.match(result.errors.join('\n'), /王小明/);
+});
+
+test('allows duplicate Zoom aliases as shared accounts', () => {
+  const result = parseRosterRows([
+    ['編號', '姓名', 'Zoom別名', '可讀經文', '可讀竭誠獻上', '啟用', '排序'],
+    ['17', '鈺珍阿姨', '黃鈺珍&沈星華', '是', '是', '是', '17'],
+    ['18', '星華叔叔', '黃鈺珍&沈星華', '是', '否', '是', '18']
+  ]);
+  assert.deepEqual(result.roster.map((item) => item.memberId), ['17', '18']);
+  assert.deepEqual(result.errors, []);
 });
 
 test('parses exact-year and recurring schedule rows in Taipei time', () => {
