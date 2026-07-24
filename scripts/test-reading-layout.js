@@ -215,11 +215,15 @@ function rendererHarnessSource() {
   const implementations = functionNames.map((name) => extractFunction(rendererSource, name)).join('\n\n');
   return `(() => {
     const $ = (id) => document.getElementById(id);
+    ${extractConst(rendererSource, 'COVER_LAYOUT_WIDTH')}
+    ${extractConst(rendererSource, 'COVER_LAYOUT_HEIGHT')}
     ${extractConst(rendererSource, 'FLOW_LAYOUT_WIDTH')}
     ${extractConst(rendererSource, 'FLOW_LAYOUT_HEIGHT')}
     ${extractConst(rendererSource, 'FLOW_MIN_CONTROL_SIZE')}
     ${extractConst(rendererSource, 'FLOW_MIN_ICON_SIZE')}
     ${extractConst(rendererSource, 'UTMOST_MIN_REGULAR_SCALE')}
+    ${extractConst(rendererSource, 'MAIN_TOOLBAR_SCALE_MIN')}
+    ${extractConst(rendererSource, 'MAIN_TOOLBAR_SCALE_MAX')}
     let flowPages = [];
     let flowPageScales = [];
     let flowPageIndex = 0;
