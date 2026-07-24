@@ -889,20 +889,21 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
 .toolbar {
   position: fixed;
   left: 50%;
-  bottom: 18px;
-  transform: translateX(-50%) translateY(10px);
+  bottom: calc(18px * var(--toolbar-display-scale, 1));
+  transform: translateX(-50%) translateY(calc(10px * var(--toolbar-display-scale, 1)));
+  transform-origin: bottom center;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 8px;
+  gap: calc(6px * var(--toolbar-display-scale, 1));
+  padding: calc(8px * var(--toolbar-display-scale, 1));
   max-width: calc(100vw - 18px);
   background: rgba(255,255,255,.84);
   backdrop-filter: var(--bar-blur);
   -webkit-backdrop-filter: var(--bar-blur);
   border: 1px solid rgba(47,41,51,.12);
-  border-radius: 28px;
+  border-radius: calc(28px * var(--toolbar-display-scale, 1));
   box-shadow: 0 16px 46px rgba(47,41,51,.18);
   z-index: 20;
   opacity: 0;
@@ -912,24 +913,24 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
 .toolbar.show { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0); }
 .toolbar button {
   font-family: var(--ui);
-  font-size: 12px;
+  font-size: max(8px, calc(12px * var(--toolbar-display-scale, 1)));
   font-weight: 900;
   color: var(--ink);
   background: transparent;
   border: 0;
-  border-radius: 20px;
-  min-height: 42px;
-  padding: 8px 13px;
+  border-radius: calc(20px * var(--toolbar-display-scale, 1));
+  min-height: max(28px, calc(42px * var(--toolbar-display-scale, 1)));
+  padding: calc(8px * var(--toolbar-display-scale, 1)) calc(13px * var(--toolbar-display-scale, 1));
   cursor: pointer;
   transition: transform .12s ease, box-shadow .15s ease, border-color .15s ease;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: calc(5px * var(--toolbar-display-scale, 1));
 }
 .toolbar .icon-btn svg {
-  width: 20px;
-  height: 20px;
+  width: max(14px, calc(20px * var(--toolbar-display-scale, 1)));
+  height: max(14px, calc(20px * var(--toolbar-display-scale, 1)));
   fill: none;
   stroke: currentColor;
   stroke-width: 2;
@@ -962,18 +963,18 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
   width: 1px;
   align-self: stretch;
   background: var(--line);
-  margin: 5px 2px;
+  margin: calc(5px * var(--toolbar-display-scale, 1)) calc(2px * var(--toolbar-display-scale, 1));
 }
 #btnSettings, #btnMin, #btnClose {
-  width: 42px;
+  width: max(28px, calc(42px * var(--toolbar-display-scale, 1)));
   padding-left: 0;
   padding-right: 0;
 }
 .toolbar .switch-btn {
-  min-width: 128px;
+  min-width: max(88px, calc(128px * var(--toolbar-display-scale, 1)));
   justify-content: space-between;
-  padding: 5px 7px 5px 14px;
-  gap: 12px;
+  padding: calc(5px * var(--toolbar-display-scale, 1)) calc(7px * var(--toolbar-display-scale, 1)) calc(5px * var(--toolbar-display-scale, 1)) calc(14px * var(--toolbar-display-scale, 1));
+  gap: calc(12px * var(--toolbar-display-scale, 1));
   background: #fff;
   border: 1px solid var(--line);
   border-radius: var(--pill);
@@ -991,8 +992,8 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
 }
 .toolbar .switch-btn i {
   position: relative;
-  width: 56px;
-  height: 32px;
+  width: max(38px, calc(56px * var(--toolbar-display-scale, 1)));
+  height: max(22px, calc(32px * var(--toolbar-display-scale, 1)));
   display: inline-block;
   flex: 0 0 auto;
   border-radius: var(--pill);
@@ -1010,8 +1011,8 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
   position: absolute;
   left: 2px;
   top: 2px;
-  width: 28px;
-  height: 28px;
+  width: calc(100% - 4px - max(16px, calc(24px * var(--toolbar-display-scale, 1))));
+  height: calc(100% - 4px);
   border-radius: 50%;
   background: #fff;
   box-shadow: 0 3px 8px rgba(47,41,51,.22);
@@ -1033,7 +1034,7 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
   color: transparent;
 }
 .toolbar .switch-btn.active i::before {
-  transform: translateX(24px);
+  transform: translateX(max(16px, calc(24px * var(--toolbar-display-scale, 1))));
 }
 
 .settings-backdrop {

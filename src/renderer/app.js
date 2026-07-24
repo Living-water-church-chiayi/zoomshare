@@ -35,7 +35,22 @@ let flowWheelDelta = 0;
 let flowWheelGestureLocked = false;
 let flowWheelResetTimer = null;
 let worshipRequestToken = 0;
+let worshipSeeking = false;
+let worshipSeekResumeAfterCommit = false;
+let worshipSeekCommitToken = 0;
+let worshipSeekPreviewTimer = null;
+let worshipSeekPreviewInFlight = false;
+let worshipSeekPreviewPosition = null;
+let currentWorshipAudioSrc = '';
+let worshipPlaybackDesired = false;
+let worshipPlaybackRecoveryTimer = null;
+let worshipPlaybackRecoveryInFlight = false;
+let lastWorshipNativeAudioLoadAt = 0;
+let lastWorshipNativeAudioLoadPosition = null;
+let worshipNativeAudioLoadInFlightPosition = null;
 const FLOW_ORDER = ['cover', 'worship', 'scripture', 'utmost'];
+const COVER_LAYOUT_WIDTH = 1280;
+const COVER_LAYOUT_HEIGHT = 720;
 const FLOW_LAYOUT_WIDTH = 405;
 const FLOW_LAYOUT_HEIGHT = 720;
 const FLOW_MIN_CONTROL_SIZE = 44;
@@ -43,6 +58,15 @@ const FLOW_MIN_ICON_SIZE = 19;
 const UTMOST_FINISH_CONFIRM_MS = 3500;
 const FLOW_WHEEL_THRESHOLD = 36;
 const FLOW_WHEEL_IDLE_MS = 300;
+const MAIN_TOOLBAR_HOTZONE_RATIO = 0.16;
+const MAIN_TOOLBAR_HOTZONE_MIN = 72;
+const MAIN_TOOLBAR_HOTZONE_MAX = 150;
+const MAIN_TOOLBAR_SCALE_MIN = 0.5;
+const MAIN_TOOLBAR_SCALE_MAX = 1.25;
+const WORSHIP_SEEK_PREVIEW_MS = 120;
+const WORSHIP_PLAYBACK_RECOVERY_DELAY_MS = 180;
+const WORSHIP_RECENT_NATIVE_AUDIO_LOAD_MS = 700;
+const WORSHIP_RECENT_NATIVE_AUDIO_POSITION_TOLERANCE = 1.5;
 
 // ---------- 工具 ----------
 function toast(msg, ms = 2200) {
@@ -62,6 +86,44 @@ async function nativeAudioCommand(channel, action, options = {}) {
 function sendNativeAudio(channel, action, options = {}) {
   if (!USE_NATIVE_MAC_AUDIO) return;
   nativeAudioCommand(channel, action, options).catch(() => {});
+}
+
+function markWorshipNativeAudioLoaded(position) {
+  if (!USE_NATIVE_MAC_AUDIO) return;
+  lastWorshipNativeAudioLoadAt = Date.now();
+  lastWorshipNativeAudioLoadPosition = Math.max(0, Number(position) || 0);
+}
+
+function markWorshipNativeAudioUnloaded() {
+  lastWorshipNativeAudioLoadAt = 0;
+  lastWorshipNativeAudioLoadPosition = null;
+}
+
+function stopNativeWorshipAudio() {
+  markWorshipNativeAudioUnloaded();
+  sendNativeAudio('worship', 'stop');
+}
+
+function clearWorshipPlaybackRecovery() {
+  if (worshipPlaybackRecoveryTimer) clearTimeout(worshipPlaybackRecoveryTimer);
+  worshipPlaybackRecoveryTimer = null;
+}
+
+function setWorshipPlaybackDesired(desired) {
+  worshipPlaybackDesired = !!desired;
+  if (!worshipPlaybackDesired) clearWorshipPlaybackRecovery();
+}
+
+function recentlyLoadedWorshipNativeAudio(position) {
+  if (!USE_NATIVE_MAC_AUDIO) return false;
+  if (
+    worshipNativeAudioLoadInFlightPosition !== null &&
+    Math.abs((Number(position) || 0) - worshipNativeAudioLoadInFlightPosition) <= WORSHIP_RECENT_NATIVE_AUDIO_POSITION_TOLERANCE
+  ) return true;
+  if (!lastWorshipNativeAudioLoadAt || lastWorshipNativeAudioLoadPosition === null) return false;
+  const elapsed = Date.now() - lastWorshipNativeAudioLoadAt;
+  if (elapsed < 0 || elapsed > WORSHIP_RECENT_NATIVE_AUDIO_LOAD_MS) return false;
+  return Math.abs((Number(position) || 0) - lastWorshipNativeAudioLoadPosition) <= WORSHIP_RECENT_NATIVE_AUDIO_POSITION_TOLERANCE;
 }
 
 function stopNativeMusic() {
@@ -1196,9 +1258,14 @@ function setFlowVisible(visible) {
 
 function updateFlowDisplayScale() {
   const screen = $('flowScreen');
-  if (!screen) return 1;
   const viewportWidth = Math.max(1, Number(window.innerWidth) || FLOW_LAYOUT_WIDTH);
   const viewportHeight = Math.max(1, Number(window.innerHeight) || FLOW_LAYOUT_HEIGHT);
+  const toolbarScale = Math.max(MAIN_TOOLBAR_SCALE_MIN, Math.min(
+    MAIN_TOOLBAR_SCALE_MAX,
+    Math.min(viewportWidth / COVER_LAYOUT_WIDTH, viewportHeight / COVER_LAYOUT_HEIGHT)
+  ));
+  document.documentElement.style.setProperty('--toolbar-display-scale', toolbarScale.toFixed(6));
+  if (!screen) return 1;
   const scale = Math.max(0.01, Math.min(
     viewportWidth / FLOW_LAYOUT_WIDTH,
     viewportHeight / FLOW_LAYOUT_HEIGHT
@@ -1755,9 +1822,10 @@ function handleReadingPointerActivity() {
   return true;
 }
 
-function handleWindowPointerActivity() {
+function handleWindowPointerActivity(detail) {
   if (handleReadingPointerActivity()) return true;
   if (!isMainCover()) return false;
+  if (!shouldRevealCoverToolbarFromPointer(detail)) return false;
   showToolbar();
   return true;
 }
@@ -2284,29 +2352,27 @@ async function startWorship() {
 // 明確 load 後播放；首次失敗會重試一次，再提示使用者手動播放。
 function playWorshipVideo(src, audioSrc, retried, requestToken = worshipRequestToken) {
   const video = $('worshipVideo');
+  currentWorshipAudioSrc = normalizeMediaUrl(audioSrc);
   if (worshipPlayRetryTimer) clearTimeout(worshipPlayRetryTimer);
   worshipPlayRetryTimer = null;
+  setWorshipPlaybackDesired(false);
   video.pause();
-  sendNativeAudio('worship', 'stop');
+  stopNativeWorshipAudio();
   video.src = src;
   video.load();
   video.volume = 1;
   video.muted = USE_NATIVE_MAC_AUDIO;
+  setWorshipPlaybackDesired(true);
   Promise.all([
     video.play(),
-    nativeAudioCommand('worship', 'load', {
-      source: normalizeMediaUrl(audioSrc),
-      loop: false,
-      autoplay: true,
-      position: 0,
-      volume: 1
-    })
+    loadNativeWorshipAudio(0, true)
   ]).then(([, nativeResult]) => {
     if (!nativeResult.ok) throw new Error(nativeResult.error || 'macOS 原生音訊播放器無法啟動');
     if (requestToken !== worshipRequestToken || !worshipActive) return;
     $('worshipLoading').classList.add('hidden');
   }).catch((error) => {
-    sendNativeAudio('worship', 'stop');
+    setWorshipPlaybackDesired(false);
+    stopNativeWorshipAudio();
     if (requestToken !== worshipRequestToken || !worshipActive) return;
     if (!retried && worshipActive && requestToken === worshipRequestToken) {
       worshipPlayRetryTimer = setTimeout(() => playWorshipVideo(src, audioSrc, true, requestToken), 300);
@@ -2321,21 +2387,45 @@ function playWorshipVideo(src, audioSrc, retried, requestToken = worshipRequestT
   });
 }
 
+async function loadNativeWorshipAudio(position = 0, autoplay = true) {
+  if (!USE_NATIVE_MAC_AUDIO) return { ok: true, native: false };
+  if (!currentWorshipAudioSrc) return { ok: false, error: '找不到敬拜音訊檔案' };
+  const pendingPosition = Math.max(0, Number(position) || 0);
+  worshipNativeAudioLoadInFlightPosition = pendingPosition;
+  try {
+    const result = await nativeAudioCommand('worship', 'load', {
+      source: currentWorshipAudioSrc,
+      loop: false,
+      autoplay,
+      position,
+      volume: 1
+    });
+    if (result && result.ok) markWorshipNativeAudioLoaded(position);
+    return result;
+  } finally {
+    if (worshipNativeAudioLoadInFlightPosition === pendingPosition) {
+      worshipNativeAudioLoadInFlightPosition = null;
+    }
+  }
+}
+
 async function resumeWorshipPlayback(video) {
+  setWorshipPlaybackDesired(true);
   await video.play();
-  const seekResult = await nativeAudioCommand('worship', 'seek', { position: video.currentTime || 0 });
-  if (!seekResult.ok) throw new Error(seekResult.error || 'macOS 原生音訊播放器無法定位');
-  const playResult = await nativeAudioCommand('worship', 'play');
-  if (!playResult.ok) throw new Error(playResult.error || 'macOS 原生音訊播放器無法播放');
+  const nativeResult = await loadNativeWorshipAudio(video.currentTime || 0, true);
+  if (!nativeResult.ok) throw new Error(nativeResult.error || 'macOS 原生音訊播放器無法播放');
 }
 
 function stopWorshipPlayback() {
   worshipRequestToken++;
+  setWorshipPlaybackDesired(false);
+  resetWorshipSeekState();
   if (worshipPlayRetryTimer) clearTimeout(worshipPlayRetryTimer);
   worshipPlayRetryTimer = null;
   const video = $('worshipVideo');
   video.pause();
-  sendNativeAudio('worship', 'stop');
+  stopNativeWorshipAudio();
+  currentWorshipAudioSrc = '';
   video.removeAttribute('src');
   video.load();
   worshipControlsHovered = false;
@@ -2391,6 +2481,16 @@ function isEditableFlowNavigationTarget(target) {
     target &&
     typeof target.closest === 'function' &&
     target.closest('[contenteditable="true"], [role="textbox"], [role="slider"]')
+  );
+}
+
+function isWorshipSeekTarget(target) {
+  return Boolean(
+    target &&
+    (
+      target.id === 'wSeek' ||
+      (typeof target.closest === 'function' && target.closest('#wSeek'))
+    )
   );
 }
 
@@ -2454,13 +2554,26 @@ function handleFlowArrowNavigation(event) {
     event.metaKey ||
     event.shiftKey
   ) return false;
+  if (
+    !$('settingsPanel').classList.contains('hidden') ||
+    flowTransitioning ||
+    flowLoading
+  ) return false;
+  if (event.key === 'ArrowRight' && flowStep === 'cover' && !worshipActive && $('flowScreen').classList.contains('hidden')) {
+    if (isEditableFlowNavigationTarget(event.target)) return false;
+    event.preventDefault();
+    nextFlowStep();
+    return true;
+  }
+  if (event.key === 'ArrowRight' && worshipActive) {
+    event.preventDefault();
+    backToCover({ nextAfterWorship: true });
+    return true;
+  }
   if (flowStep !== 'scripture' && flowStep !== 'utmost') return false;
   if (
     $('flowScreen').classList.contains('hidden') ||
-    !$('settingsPanel').classList.contains('hidden') ||
     worshipActive ||
-    flowTransitioning ||
-    flowLoading ||
     isEditableFlowNavigationTarget(event.target)
   ) return false;
 
@@ -2471,6 +2584,33 @@ function handleFlowArrowNavigation(event) {
     return true;
   } else {
     prevFlowPageOrStep();
+  }
+  return true;
+}
+
+function handleSpacePlaybackToggle(event) {
+  if (!event || event.code !== 'Space' || flowStep === 'end') return false;
+  if (!$('settingsPanel').classList.contains('hidden')) return false;
+  const tag = event.target && event.target.tagName;
+  if (!worshipActive && (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT')) return false;
+  if (worshipActive && tag && (tag === 'TEXTAREA' || tag === 'SELECT')) return false;
+  if (worshipActive && tag === 'INPUT' && !isWorshipSeekTarget(event.target)) return false;
+
+  event.preventDefault();
+  if (worshipActive) {
+    const v = $('worshipVideo');
+    if (v.paused) {
+      resumeWorshipPlayback(v).catch((error) => {
+        $('worshipLoading').textContent = '播放失敗，請稍後再試';
+        $('worshipLoading').classList.remove('hidden');
+        toast('影片播放失敗：' + error.message, 3200);
+      });
+    } else {
+      setWorshipPlaybackDesired(false);
+      v.pause();
+    }
+  } else {
+    toggleMusicPlayPause();
   }
   return true;
 }
@@ -2521,9 +2661,32 @@ function setupDragDrop() {
 
 // ---------- 自動顯示與隱藏工具列 ----------
 let hideTimer = null;
+let mainToolbarHovered = false;
 let worshipControlsHovered = false;
-const MAIN_TOOLBAR_HIDE_MS = 2200;
+const MAIN_TOOLBAR_HIDE_MS = 1000;
 const WORSHIP_CONTROLS_HIDE_MS = 1000;
+
+function pointerCoordinate(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function coverToolbarHotzoneHeight(viewportHeight = window.innerHeight) {
+  const height = Math.max(1, Number(viewportHeight) || 1);
+  return Math.max(
+    MAIN_TOOLBAR_HOTZONE_MIN,
+    Math.min(MAIN_TOOLBAR_HOTZONE_MAX, height * MAIN_TOOLBAR_HOTZONE_RATIO)
+  );
+}
+
+function shouldRevealCoverToolbarFromPointer(event) {
+  const toolbar = $('toolbar');
+  const target = event && event.target;
+  if (toolbar && target && typeof toolbar.contains === 'function' && toolbar.contains(target)) return true;
+  const viewportHeight = Math.max(1, Number((event && event.height) || window.innerHeight) || 1);
+  const pointerY = pointerCoordinate(event && (event.clientY ?? event.y), viewportHeight + 1);
+  return pointerY >= viewportHeight - coverToolbarHotzoneHeight(viewportHeight);
+}
 
 function showToolbar() {
   if (!worshipActive && !$('flowScreen').classList.contains('hidden')) {
@@ -2541,6 +2704,7 @@ function showToolbar() {
   hideTimer = setTimeout(() => {
     hideTimer = null;
     if (!$('settingsPanel').classList.contains('hidden')) return;
+    if (!worshipActive && mainToolbarHovered) return;
     if (worshipActive && worshipControlsHovered) return;
     $('toolbar').classList.remove('show');
     $('worshipControls').classList.remove('show');
@@ -2550,7 +2714,7 @@ function showToolbar() {
 
 function handleToolbarPointerMove(event) {
   if (!worshipActive) {
-    showToolbar();
+    if (shouldRevealCoverToolbarFromPointer(event)) showToolbar();
     return;
   }
   const controls = $('worshipControls');
@@ -2589,6 +2753,166 @@ function setWorshipReturnButton(nextToScripture) {
     : '<span>回封面</span>';
 }
 
+function resetWorshipSeekState() {
+  worshipSeekCommitToken++;
+  clearWorshipSeekPreview();
+  worshipSeeking = false;
+  worshipSeekResumeAfterCommit = false;
+}
+
+function clearWorshipSeekPreview() {
+  if (worshipSeekPreviewTimer) clearTimeout(worshipSeekPreviewTimer);
+  worshipSeekPreviewTimer = null;
+  worshipSeekPreviewPosition = null;
+}
+
+async function recoverWorshipPlayback(reason = '') {
+  clearWorshipPlaybackRecovery();
+  if (!USE_NATIVE_MAC_AUDIO || !worshipActive || !worshipPlaybackDesired || !currentWorshipAudioSrc) return false;
+  if (worshipPlaybackRecoveryInFlight) return true;
+  worshipPlaybackRecoveryInFlight = true;
+  const recoveryToken = worshipRequestToken;
+  try {
+    const video = $('worshipVideo');
+    if (!video) return false;
+    if (video.paused) await video.play();
+    if (
+      recoveryToken !== worshipRequestToken ||
+      !worshipActive ||
+      !worshipPlaybackDesired ||
+      worshipSeeking
+    ) return false;
+    const position = Math.max(0, Number(video.currentTime) || 0);
+    if (!recentlyLoadedWorshipNativeAudio(position)) {
+      const nativeResult = await loadNativeWorshipAudio(position, true);
+      if (!nativeResult.ok) throw new Error(nativeResult.error || 'macOS 原生音訊播放器無法播放');
+    }
+    if (reason && window && window.console && typeof window.console.debug === 'function') {
+      window.console.debug('[worship-audio] recovered playback after ' + reason);
+    }
+    $('worshipLoading').classList.add('hidden');
+    setWorshipPlayState(true);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    worshipPlaybackRecoveryInFlight = false;
+  }
+}
+
+function scheduleWorshipPlaybackRecovery(reason = '') {
+  if (!USE_NATIVE_MAC_AUDIO || !worshipActive || !worshipPlaybackDesired || worshipSeeking) return false;
+  if (worshipPlaybackRecoveryTimer || worshipPlaybackRecoveryInFlight) return true;
+  worshipPlaybackRecoveryTimer = setTimeout(() => {
+    recoverWorshipPlayback(reason).catch(() => {});
+  }, WORSHIP_PLAYBACK_RECOVERY_DELAY_MS);
+  return true;
+}
+
+function handleWorshipPlaybackLifecycleWake() {
+  return scheduleWorshipPlaybackRecovery('lifecycle');
+}
+
+function worshipSeekPosition(video, seek) {
+  if (!video || !seek || !video.duration || !Number.isFinite(video.duration)) return null;
+  const ratio = Math.max(0, Math.min(1000, Number.parseFloat(seek.value) || 0)) / 1000;
+  return ratio * video.duration;
+}
+
+function beginWorshipSeek(video) {
+  if (!worshipActive || !video) return false;
+  worshipSeeking = true;
+  worshipSeekResumeAfterCommit = worshipSeekResumeAfterCommit || !video.paused;
+  return true;
+}
+
+async function runWorshipSeekPreview() {
+  worshipSeekPreviewTimer = null;
+  if (
+    !USE_NATIVE_MAC_AUDIO ||
+    worshipSeekPreviewInFlight ||
+    !worshipSeeking ||
+    !worshipSeekResumeAfterCommit ||
+    worshipSeekPreviewPosition === null
+  ) return false;
+  const previewToken = worshipSeekCommitToken;
+  const position = worshipSeekPreviewPosition;
+  worshipSeekPreviewInFlight = true;
+  try {
+    const nativeResult = await loadNativeWorshipAudio(position, true);
+    if (!nativeResult.ok) throw new Error(nativeResult.error || 'macOS 原生音訊播放器無法播放');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    worshipSeekPreviewInFlight = false;
+    if (
+      previewToken === worshipSeekCommitToken &&
+      worshipSeeking &&
+      worshipSeekResumeAfterCommit &&
+      worshipSeekPreviewPosition !== null &&
+      Math.abs(worshipSeekPreviewPosition - position) > 0.25
+    ) {
+      worshipSeekPreviewTimer = setTimeout(runWorshipSeekPreview, WORSHIP_SEEK_PREVIEW_MS);
+    }
+  }
+}
+
+function scheduleWorshipSeekPreview(position) {
+  if (!USE_NATIVE_MAC_AUDIO || !worshipSeekResumeAfterCommit || position === null) return false;
+  worshipSeekPreviewPosition = position;
+  if (worshipSeekPreviewTimer || worshipSeekPreviewInFlight) return true;
+  worshipSeekPreviewTimer = setTimeout(runWorshipSeekPreview, WORSHIP_SEEK_PREVIEW_MS);
+  return true;
+}
+
+function updateWorshipSeek(video, seek) {
+  const position = worshipSeekPosition(video, seek);
+  if (position === null) return false;
+  beginWorshipSeek(video);
+  video.currentTime = position;
+  $('wCur').textContent = fmtTime(position);
+  scheduleWorshipSeekPreview(position);
+  return true;
+}
+
+async function commitWorshipSeek(video, seek) {
+  const position = worshipSeekPosition(video, seek);
+  if (position === null) {
+    resetWorshipSeekState();
+    return false;
+  }
+  const shouldResume = worshipSeekResumeAfterCommit || !video.paused;
+  const commitToken = ++worshipSeekCommitToken;
+  clearWorshipSeekPreview();
+  worshipSeeking = true;
+  worshipSeekResumeAfterCommit = shouldResume;
+  setWorshipPlaybackDesired(shouldResume);
+  try {
+    video.currentTime = position;
+    $('wCur').textContent = fmtTime(position);
+    if (USE_NATIVE_MAC_AUDIO) {
+      if (shouldResume) {
+        const nativeResult = await loadNativeWorshipAudio(position, true);
+        if (!nativeResult.ok) throw new Error(nativeResult.error || 'macOS 原生音訊播放器無法播放');
+      } else {
+        stopNativeWorshipAudio();
+      }
+    }
+    if (shouldResume && video.paused) await video.play();
+    if (commitToken === worshipSeekCommitToken) {
+      $('worshipLoading').classList.add('hidden');
+      setWorshipPlayState(shouldResume && !video.paused);
+    }
+    return true;
+  } finally {
+    if (commitToken === worshipSeekCommitToken) {
+      worshipSeeking = false;
+      worshipSeekResumeAfterCommit = false;
+    }
+  }
+}
+
 function setupWorshipControls() {
   const v = $('worshipVideo');
   const seek = $('wSeek');
@@ -2599,11 +2923,27 @@ function setupWorshipControls() {
     if (v.duration) seek.value = String((v.currentTime / v.duration) * 1000);
     $('wCur').textContent = fmtTime(v.currentTime);
   });
-  v.addEventListener('play', () => setWorshipPlayState(true));
-  v.addEventListener('playing', () => $('worshipLoading').classList.add('hidden'));
+  v.addEventListener('play', () => {
+    setWorshipPlayState(true);
+    if (worshipPlaybackDesired) scheduleWorshipPlaybackRecovery('video-play');
+  });
+  v.addEventListener('playing', () => {
+    $('worshipLoading').classList.add('hidden');
+    if (worshipPlaybackDesired) scheduleWorshipPlaybackRecovery('video-playing');
+  });
   v.addEventListener('pause', () => {
+    if (worshipSeeking && worshipSeekResumeAfterCommit) {
+      setWorshipPlayState(true);
+      return;
+    }
+    if (USE_NATIVE_MAC_AUDIO && worshipPlaybackDesired && worshipActive) {
+      setWorshipPlayState(true);
+      scheduleWorshipPlaybackRecovery('video-pause');
+      return;
+    }
     setWorshipPlayState(false);
-    sendNativeAudio('worship', 'pause');
+    if (USE_NATIVE_MAC_AUDIO) stopNativeWorshipAudio();
+    else sendNativeAudio('worship', 'pause');
   });
   v.addEventListener('error', () => {
     if (!worshipActive) return;
@@ -2612,17 +2952,40 @@ function setupWorshipControls() {
     showToolbar();
   });
   v.addEventListener('ended', () => {
-    sendNativeAudio('worship', 'stop');
+    setWorshipPlaybackDesired(false);
+    stopNativeWorshipAudio();
     backToCover({ nextAfterWorship: true });
   });
+  seek.addEventListener('pointerdown', () => { beginWorshipSeek(v); });
+  seek.addEventListener('keydown', (event) => {
+    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) {
+      beginWorshipSeek(v);
+    }
+  });
   seek.addEventListener('input', () => {
-    if (v.duration) {
-      v.currentTime = (parseFloat(seek.value) / 1000) * v.duration;
-      sendNativeAudio('worship', 'seek', { position: v.currentTime });
+    updateWorshipSeek(v, seek);
+  });
+  const finishSeek = () => {
+    commitWorshipSeek(v, seek).catch((e) => {
+      $('worshipLoading').textContent = '播放失敗，請稍後再試';
+      $('worshipLoading').classList.remove('hidden');
+      toast('影片播放失敗：' + e.message, 3200);
+    });
+  };
+  seek.addEventListener('change', finishSeek);
+  seek.addEventListener('pointerup', finishSeek);
+  seek.addEventListener('pointercancel', resetWorshipSeekState);
+  seek.addEventListener('keyup', (event) => {
+    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) {
+      finishSeek();
     }
   });
   $('wPlay').addEventListener('click', async () => {
-    if (!v.paused) { v.pause(); return; }
+    if (!v.paused) {
+      setWorshipPlaybackDesired(false);
+      v.pause();
+      return;
+    }
     try {
       await resumeWorshipPlayback(v);
       $('worshipLoading').classList.add('hidden');
@@ -2651,6 +3014,21 @@ function setupWorshipControls() {
   controls.addEventListener('pointerleave', releaseWorshipChrome);
   back.addEventListener('pointerenter', holdWorshipChrome);
   back.addEventListener('pointerleave', releaseWorshipChrome);
+}
+
+function setupMainToolbarHoverLifecycle() {
+  const toolbar = $('toolbar');
+  if (!toolbar) return;
+  toolbar.addEventListener('pointerenter', () => {
+    mainToolbarHovered = true;
+    clearTimeout(hideTimer);
+    hideTimer = null;
+    if (!worshipActive && isMainCover()) toolbar.classList.add('show');
+  });
+  toolbar.addEventListener('pointerleave', () => {
+    mainToolbarHovered = false;
+    if (!worshipActive && isMainCover()) showToolbar();
+  });
 }
 
 // ---------- 設定面板 ----------
@@ -2981,6 +3359,7 @@ async function init() {
   $('flowScreen').addEventListener('click', () => {
     if (flowStep === 'end') returnToMainCover();
   });
+  setupMainToolbarHoverLifecycle();
   setupFlowFooterReveal();
   setupSettingsTextSelection();
   window.api.onWindowPointerActivity(handleWindowPointerActivity);
@@ -3100,28 +3479,12 @@ async function init() {
   window.addEventListener('wheel', handleFlowWheelNavigation, { passive: false });
   window.addEventListener('keydown', handleFlowArrowNavigation);
   window.addEventListener('keydown', handleEscapeNavigation);
+  window.addEventListener('focus', handleWorshipPlaybackLifecycleWake);
+  window.addEventListener('pageshow', handleWorshipPlaybackLifecycleWake);
+  document.addEventListener('visibilitychange', handleWorshipPlaybackLifecycleWake);
 
   // 空白鍵切換目前可見媒體的播放狀態。
-  window.addEventListener('keydown', (e) => {
-    if (flowStep === 'end') return;
-    if (e.code !== 'Space') return;
-    const tag = e.target && e.target.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-    if (!$('settingsPanel').classList.contains('hidden')) return;
-    e.preventDefault();
-    if (worshipActive) {
-      const v = $('worshipVideo');
-      if (v.paused) {
-        resumeWorshipPlayback(v).catch((error) => {
-          $('worshipLoading').textContent = '播放失敗，請稍後再試';
-          $('worshipLoading').classList.remove('hidden');
-          toast('影片播放失敗：' + error.message, 3200);
-        });
-      } else v.pause();
-    } else {
-      toggleMusicPlayPause();
-    }
-  });
+  window.addEventListener('keydown', handleSpacePlaybackToggle);
   showToolbar();
 
   // 自動日期每分鐘校正一次。

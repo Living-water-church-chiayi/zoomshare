@@ -1,6 +1,6 @@
 ﻿'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, screen, session } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, screen, session, powerSaveBlocker } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = require('fs/promises');
@@ -77,7 +77,8 @@ const DEFAULT_CONFIG = {
   // 開機自動依日期抓取經文的 Google 試算表。
   scheduleEnabled: true,
   scheduleUrl: 'https://docs.google.com/spreadsheets/d/11O0As3DWpT45otcL5T7BadMpPVWcWKAoiZ5OUPocMpA/edit?usp=sharing',
-  skippedVersion: '' // 使用者選擇略過的版本。
+  skippedVersion: '', // 使用者選擇略過的版本。
+  windowBounds: null
 };
 
 // ---------- 二進位工具位置（yt-dlp / deno / ffmpeg） ----------
@@ -1150,6 +1151,17 @@ function boundedInteger(value, fallback, min, max) {
   return Number.isInteger(number) ? Math.min(max, Math.max(min, number)) : fallback;
 }
 
+function sanitizeWindowBounds(value) {
+  if (!isPlainObject(value)) return null;
+  const x = boundedInteger(value.x, NaN, -100_000, 100_000);
+  const y = boundedInteger(value.y, NaN, -100_000, 100_000);
+  const width = boundedInteger(value.width, NaN, 320, 20_000);
+  const height = boundedInteger(value.height, NaN, 240, 20_000);
+  if (![x, y, width, height].every(Number.isFinite)) return null;
+  if (width < height) return null;
+  return { x, y, width, height };
+}
+
 const BACKGROUND_EXTENSIONS = new Set(['.bmp', '.gif', '.jpeg', '.jpg', '.png', '.webp']);
 
 function isSafeBackgroundFileName(fileName) {
@@ -1228,7 +1240,8 @@ function sanitizeConfig(input) {
     zoomUrl: boundedString(value.zoomUrl, DEFAULT_CONFIG.zoomUrl, 4096),
     scheduleEnabled: value.scheduleEnabled !== false,
     scheduleUrl: boundedString(value.scheduleUrl, DEFAULT_CONFIG.scheduleUrl, 4096),
-    skippedVersion: boundedString(value.skippedVersion, '', 64)
+    skippedVersion: boundedString(value.skippedVersion, '', 64),
+    windowBounds: sanitizeWindowBounds(value.windowBounds)
   };
 }
 
@@ -1351,9 +1364,51 @@ async function normalizeNativeAudioCommand(request) {
 
 let nativeAudioCommandQueue = Promise.resolve();
 let nativeAudioCommandGeneration = 0;
+let nativeAudioPowerSaveBlockerId = null;
+const nativeAudioPlaybackIntent = { music: false, worship: false };
+
+function updateNativeAudioPowerSaveBlocker(platform = process.platform, blocker = powerSaveBlocker) {
+  if (platform !== 'darwin') return false;
+  const shouldPreventAppSuspension = nativeAudioPlaybackIntent.music || nativeAudioPlaybackIntent.worship;
+  if (shouldPreventAppSuspension) {
+    if (nativeAudioPowerSaveBlockerId === null && blocker && typeof blocker.start === 'function') {
+      nativeAudioPowerSaveBlockerId = blocker.start('prevent-app-suspension');
+    }
+    return nativeAudioPowerSaveBlockerId !== null;
+  }
+  if (nativeAudioPowerSaveBlockerId !== null && blocker && typeof blocker.stop === 'function') {
+    try { blocker.stop(nativeAudioPowerSaveBlockerId); }
+    catch {}
+  }
+  nativeAudioPowerSaveBlockerId = null;
+  return false;
+}
+
+function updateNativeAudioPlaybackIntent(command, result, platform = process.platform, blocker = powerSaveBlocker) {
+  if (platform !== 'darwin' || !result || result.ok !== true || !command) return false;
+  if (!['music', 'worship'].includes(command.channel)) return false;
+  if (command.action === 'load') {
+    nativeAudioPlaybackIntent[command.channel] = command.autoplay !== false;
+  } else if (command.action === 'play') {
+    nativeAudioPlaybackIntent[command.channel] = true;
+  } else if (command.action === 'pause' || command.action === 'stop') {
+    nativeAudioPlaybackIntent[command.channel] = false;
+  } else {
+    return false;
+  }
+  updateNativeAudioPowerSaveBlocker(platform, blocker);
+  return true;
+}
+
+function resetNativeAudioPlaybackIntent(platform = process.platform, blocker = powerSaveBlocker) {
+  nativeAudioPlaybackIntent.music = false;
+  nativeAudioPlaybackIntent.worship = false;
+  updateNativeAudioPowerSaveBlocker(platform, blocker);
+}
 
 function closeNativeAudio() {
   nativeAudioCommandGeneration++;
+  resetNativeAudioPlaybackIntent();
   nativeMacAudio.close();
 }
 
@@ -1363,7 +1418,9 @@ function enqueueNativeAudioCommand(request) {
     if (generation !== nativeAudioCommandGeneration) return { ok: false, cancelled: true };
     const command = await normalizeNativeAudioCommand(request);
     if (generation !== nativeAudioCommandGeneration) return { ok: false, cancelled: true };
-    return nativeMacAudio.send(command);
+    const sent = nativeMacAudio.send(command);
+    updateNativeAudioPlaybackIntent(command, sent);
+    return sent;
   });
   nativeAudioCommandQueue = result.then(() => undefined, () => undefined);
   return result;
@@ -1439,21 +1496,92 @@ function centeredBounds(area, currentBounds, width, height) {
   };
 }
 
+function defaultMainWindowBounds(area) {
+  const margin = Math.max(0, Math.min(40, Math.floor(area.width * 0.05), Math.floor(area.height * 0.05)));
+  const size = fitAspectSize(area.width - margin * 2, area.height - margin * 2, 16 / 9, 1280);
+  return {
+    x: area.x + Math.max(0, Math.floor((area.width - size.width) / 2)),
+    y: area.y + Math.max(0, Math.floor((area.height - size.height) / 2)),
+    ...size
+  };
+}
+
+function restoredMainWindowBounds(savedBounds, fallbackBounds, displayProvider = screen) {
+  const sanitized = sanitizeWindowBounds(savedBounds);
+  if (!sanitized) return fallbackBounds;
+  const display = displayProvider.getDisplayMatching(sanitized);
+  const area = display && display.workArea ? display.workArea : displayProvider.getPrimaryDisplay().workArea;
+  const minWidth = Math.min(640, area.width);
+  const minHeight = Math.min(360, area.height);
+  const maxWidth = Math.max(minWidth, area.width);
+  const maxHeight = Math.max(minHeight, area.height);
+  const size = fitAspectSize(maxWidth, maxHeight, 16 / 9, Math.max(minWidth, sanitized.width));
+  return centeredBounds(area, sanitized, Math.max(minWidth, size.width), Math.max(minHeight, size.height));
+}
+
+const WINDOW_BOUNDS_SAVE_MS = 300;
+let windowBoundsSaveTimer = null;
+let currentMainWindowMode = 'wide';
+let suppressMainWindowBoundsSave = false;
+
+function shouldSaveMainWindowBounds(bounds, mode = currentMainWindowMode) {
+  const sanitized = sanitizeWindowBounds(bounds);
+  return !!sanitized && mode === 'wide';
+}
+
+async function saveMainWindowBounds(bounds) {
+  if (!shouldSaveMainWindowBounds(bounds)) return false;
+  const cfg = await readConfig();
+  cfg.windowBounds = sanitizeWindowBounds(bounds);
+  await writeConfig(cfg);
+  return true;
+}
+
+function scheduleMainWindowBoundsSave() {
+  if (!mainWindow || mainWindow.isDestroyed() || suppressMainWindowBoundsSave) return false;
+  const bounds = mainWindow.getBounds();
+  if (!shouldSaveMainWindowBounds(bounds)) return false;
+  if (windowBoundsSaveTimer) clearTimeout(windowBoundsSaveTimer);
+  windowBoundsSaveTimer = setTimeout(() => {
+    windowBoundsSaveTimer = null;
+    if (!mainWindow || mainWindow.isDestroyed() || suppressMainWindowBoundsSave) return;
+    saveMainWindowBounds(mainWindow.getBounds()).catch((error) => {
+      console.warn('儲存視窗大小失敗：', error.message);
+    });
+  }, WINDOW_BOUNDS_SAVE_MS);
+  return true;
+}
+
+function setMainWindowBoundsSafely(bounds, animate = process.platform === 'darwin') {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  suppressMainWindowBoundsSave = true;
+  try {
+    mainWindow.setBounds(bounds, animate);
+  } finally {
+    setTimeout(() => { suppressMainWindowBoundsSave = false; }, 120);
+  }
+}
+
 function setWindowMode(mode) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (mode !== 'mobile' && mode !== 'wide') throw new Error('視窗模式必須是 mobile 或 wide');
   const bounds = mainWindow.getBounds();
   const area = screen.getDisplayMatching(bounds).workArea;
   if (mode === 'mobile') {
-    if (bounds.width > bounds.height) lastWideBounds = bounds;
+    if (bounds.width > bounds.height) {
+      lastWideBounds = bounds;
+      saveMainWindowBounds(bounds).catch((error) => console.warn('儲存視窗大小失敗：', error.message));
+    }
+    currentMainWindowMode = 'mobile';
     const size = fitAspectSize(area.width, area.height, 9 / 16, Math.round(area.height * 9 / 16));
     mainWindow.setMinimumSize(1, 1);
     mainWindow.setAspectRatio(9 / 16);
-    mainWindow.setBounds(centeredBounds(area, bounds, size.width, size.height), process.platform === 'darwin');
+    setMainWindowBoundsSafely(centeredBounds(area, bounds, size.width, size.height));
     mainWindow.setMinimumSize(Math.min(320, size.width), Math.min(560, size.height));
     return;
   }
 
+  currentMainWindowMode = 'wide';
   const margin = Math.max(0, Math.min(40, Math.floor(area.width * 0.05), Math.floor(area.height * 0.05)));
   const maxWidth = Math.max(1, area.width - margin * 2);
   const maxHeight = Math.max(1, area.height - margin * 2);
@@ -1461,7 +1589,7 @@ function setWindowMode(mode) {
   const size = fitAspectSize(maxWidth, maxHeight, 16 / 9, preferredWidth);
   mainWindow.setMinimumSize(1, 1);
   mainWindow.setAspectRatio(16 / 9);
-  mainWindow.setBounds(centeredBounds(area, bounds, size.width, size.height), process.platform === 'darwin');
+  setMainWindowBoundsSafely(centeredBounds(area, bounds, size.width, size.height));
   mainWindow.setMinimumSize(Math.min(640, size.width), Math.min(360, size.height));
 }
 
@@ -1475,7 +1603,8 @@ function registerIpc() {
     let serialized;
     try { serialized = JSON.stringify(cfg); } catch { throw new Error('設定格式不正確'); }
     if (Buffer.byteLength(serialized, 'utf8') > 512 * 1024) throw new Error('設定內容過大');
-    await writeConfig(cfg);
+    const current = await readConfig();
+    await writeConfig({ ...cfg, windowBounds: current.windowBounds });
     sendHostScriptureConfig(await readConfig());
     return { ok: true };
   });
@@ -1659,13 +1788,24 @@ function pointInsideBounds(point, bounds) {
     point.y >= bounds.y && point.y < bounds.y + bounds.height;
 }
 
+function mainWindowPointerPayload(point, bounds) {
+  return {
+    x: point.x - bounds.x,
+    y: point.y - bounds.y,
+    width: bounds.width,
+    height: bounds.height
+  };
+}
+
 function pollMainWindowPointer() {
   if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
   const point = screen.getCursorScreenPoint();
   const moved = !lastPointerPoint || point.x !== lastPointerPoint.x || point.y !== lastPointerPoint.y;
   lastPointerPoint = point;
-  if (moved && pointInsideBounds(point, mainWindow.getBounds())) {
-    mainWindow.webContents.send('win:pointer-activity');
+  const bounds = mainWindow.getBounds();
+  if (moved && pointInsideBounds(point, bounds)) {
+    const payload = mainWindowPointerPayload(point, bounds);
+    mainWindow.webContents.send('win:pointer-activity', payload);
   }
 }
 
@@ -1690,7 +1830,7 @@ function configureRendererPermissions(ses) {
 
 app.on('second-instance', () => {
   if (!mainWindow || mainWindow.isDestroyed()) {
-    if (app.isReady()) createWindow();
+    if (app.isReady()) createWindow().catch((error) => console.error('建立主視窗失敗：', error));
     return;
   }
   if (mainWindow.isMinimized()) mainWindow.restore();
@@ -1698,27 +1838,27 @@ app.on('second-instance', () => {
   mainWindow.focus();
 });
 
-function createWindow() {
+async function createWindow() {
   const area = screen.getPrimaryDisplay().workArea;
-  const margin = Math.max(0, Math.min(40, Math.floor(area.width * 0.05), Math.floor(area.height * 0.05)));
-  const size = fitAspectSize(area.width - margin * 2, area.height - margin * 2, 16 / 9, 1280);
-  const initialBounds = {
-    x: area.x + Math.max(0, Math.floor((area.width - size.width) / 2)),
-    y: area.y + Math.max(0, Math.floor((area.height - size.height) / 2)),
-    ...size
-  };
+  const cfg = await readConfig();
+  const fallbackBounds = defaultMainWindowBounds(area);
+  const initialBounds = restoredMainWindowBounds(cfg.windowBounds, fallbackBounds);
   const window = new BrowserWindow({
     ...initialBounds,
-    minWidth: Math.min(640, size.width), minHeight: Math.min(360, size.height),
+    minWidth: Math.min(640, initialBounds.width), minHeight: Math.min(360, initialBounds.height),
     backgroundColor: '#000000', title: '靈修封面', autoHideMenuBar: true,
     icon: APP_ICON_PATH,
     frame: false,
+    acceptFirstMouse: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true, nodeIntegration: false, sandbox: true
+      contextIsolation: true, nodeIntegration: false, sandbox: true,
+      backgroundThrottling: false
     }
   });
   mainWindow = window;
+  currentMainWindowMode = 'wide';
+  lastWideBounds = initialBounds;
   startMainWindowPointerMonitor();
   window.setAspectRatio(16 / 9);
   window.removeMenu();
@@ -1750,6 +1890,19 @@ function createWindow() {
   });
 
   window.webContents.once('did-finish-load', () => { checkLatestVersion(); });
+  window.on('resize', scheduleMainWindowBoundsSave);
+  window.on('move', scheduleMainWindowBoundsSave);
+  window.on('close', () => {
+    if (windowBoundsSaveTimer) clearTimeout(windowBoundsSaveTimer);
+    windowBoundsSaveTimer = null;
+    if (currentMainWindowMode === 'wide' && !window.isDestroyed()) {
+      const bounds = window.getBounds();
+      if (shouldSaveMainWindowBounds(bounds)) {
+        lastWideBounds = bounds;
+        saveMainWindowBounds(bounds).catch((error) => console.warn('儲存視窗大小失敗：', error.message));
+      }
+    }
+  });
   window.on('closed', () => {
     stopMainWindowPointerMonitor();
     closeNativeAudio();
@@ -1881,7 +2034,7 @@ app.whenReady().then(async () => {
   registerIpc();
   presenceManager.on('state', sendPresenceState);
   await ensureWritableYtDlp();
-  createWindow();
+  await createWindow();
   presenceManager.start().catch((error) => console.warn('啟動主持台即時連線失敗：', error.message));
   setupAutoUpdater();
   autoUpdateYtDlp().then((r) => { if (r && r.updated) console.log('yt-dlp 已更新至', r.to); });
@@ -1892,7 +2045,11 @@ app.whenReady().then(async () => {
     });
   });
   if (app.isPackaged && process.platform !== 'darwin') autoUpdater.checkForUpdates().catch(() => {});
-  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow().catch((error) => console.error('建立主視窗失敗：', error));
+    }
+  });
 });
 app.on('before-quit', () => {
   closeNativeAudio();

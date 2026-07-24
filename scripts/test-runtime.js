@@ -241,6 +241,7 @@ test('serializes native audio commands while an earlier load is being validated'
         if (request.action === 'load') await loadGate;
         return request;
       },
+      updateNativeAudioPlaybackIntent: () => {},
       nativeMacAudio: { send(command) { sent.push(command.action); return { ok: true }; } }
     }
   );
@@ -269,6 +270,8 @@ test('does not revive a validating native load after the window closes', async (
         await loadGate;
         return request;
       },
+      updateNativeAudioPlaybackIntent: () => {},
+      resetNativeAudioPlaybackIntent: () => {},
       nativeMacAudio: {
         send(command) { sent.push(command.action); return { ok: true }; },
         close() { closes++; }
@@ -285,6 +288,59 @@ test('does not revive a validating native load after the window closes', async (
   assert.equal(closes, 1);
 });
 
+test('uses a macOS power-save blocker only while native audio is intended to play', () => {
+  const calls = [];
+  const blocker = {
+    start(type) {
+      calls.push(`start:${type}`);
+      return 42;
+    },
+    stop(id) {
+      calls.push(`stop:${id}`);
+    }
+  };
+  const { updateNativeAudioPlaybackIntent, resetNativeAudioPlaybackIntent } = loadFunctions(
+    mainSource,
+    ['updateNativeAudioPowerSaveBlocker', 'updateNativeAudioPlaybackIntent', 'resetNativeAudioPlaybackIntent'],
+    {
+      process: { platform: 'darwin' },
+      powerSaveBlocker: blocker,
+      nativeAudioPlaybackIntent: { music: false, worship: false },
+      nativeAudioPowerSaveBlockerId: null
+    }
+  );
+
+  assert.equal(updateNativeAudioPlaybackIntent({ channel: 'worship', action: 'load', autoplay: true }, { ok: true }, 'darwin', blocker), true);
+  assert.deepEqual(calls, ['start:prevent-app-suspension']);
+  assert.equal(updateNativeAudioPlaybackIntent({ channel: 'music', action: 'load', autoplay: true }, { ok: true }, 'darwin', blocker), true);
+  assert.deepEqual(calls, ['start:prevent-app-suspension']);
+  assert.equal(updateNativeAudioPlaybackIntent({ channel: 'worship', action: 'stop' }, { ok: true }, 'darwin', blocker), true);
+  assert.deepEqual(calls, ['start:prevent-app-suspension']);
+  resetNativeAudioPlaybackIntent('darwin', blocker);
+  assert.deepEqual(calls, ['start:prevent-app-suspension', 'stop:42']);
+});
+
+test('does not start the native audio power-save blocker on Windows', () => {
+  const calls = [];
+  const blocker = {
+    start() { calls.push('start'); return 1; },
+    stop() { calls.push('stop'); }
+  };
+  const { updateNativeAudioPlaybackIntent } = loadFunctions(
+    mainSource,
+    ['updateNativeAudioPowerSaveBlocker', 'updateNativeAudioPlaybackIntent'],
+    {
+      process: { platform: 'win32' },
+      powerSaveBlocker: blocker,
+      nativeAudioPlaybackIntent: { music: false, worship: false },
+      nativeAudioPowerSaveBlockerId: null
+    }
+  );
+
+  assert.equal(updateNativeAudioPlaybackIntent({ channel: 'worship', action: 'load', autoplay: true }, { ok: true }, 'win32', blocker), false);
+  assert.deepEqual(calls, []);
+});
+
 test('reports pointer movement over the main window without resizing it', () => {
   const cursorPoints = [
     { x: 150, y: 250 },
@@ -296,16 +352,17 @@ test('reports pointer movement over the main window without resizing it', () => 
   const fakeWindow = {
     isDestroyed: () => false,
     getBounds: () => ({ x: 100, y: 200, width: 405, height: 720 }),
+    focus: () => assert.fail('pointer hover must not activate the window'),
     setBounds: () => assert.fail('pointer observation resized the reading window'),
     setPosition: () => assert.fail('pointer observation manually moved the reading window'),
     webContents: {
       isDestroyed: () => false,
-      send: (channel) => messages.push(channel)
+      send: (channel, payload) => messages.push({ channel, payload })
     }
   };
   const functions = loadFunctions(
     mainSource,
-    ['pointInsideBounds', 'pollMainWindowPointer'],
+    ['pointInsideBounds', 'mainWindowPointerPayload', 'pollMainWindowPointer'],
     {
       mainWindow: fakeWindow,
       lastPointerPoint: null,
@@ -317,7 +374,41 @@ test('reports pointer movement over the main window without resizing it', () => 
   functions.pollMainWindowPointer();
   functions.pollMainWindowPointer();
   functions.pollMainWindowPointer();
-  assert.deepEqual(messages, ['win:pointer-activity', 'win:pointer-activity']);
+  assert.deepEqual(plain(messages), [
+    { channel: 'win:pointer-activity', payload: { x: 50, y: 50, width: 405, height: 720 } },
+    { channel: 'win:pointer-activity', payload: { x: 51, y: 50, width: 405, height: 720 } }
+  ]);
+});
+
+test('persists only wide main-window bounds and restores them on startup', () => {
+  const displayProvider = {
+    getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 1440, height: 900 } }),
+    getPrimaryDisplay: () => ({ workArea: { x: 0, y: 0, width: 1440, height: 900 } })
+  };
+  const {
+    sanitizeWindowBounds,
+    fitAspectSize,
+    centeredBounds,
+    restoredMainWindowBounds,
+    shouldSaveMainWindowBounds
+  } = loadFunctions(
+    mainSource,
+    ['isPlainObject', 'boundedInteger', 'sanitizeWindowBounds', 'fitAspectSize', 'centeredBounds', 'restoredMainWindowBounds', 'shouldSaveMainWindowBounds'],
+    {
+      screen: displayProvider,
+      currentMainWindowMode: 'wide'
+    }
+  );
+  const saved = { x: 50, y: 60, width: 1000, height: 563 };
+  const fallback = { x: 80, y: 90, width: 1280, height: 720 };
+
+  assert.deepEqual(plain(sanitizeWindowBounds(saved)), saved);
+  assert.equal(sanitizeWindowBounds({ x: 50, y: 60, width: 360, height: 640 }), null);
+  assert.deepEqual(plain(restoredMainWindowBounds(saved, fallback, displayProvider)), saved);
+  assert.deepEqual(plain(restoredMainWindowBounds({ x: 50, y: 60, width: 360, height: 640 }, fallback, displayProvider)), fallback);
+  assert.equal(shouldSaveMainWindowBounds(saved, 'wide'), true);
+  assert.equal(shouldSaveMainWindowBounds(saved, 'mobile'), false);
+  assert.equal(shouldSaveMainWindowBounds({ x: 50, y: 60, width: 360, height: 640 }, 'wide'), false);
 });
 
 test('reveals reading navigation from pointer activity across a native drag region', () => {
@@ -346,19 +437,26 @@ test('reveals reading navigation from pointer activity across a native drag regi
   assert.deepEqual(calls, ['reveal', 'schedule']);
 });
 
-test('reveals the cover toolbar from native pointer activity while the window is inactive', () => {
+test('reveals the cover toolbar from native pointer activity only in the bottom hotzone', () => {
   const calls = [];
   const { handleWindowPointerActivity } = loadFunctions(
     rendererSource,
-    ['handleWindowPointerActivity'],
+    ['pointerCoordinate', 'coverToolbarHotzoneHeight', 'shouldRevealCoverToolbarFromPointer', 'handleWindowPointerActivity'],
     {
+      $: () => ({ contains: () => false }),
+      window: { innerHeight: 720 },
+      MAIN_TOOLBAR_HOTZONE_RATIO: 0.16,
+      MAIN_TOOLBAR_HOTZONE_MIN: 72,
+      MAIN_TOOLBAR_HOTZONE_MAX: 150,
       handleReadingPointerActivity: () => false,
       isMainCover: () => true,
       showToolbar: () => calls.push('toolbar')
     }
   );
 
-  assert.equal(handleWindowPointerActivity(), true);
+  assert.equal(handleWindowPointerActivity({ y: 360, height: 720 }), false);
+  assert.deepEqual(calls, []);
+  assert.equal(handleWindowPointerActivity({ y: 650, height: 720 }), true);
   assert.deepEqual(calls, ['toolbar']);
 });
 
@@ -573,10 +671,13 @@ test('advances directly to Scripture when the worship video finishes', () => {
     fmtTime: () => '0:00',
     setWorshipPlayState: () => {},
     sendNativeAudio: () => {},
+    setWorshipPlaybackDesired: () => {},
+    stopNativeWorshipAudio: () => {},
     backToCover: (options) => returns.push(plain(options)),
     toast: () => {},
     clearTimeout: () => {},
     showToolbar: () => {},
+    resetWorshipSeekState: () => {},
     worshipActive: true,
     worshipControlsHovered: false,
     hideTimer: null
@@ -585,6 +686,275 @@ test('advances directly to Scripture when the worship video finishes', () => {
   setupWorshipControls();
   videoListeners.ended();
   assert.deepEqual(returns, [{ nextAfterWorship: true }]);
+});
+
+test('previews Mac worship audio near the dragged seek position without queueing every input', async () => {
+  const calls = [];
+  const timers = [];
+  const elements = { wCur: { textContent: '' } };
+  const video = { duration: 120, currentTime: 0, paused: false };
+  const seek = { value: '250' };
+  const { updateWorshipSeek } = loadFunctions(
+    rendererSource,
+    [
+      'loadNativeWorshipAudio',
+      'worshipSeekPosition',
+      'beginWorshipSeek',
+      'runWorshipSeekPreview',
+      'scheduleWorshipSeekPreview',
+      'updateWorshipSeek'
+    ],
+    {
+      $: (id) => elements[id],
+      fmtTime: (value) => `${value}`,
+      nativeAudioCommand: async (channel, action, payload) => {
+        calls.push(`${channel}:${action}:${payload ? payload.position ?? '' : ''}`);
+        return { ok: true };
+      },
+      markWorshipNativeAudioLoaded: () => {},
+      setTimeout: (handler, delay) => {
+        timers.push({ handler, delay });
+        return timers.length;
+      },
+      USE_NATIVE_MAC_AUDIO: true,
+      WORSHIP_SEEK_PREVIEW_MS: 120,
+      currentWorshipAudioSrc: 'file:///cache/worship.m4a',
+      worshipActive: true,
+      worshipSeeking: false,
+      worshipNativeAudioLoadInFlightPosition: null,
+      worshipSeekResumeAfterCommit: false,
+      worshipSeekCommitToken: 0,
+      worshipSeekPreviewTimer: null,
+      worshipSeekPreviewInFlight: false,
+      worshipSeekPreviewPosition: null
+    }
+  );
+
+  assert.equal(updateWorshipSeek(video, seek), true);
+  assert.equal(video.currentTime, 30);
+  assert.equal(elements.wCur.textContent, '30');
+  assert.equal(timers.length, 1);
+  assert.equal(timers[0].delay, 120);
+  assert.deepEqual(calls, []);
+  await timers[0].handler();
+  assert.deepEqual(calls, ['worship:load:30']);
+});
+
+test('ignores transient video pause while a playing worship seek should resume', () => {
+  const videoListeners = {};
+  const seekListeners = {};
+  const elements = {};
+  const listenerElement = (listeners = {}) => ({
+    addEventListener(type, handler) { listeners[type] = handler; },
+    classList: { add() {}, remove() {}, toggle() {} },
+    setAttribute() {}
+  });
+  elements.worshipVideo = listenerElement(videoListeners);
+  elements.wSeek = listenerElement(seekListeners);
+  elements.wDur = { textContent: '' };
+  elements.wCur = { textContent: '' };
+  elements.worshipLoading = { textContent: '', classList: { add() {}, remove() {} } };
+  elements.wPlay = listenerElement();
+  elements.wBackTop = listenerElement();
+  elements.wReturn = listenerElement();
+  elements.worshipControls = listenerElement();
+  const playStates = [];
+  const commands = [];
+  const { setupWorshipControls } = loadFunctions(rendererSource, ['setupWorshipControls'], {
+    $: (id) => elements[id],
+    fmtTime: () => '0:00',
+    setWorshipPlayState: (playing) => playStates.push(playing),
+    sendNativeAudio: (channel, action) => commands.push(`${channel}:${action}`),
+    backToCover: () => {},
+    toast: () => {},
+    clearTimeout: () => {},
+    showToolbar: () => {},
+    resetWorshipSeekState: () => {},
+    worshipActive: true,
+    worshipSeeking: true,
+    worshipSeekResumeAfterCommit: true,
+    worshipControlsHovered: false,
+    hideTimer: null
+  });
+
+  setupWorshipControls();
+  videoListeners.pause();
+  assert.deepEqual(playStates, [true]);
+  assert.deepEqual(commands, []);
+});
+
+test('commits a Mac worship seek by reloading native audio at the target time', async () => {
+  const calls = [];
+  const elements = {
+    wCur: { textContent: '' },
+    worshipLoading: { classList: { add: (name) => calls.push(`loading:${name}`) } }
+  };
+  const video = {
+    duration: 100,
+    currentTime: 0,
+    paused: true,
+    async play() {
+      calls.push('video:play');
+      this.paused = false;
+    }
+  };
+  const seek = { value: '400' };
+  const playStates = [];
+  const { commitWorshipSeek } = loadFunctions(
+    rendererSource,
+    ['loadNativeWorshipAudio', 'clearWorshipSeekPreview', 'resetWorshipSeekState', 'worshipSeekPosition', 'commitWorshipSeek'],
+    {
+      $: (id) => elements[id],
+      fmtTime: (value) => `${value}`,
+      nativeAudioCommand: async (channel, action, payload) => {
+        calls.push(`${channel}:${action}:${payload ? payload.position ?? '' : ''}`);
+        return { ok: true };
+      },
+      clearTimeout: () => {},
+      markWorshipNativeAudioLoaded: () => {},
+      setWorshipPlaybackDesired: () => {},
+      setWorshipPlayState: (playing) => playStates.push(playing),
+      USE_NATIVE_MAC_AUDIO: true,
+      currentWorshipAudioSrc: 'file:///cache/worship.m4a',
+      worshipNativeAudioLoadInFlightPosition: null,
+      worshipSeeking: true,
+      worshipSeekResumeAfterCommit: true,
+      worshipSeekCommitToken: 0,
+      worshipSeekPreviewTimer: 1,
+      worshipSeekPreviewPosition: 20
+    }
+  );
+
+  assert.equal(await commitWorshipSeek(video, seek), true);
+  assert.equal(video.currentTime, 40);
+  assert.deepEqual(calls, ['worship:load:40', 'video:play', 'loading:hidden']);
+  assert.deepEqual(playStates, [true]);
+});
+
+test('resumes Mac worship playback by reloading native audio instead of restarting a paused queue', async () => {
+  const calls = [];
+  const video = {
+    currentTime: 73,
+    async play() { calls.push('video:play'); }
+  };
+  const { resumeWorshipPlayback } = loadFunctions(
+    rendererSource,
+    ['loadNativeWorshipAudio', 'resumeWorshipPlayback'],
+    {
+      nativeAudioCommand: async (channel, action, payload) => {
+        calls.push(`${channel}:${action}:${payload ? payload.position ?? '' : ''}`);
+        return { ok: true };
+      },
+      markWorshipNativeAudioLoaded: () => {},
+      setWorshipPlaybackDesired: () => {},
+      USE_NATIVE_MAC_AUDIO: true,
+      currentWorshipAudioSrc: 'file:///cache/worship.m4a',
+      worshipNativeAudioLoadInFlightPosition: null
+    }
+  );
+
+  await resumeWorshipPlayback(video);
+  assert.deepEqual(calls, ['video:play', 'worship:load:73']);
+});
+
+test('schedules Mac worship recovery instead of stopping audio after an unexpected lifecycle pause', () => {
+  const videoListeners = {};
+  const elements = {};
+  const listenerElement = (listeners = {}) => ({
+    addEventListener(type, handler) { listeners[type] = handler; },
+    classList: { add() {}, remove() {}, toggle() {} },
+    setAttribute() {}
+  });
+  elements.worshipVideo = listenerElement(videoListeners);
+  elements.wSeek = listenerElement();
+  elements.wDur = { textContent: '' };
+  elements.wCur = { textContent: '' };
+  elements.worshipLoading = { textContent: '', classList: { add() {}, remove() {} } };
+  elements.wPlay = listenerElement();
+  elements.wBackTop = listenerElement();
+  elements.wReturn = listenerElement();
+  elements.worshipControls = listenerElement();
+  const playStates = [];
+  const commands = [];
+  const recoveries = [];
+  const { setupWorshipControls } = loadFunctions(rendererSource, ['setupWorshipControls'], {
+    $: (id) => elements[id],
+    fmtTime: () => '0:00',
+    setWorshipPlayState: (playing) => playStates.push(playing),
+    sendNativeAudio: (channel, action) => commands.push(`${channel}:${action}`),
+    stopNativeWorshipAudio: () => commands.push('worship:stop'),
+    scheduleWorshipPlaybackRecovery: (reason) => { recoveries.push(reason); return true; },
+    backToCover: () => {},
+    toast: () => {},
+    clearTimeout: () => {},
+    showToolbar: () => {},
+    resetWorshipSeekState: () => {},
+    USE_NATIVE_MAC_AUDIO: true,
+    worshipActive: true,
+    worshipPlaybackDesired: true,
+    worshipSeeking: false,
+    worshipSeekResumeAfterCommit: false,
+    worshipControlsHovered: false,
+    hideTimer: null
+  });
+
+  setupWorshipControls();
+  videoListeners.pause();
+  assert.deepEqual(playStates, [true]);
+  assert.deepEqual(commands, []);
+  assert.deepEqual(recoveries, ['video-pause']);
+});
+
+test('recovers Mac worship audio at the current video time after renderer lifecycle wake', async () => {
+  const calls = [];
+  const video = {
+    currentTime: 91,
+    paused: true,
+    async play() {
+      calls.push('video:play');
+      this.paused = false;
+    }
+  };
+  const elements = {
+    worshipVideo: video,
+    worshipLoading: { classList: { add: (name) => calls.push(`loading:${name}`) } }
+  };
+  const { recoverWorshipPlayback } = loadFunctions(
+    rendererSource,
+    [
+      'markWorshipNativeAudioLoaded',
+      'recentlyLoadedWorshipNativeAudio',
+      'loadNativeWorshipAudio',
+      'clearWorshipPlaybackRecovery',
+      'recoverWorshipPlayback'
+    ],
+    {
+      $: (id) => elements[id],
+      nativeAudioCommand: async (channel, action, payload) => {
+        calls.push(`${channel}:${action}:${payload ? payload.position ?? '' : ''}`);
+        return { ok: true };
+      },
+      setWorshipPlayState: (playing) => calls.push(`state:${playing}`),
+      clearTimeout: (timer) => calls.push(`clear:${timer}`),
+      USE_NATIVE_MAC_AUDIO: true,
+      worshipActive: true,
+      worshipPlaybackDesired: true,
+      worshipSeeking: false,
+      worshipPlaybackRecoveryTimer: 7,
+      worshipPlaybackRecoveryInFlight: false,
+      worshipRequestToken: 3,
+      currentWorshipAudioSrc: 'file:///cache/worship.m4a',
+      lastWorshipNativeAudioLoadAt: 0,
+      lastWorshipNativeAudioLoadPosition: null,
+      worshipNativeAudioLoadInFlightPosition: null,
+      WORSHIP_RECENT_NATIVE_AUDIO_LOAD_MS: 700,
+      WORSHIP_RECENT_NATIVE_AUDIO_POSITION_TOLERANCE: 1.5,
+      window: { console: { debug() {} } }
+    }
+  );
+
+  assert.equal(await recoverWorshipPlayback('test'), true);
+  assert.deepEqual(calls, ['clear:7', 'video:play', 'worship:load:91', 'loading:hidden', 'state:true']);
 });
 
 test('covers worship with the Scripture surface before stopping video playback', async () => {
@@ -691,6 +1061,77 @@ test('keeps worship controls visible while hovered and otherwise hides them afte
 
   assert.deepEqual(runScenario(true), { delay: 1000, controlsVisible: true, backVisible: true });
   assert.deepEqual(runScenario(false), { delay: 1000, controlsVisible: false, backVisible: false });
+});
+
+test('reveals the cover toolbar only near the bottom and keeps it while hovered', () => {
+  const toolbarTarget = {};
+  const middleTarget = {};
+  let revealCalls = 0;
+  const toolbar = { contains: (target) => target === toolbarTarget };
+  const elements = { toolbar };
+  const { handleToolbarPointerMove } = loadFunctions(
+    rendererSource,
+    ['pointerCoordinate', 'coverToolbarHotzoneHeight', 'shouldRevealCoverToolbarFromPointer', 'handleToolbarPointerMove'],
+    {
+      $: (id) => elements[id],
+      window: { innerHeight: 720 },
+      worshipActive: false,
+      MAIN_TOOLBAR_HOTZONE_RATIO: 0.16,
+      MAIN_TOOLBAR_HOTZONE_MIN: 72,
+      MAIN_TOOLBAR_HOTZONE_MAX: 150,
+      showToolbar: () => { revealCalls++; }
+    }
+  );
+
+  handleToolbarPointerMove({ clientY: 320, target: middleTarget });
+  assert.equal(revealCalls, 0, 'middle movement should not reveal the cover toolbar');
+  handleToolbarPointerMove({ clientY: 650, target: middleTarget });
+  assert.equal(revealCalls, 1, 'bottom hotzone should reveal the cover toolbar');
+  handleToolbarPointerMove({ clientY: 320, target: toolbarTarget });
+  assert.equal(revealCalls, 2, 'hovering the visible toolbar should keep it active');
+});
+
+test('keeps the cover toolbar visible while hovered and otherwise hides it after one second', () => {
+  const runScenario = (hovered) => {
+    const visible = new Set();
+    let timer = null;
+    let delay = null;
+    const elements = {
+      toolbar: {
+        classList: {
+          add: (name) => visible.add(`toolbar:${name}`),
+          remove: (name) => visible.delete(`toolbar:${name}`)
+        }
+      },
+      flowScreen: { classList: { contains: (name) => name === 'hidden' } },
+      worshipControls: { classList: { add() {}, remove() {} } },
+      wBackTop: { classList: { add() {}, remove() {} } },
+      settingsPanel: { classList: { contains: (name) => name === 'hidden' } }
+    };
+    const { showToolbar } = loadFunctions(rendererSource, ['showToolbar'], {
+      $: (id) => elements[id],
+      worshipActive: false,
+      mainToolbarHovered: hovered,
+      worshipControlsHovered: false,
+      hideTimer: null,
+      MAIN_TOOLBAR_HIDE_MS: 1000,
+      WORSHIP_CONTROLS_HIDE_MS: 1000,
+      clearTimeout: () => {},
+      setTimeout: (callback, milliseconds) => {
+        timer = callback;
+        delay = milliseconds;
+        return 1;
+      }
+    });
+
+    showToolbar();
+    assert.equal(visible.has('toolbar:show'), true);
+    timer();
+    return { delay, toolbarVisible: visible.has('toolbar:show') };
+  };
+
+  assert.deepEqual(runScenario(true), { delay: 1000, toolbarVisible: true });
+  assert.deepEqual(runScenario(false), { delay: 1000, toolbarVisible: false });
 });
 
 test('keeps only the song name when YouTube metadata identifies artist, album or format labels', async () => {
@@ -1456,21 +1897,28 @@ test('marks an oversized verse as continuing within the same reader segment', ()
 
 test('scales the fixed reading canvas without changing its logical dimensions', () => {
   const properties = new Map();
+  const rootProperties = new Map();
   const screen = { style: { setProperty: (name, value) => properties.set(name, value) } };
   const { updateFlowDisplayScale } = loadFunctions(
     rendererSource,
     ['updateFlowDisplayScale'],
     {
       $: (id) => id === 'flowScreen' ? screen : null,
+      document: { documentElement: { style: { setProperty: (name, value) => rootProperties.set(name, value) } } },
       window: { innerWidth: 608, innerHeight: 1080 },
+      COVER_LAYOUT_WIDTH: 1280,
+      COVER_LAYOUT_HEIGHT: 720,
       FLOW_LAYOUT_WIDTH: 405,
       FLOW_LAYOUT_HEIGHT: 720,
       FLOW_MIN_CONTROL_SIZE: 44,
-      FLOW_MIN_ICON_SIZE: 19
+      FLOW_MIN_ICON_SIZE: 19,
+      MAIN_TOOLBAR_SCALE_MIN: 0.5,
+      MAIN_TOOLBAR_SCALE_MAX: 1.25
     }
   );
 
   assert.equal(updateFlowDisplayScale(), 1.5);
+  assert.equal(rootProperties.get('--toolbar-display-scale'), '0.500000');
   assert.equal(properties.get('--flow-display-scale'), '1.500000');
   assert.equal(properties.get('--flow-control-min-size'), '29.333px');
   assert.equal(properties.get('--flow-icon-min-size'), '12.667px');
@@ -1699,6 +2147,101 @@ test('uses arrow keys for reading while optionally blocking Scripture-to-worship
   assert.equal(utmostNavigation.handleFlowArrowNavigation(utmostLeft.event), true);
   assert.equal(utmostLeft.prevented(), true);
   assert.deepEqual(utmostCalls, [['next', 'keyboard'], ['prev']]);
+});
+
+test('uses right arrow as a global flow shortcut on cover and worship', () => {
+  const target = { tagName: 'DIV', isContentEditable: false, closest: () => null };
+  const arrowEvent = (overrides = {}) => {
+    let prevented = false;
+    const event = {
+      key: 'ArrowRight',
+      repeat: false,
+      isComposing: false,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      target,
+      preventDefault: () => { prevented = true; },
+      ...overrides
+    };
+    return { event, prevented: () => prevented };
+  };
+  const elements = {
+    flowScreen: { classList: { contains: (name) => name === 'hidden' } },
+    settingsPanel: { classList: { contains: (name) => name === 'hidden' } }
+  };
+  const coverCalls = [];
+  const coverNavigation = loadFunctions(
+    rendererSource,
+    ['isEditableFlowNavigationTarget', 'handleFlowArrowNavigation'],
+    {
+      $: (id) => elements[id],
+      flowStep: 'cover',
+      worshipActive: false,
+      flowTransitioning: false,
+      flowLoading: false,
+      nextFlowStep: () => coverCalls.push('worship')
+    }
+  );
+  const coverRight = arrowEvent();
+  assert.equal(coverNavigation.handleFlowArrowNavigation(coverRight.event), true);
+  assert.equal(coverRight.prevented(), true);
+  assert.deepEqual(coverCalls, ['worship']);
+
+  const worshipCalls = [];
+  const worshipNavigation = loadFunctions(
+    rendererSource,
+    ['isEditableFlowNavigationTarget', 'handleFlowArrowNavigation'],
+    {
+      $: (id) => elements[id],
+      flowStep: 'worship',
+      worshipActive: true,
+      flowTransitioning: false,
+      flowLoading: false,
+      backToCover: (options) => worshipCalls.push(plain(options))
+    }
+  );
+  const worshipRight = arrowEvent({ target: { id: 'wSeek', tagName: 'INPUT', closest: () => null } });
+  assert.equal(worshipNavigation.handleFlowArrowNavigation(worshipRight.event), true);
+  assert.equal(worshipRight.prevented(), true);
+  assert.deepEqual(worshipCalls, [{ nextAfterWorship: true }]);
+});
+
+test('space toggles worship playback even when the seek bar keeps focus', () => {
+  let paused = false;
+  let prevented = false;
+  const video = {
+    get paused() { return paused; },
+    pause() { paused = true; }
+  };
+  const elements = {
+    settingsPanel: { classList: { contains: (name) => name === 'hidden' } },
+    worshipVideo: video,
+    worshipLoading: { textContent: '', classList: { remove() {} } }
+  };
+  const { handleSpacePlaybackToggle } = loadFunctions(
+    rendererSource,
+    ['isWorshipSeekTarget', 'handleSpacePlaybackToggle'],
+    {
+      $: (id) => elements[id],
+      flowStep: 'worship',
+      worshipActive: true,
+      setWorshipPlaybackDesired: () => {},
+      resumeWorshipPlayback: async () => {},
+      toggleMusicPlayPause: () => assert.fail('worship space should not toggle cover music'),
+      toast: () => {}
+    }
+  );
+  const event = {
+    code: 'Space',
+    target: { id: 'wSeek', tagName: 'INPUT', closest: (selector) => selector === '#wSeek' ? event.target : null },
+    preventDefault: () => { prevented = true; }
+  };
+
+  assert.equal(handleSpacePlaybackToggle(event), true);
+  assert.equal(prevented, true);
+  assert.equal(paused, true);
 });
 
 test('treats one inertial wheel gesture as at most one reading-page action', () => {

@@ -40,7 +40,7 @@ contextBridge.exposeInMainWorld('api', {
   utmostToday: () => ipcRenderer.invoke('utmost:today'),
   biblePassage: (ref) => ipcRenderer.invoke('bible:passage', ref),
   setWindowMode: (mode) => ipcRenderer.invoke('win:mode', mode),
-  onWindowPointerActivity: (cb) => ipcRenderer.on('win:pointer-activity', () => cb()),
+  onWindowPointerActivity: (cb) => ipcRenderer.on('win:pointer-activity', (_event, detail) => cb(detail)),
   minimizeWindow: () => ipcRenderer.invoke('win:minimize'),
   closeWindow: () => ipcRenderer.invoke('win:close'),
   readClipboard: () => ipcRenderer.invoke('clipboard:read'),

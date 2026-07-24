@@ -82,6 +82,21 @@ assert.match(
 );
 assert.match(
   main,
+  /backgroundThrottling:\s*false/,
+  'main cover window must keep media rendering alive when fully occluded'
+);
+assert.match(
+  main,
+  /acceptFirstMouse:\s*true/,
+  'inactive macOS windows must accept the first click on controls'
+);
+assert.match(
+  main,
+  /powerSaveBlocker[\s\S]*?prevent-app-suspension/,
+  'macOS native audio playback should prevent app suspension while audio is intended to keep playing'
+);
+assert.match(
+  main,
   /^\s*const candidateParts\s*=/m,
   'version comparison must define parsed candidate parts as executable code'
 );
@@ -176,15 +191,32 @@ assert.match(
 );
 assert.match(
   renderer,
+  /window\.addEventListener\('keydown', handleSpacePlaybackToggle\);/,
+  'space playback shortcut must use the shared keyboard handler'
+);
+assert.match(
+  renderer,
+  /document\.addEventListener\('visibilitychange', handleWorshipPlaybackLifecycleWake\);/,
+  'worship audio recovery must run when macOS restores a previously occluded renderer'
+);
+assert.match(
+  renderer,
+  /function recoverWorshipPlayback\([\s\S]*?loadNativeWorshipAudio\(position, true\)/,
+  'macOS worship recovery must reload native audio at the current video time'
+);
+assert.match(
+  renderer,
   /footer\.addEventListener\('pointerenter',[\s\S]*?flowFooterHovered = true;[\s\S]*?footer\.addEventListener\('pointerleave',[\s\S]*?flowFooterHovered = false;/,
   'reading navigation must remain visible while the pointer is over it'
 );
 assert.match(renderer, /onWindowPointerActivity\(handleWindowPointerActivity\);/, 'native pointer activity must reveal inactive-window controls');
 assert.match(
   renderer,
-  /function handleWindowPointerActivity\(\)[\s\S]*?handleReadingPointerActivity\(\)[\s\S]*?isMainCover\(\)[\s\S]*?showToolbar\(\)/,
-  'native pointer activity must cover both reading navigation and the cover toolbar'
+  /function handleWindowPointerActivity\(detail\)[\s\S]*?handleReadingPointerActivity\(\)[\s\S]*?isMainCover\(\)[\s\S]*?shouldRevealCoverToolbarFromPointer\(detail\)[\s\S]*?showToolbar\(\)/,
+  'native pointer activity must cover reading navigation and bottom-hotzone cover toolbar reveal'
 );
+assert.match(renderer, /const MAIN_TOOLBAR_HIDE_MS = 1000;/, 'cover toolbar must hide after one second');
+assert.match(renderer, /mainToolbarHovered[\s\S]*?return;/, 'cover toolbar must stay visible while hovered');
 assert.match(main, /setInterval\(pollMainWindowPointer, 50\)/, 'native dragging needs a lightweight pointer activity monitor');
 assert.match(
   renderer,
@@ -223,6 +255,20 @@ assert.match(
   main,
   /preventLeftArrowWorship:\s*value\.preventLeftArrowWorship\s*!==\s*false/,
   'left-arrow worship safeguard must survive config sanitization'
+);
+assert.match(main, /windowBounds:\s*null/, 'config must include persisted main-window bounds');
+assert.match(main, /function sanitizeWindowBounds/, 'main process must sanitize persisted window bounds');
+assert.match(main, /window\.on\('resize', scheduleMainWindowBoundsSave\)/, 'main window resize must save user window size');
+assert.match(main, /window\.on\('move', scheduleMainWindowBoundsSave\)/, 'main window movement must save user window position');
+assert.match(
+  main,
+  /minWidth:\s*Math\.min\(640,\s*initialBounds\.width\),\s*minHeight:\s*Math\.min\(360,\s*initialBounds\.height\)/,
+  'main window minimum size must use the restored initial bounds available during startup'
+);
+assert.match(
+  main,
+  /await writeConfig\(\{ \.\.\.cfg, windowBounds: current\.windowBounds \}\)/,
+  'renderer settings saves must not overwrite main-process window bounds'
 );
 assert.match(
   renderer,
@@ -289,6 +335,12 @@ assert.match(
   /\.flow-screen:is\(\[data-step="scripture"\], \[data-step="utmost"\]\)\s*\{[\s\S]*?width:\s*405px;[\s\S]*?height:\s*720px;[\s\S]*?container-type:\s*size;[\s\S]*?scale\(var\(--flow-display-scale, 1\)\)/,
   'reading views must keep a fixed logical canvas and scale it as one unit'
 );
+assert.match(
+  css,
+  /\.toolbar button[\s\S]*?font-size:\s*max\(8px, calc\(12px \* var\(--toolbar-display-scale, 1\)\)\)[\s\S]*?min-height:\s*max\(28px, calc\(42px \* var\(--toolbar-display-scale, 1\)\)\)/,
+  'cover toolbar controls must scale their actual layout size with the app chrome'
+);
+assert.doesNotMatch(main, /pointInMainWindowInteractiveChrome/, 'hovering over toolbar hotzones must not activate the window');
 assert.match(renderer, /window\.addEventListener\('resize', updateFlowDisplayScale\)/, 'window resizing must only update the reading display scale');
 assert.doesNotMatch(renderer, /scheduleFlowLayoutRefresh/, 'window resizing must not repaginate reading content');
 assert.match(renderer, /setupSettingsTextSelection\(\)/, 'settings text fields must preserve fast drag selection beyond their edges');
