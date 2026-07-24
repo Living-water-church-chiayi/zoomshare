@@ -2,11 +2,36 @@ import AudioToolbox
 import Darwin
 import Foundation
 
+private let emitLock = NSLock()
+
 private func emit(_ value: [String: Any]) {
     guard JSONSerialization.isValidJSONObject(value),
           let data = try? JSONSerialization.data(withJSONObject: value) else { return }
+    emitLock.lock()
+    defer { emitLock.unlock() }
     FileHandle.standardOutput.write(data)
     FileHandle.standardOutput.write(Data([0x0a]))
+}
+
+private func emitResult(requestID: Int?, error: Error? = nil) {
+    guard let requestID else { return }
+    if let error {
+        emit([
+            "event": "error",
+            "requestId": requestID,
+            "message": error.localizedDescription
+        ])
+    } else {
+        emit(["event": "ack", "requestId": requestID])
+    }
+}
+
+private func commandError(_ message: String) -> Error {
+    NSError(
+        domain: "com.lingxiu.cover.audio-player",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: message]
+    )
 }
 
 private func debug(_ message: String) {
@@ -303,52 +328,62 @@ private final class PlayerSlot: @unchecked Sendable {
         queue = DispatchQueue(label: "com.lingxiu.cover.audio-player.\(channel)")
     }
 
-    func load(path: String, loop: Bool, volume: Float, position: Double, autoplay: Bool) {
+    func load(path: String, loop: Bool, volume: Float, position: Double, autoplay: Bool, requestID: Int?) {
         queue.async { [channel, player] in
             do {
                 try player.load(path: path, loop: loop, volume: volume, position: position, autoplay: autoplay)
+                emitResult(requestID: requestID)
             } catch {
+                player.stop()
                 emit(["event": "error", "channel": channel, "message": error.localizedDescription])
+                emitResult(requestID: requestID, error: error)
             }
         }
     }
 
-    func play() {
+    func play(requestID: Int?) {
         queue.async { [channel, player] in
             do {
                 try player.play()
+                emitResult(requestID: requestID)
             } catch {
                 emit(["event": "error", "channel": channel, "message": error.localizedDescription])
+                emitResult(requestID: requestID, error: error)
             }
         }
     }
 
-    func pause() {
+    func pause(requestID: Int?) {
         queue.async { [player] in
             player.pause()
+            emitResult(requestID: requestID)
         }
     }
 
-    func seek(position: Double) {
+    func seek(position: Double, requestID: Int?) {
         queue.async { [channel, player] in
             do {
                 try player.seek(position: position)
+                emitResult(requestID: requestID)
             } catch {
                 emit(["event": "error", "channel": channel, "message": error.localizedDescription])
+                emitResult(requestID: requestID, error: error)
             }
         }
     }
 
-    func setVolume(_ volume: Float) {
+    func setVolume(_ volume: Float, requestID: Int?) {
         queue.async { [player] in
             player.setVolume(volume)
+            emitResult(requestID: requestID)
         }
     }
 
-    func stop() {
+    func stop(requestID: Int? = nil) {
         queue.sync {
             player.stop()
         }
+        emitResult(requestID: requestID)
     }
 }
 
@@ -360,37 +395,48 @@ private enum PlayerRegistry {
 }
 
 private func handle(_ command: [String: Any]) {
-    guard let action = command["action"] as? String else { return }
+    let requestID = (command["requestId"] as? NSNumber)?.intValue
+    guard let action = command["action"] as? String else {
+        emitResult(requestID: requestID, error: commandError("缺少音訊命令"))
+        return
+    }
     if action == "shutdown" {
         for slot in PlayerRegistry.slots.values { slot.stop() }
         fflush(stdout)
         exit(0)
     }
     guard let channel = command["channel"] as? String,
-          let slot = PlayerRegistry.slots[channel] else { return }
+          let slot = PlayerRegistry.slots[channel] else {
+        emitResult(requestID: requestID, error: commandError("音訊頻道不正確"))
+        return
+    }
 
     switch action {
     case "load":
-        guard let path = command["path"] as? String else { return }
+        guard let path = command["path"] as? String else {
+            emitResult(requestID: requestID, error: commandError("缺少音訊檔案路徑"))
+            return
+        }
         slot.load(
             path: path,
             loop: command["loop"] as? Bool ?? false,
             volume: Float(number(command["volume"], default: 1)),
             position: number(command["position"]),
-            autoplay: command["autoplay"] as? Bool ?? true
+            autoplay: command["autoplay"] as? Bool ?? true,
+            requestID: requestID
         )
     case "play":
-        slot.play()
+        slot.play(requestID: requestID)
     case "pause":
-        slot.pause()
+        slot.pause(requestID: requestID)
     case "seek":
-        slot.seek(position: number(command["position"]))
+        slot.seek(position: number(command["position"]), requestID: requestID)
     case "volume":
-        slot.setVolume(Float(number(command["volume"], default: 1)))
+        slot.setVolume(Float(number(command["volume"], default: 1)), requestID: requestID)
     case "stop":
-        slot.stop()
+        slot.stop(requestID: requestID)
     default:
-        break
+        emitResult(requestID: requestID, error: commandError("不支援的音訊命令"))
     }
 }
 

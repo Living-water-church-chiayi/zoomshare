@@ -95,6 +95,12 @@ assert.match(
   /powerSaveBlocker[\s\S]*?prevent-app-suspension/,
   'macOS native audio playback should prevent app suspension while audio is intended to keep playing'
 );
+assert.match(main, /autoUpdater\.autoInstallOnAppQuit\s*=\s*false;/, 'Windows updater must not relaunch a downloaded installer on every later app quit');
+assert.match(main, /updater\.quitAndInstall\(true,\s*true\);/, 'Windows updates must install silently and relaunch the updated app');
+assert.match(main, /checkForUpdates\(\)[\s\S]*?isUpdateAvailable[\s\S]*?downloadUpdate\(\)/, 'Windows update downloads must be preceded by an update check');
+assert.match(renderer, /winInstallScheduled[\s\S]*?!winInstallScheduled[\s\S]*?winInstallScheduled = true;/, 'renderer must schedule automatic update installation only once');
+assert.match(renderer, /if \(p\) await useImagePath\(p\);/g, 'image picker and drag/drop must await background save errors');
+assert.match(renderer, /seekFinishPromise[\s\S]*?seekFinishValue === requestedValue/, 'duplicate range change and pointer events must not commit the same worship seek twice');
 assert.match(
   main,
   /^\s*const candidateParts\s*=/m,
@@ -172,6 +178,8 @@ assert.doesNotMatch(musicPlaybackSource.slice(nativeMusicBranch, domMusicBranch)
 assert.match(musicPlaybackSource.slice(domMusicBranch), /a\.src = resolvedSrc;[\s\S]*?await a\.play\(\);/, 'Windows must retain HTML audio source assignment and playback');
 const nativeControllerSource = section(main, 'class NativeMacAudioController', 'const nativeMacAudio');
 assert.match(nativeControllerSource, /!nativeAudioActionStartsHelper\(command\.action\)/, 'native controller must gate helper startup by action');
+assert.match(nativeControllerSource, /requestId[\s\S]*?settlePending/, 'native audio commands must wait for correlated helper acknowledgements');
+assert.match(main, /const sent = await nativeMacAudio\.send\(command\);/, 'native audio playback intent must update only after the helper accepts a command');
 const cleanCacheSource = section(main, 'async function cleanCache', '// ---------- 設定');
 assert.match(cleanCacheSource, /inflight\.keys\(\)/, 'cache cleanup must skip active downloads');
 assert.match(main, /const available = !!\(r && r\.isUpdateAvailable\)/, 'updater must honor electron-updater eligibility');
@@ -256,19 +264,17 @@ assert.match(
   /preventLeftArrowWorship:\s*value\.preventLeftArrowWorship\s*!==\s*false/,
   'left-arrow worship safeguard must survive config sanitization'
 );
-assert.match(main, /windowBounds:\s*null/, 'config must include persisted main-window bounds');
-assert.match(main, /function sanitizeWindowBounds/, 'main process must sanitize persisted window bounds');
-assert.match(main, /window\.on\('resize', scheduleMainWindowBoundsSave\)/, 'main window resize must save user window size');
-assert.match(main, /window\.on\('move', scheduleMainWindowBoundsSave\)/, 'main window movement must save user window position');
+assert.doesNotMatch(main, /windowBounds/, 'main window bounds must not be persisted in user config');
+assert.doesNotMatch(main, /scheduleMainWindowBoundsSave|saveMainWindowBounds/, 'main window resize and movement must not be remembered');
 assert.match(
   main,
-  /minWidth:\s*Math\.min\(640,\s*initialBounds\.width\),\s*minHeight:\s*Math\.min\(360,\s*initialBounds\.height\)/,
-  'main window minimum size must use the restored initial bounds available during startup'
+  /fitAspectSize\(area\.width - margin \* 2,\s*area\.height - margin \* 2,\s*16 \/ 9,\s*1280\)/,
+  'main window must start from the original fixed 1280-wide layout'
 );
 assert.match(
   main,
-  /await writeConfig\(\{ \.\.\.cfg, windowBounds: current\.windowBounds \}\)/,
-  'renderer settings saves must not overwrite main-process window bounds'
+  /trustedHandle\('config:set'[\s\S]*?await writeConfig\(cfg\);/,
+  'renderer settings saves must write only the configured application settings'
 );
 assert.match(
   renderer,
@@ -279,6 +285,7 @@ console.log('OK reading keyboard and completion wiring');
 
 const html = read('src/renderer/index.html');
 assert.match(html, /Content-Security-Policy/, 'renderer must declare a Content Security Policy');
+assert.match(html, /id="btnFlowNext"[^>]*>敬拜影片<\/button>/, 'cover flow button must be labelled 敬拜影片');
 assert.match(
   html,
   /7mrMh_2tXCI[^>]*data-announcement-title="讚美之泉（美好的創造）"[^>]*>美好的創造<\/option>/,
@@ -345,6 +352,10 @@ assert.match(renderer, /window\.addEventListener\('resize', updateFlowDisplaySca
 assert.doesNotMatch(renderer, /scheduleFlowLayoutRefresh/, 'window resizing must not repaginate reading content');
 assert.match(renderer, /setupSettingsTextSelection\(\)/, 'settings text fields must preserve fast drag selection beyond their edges');
 assert.match(css, /\.settings input\[type="text"\][\s\S]*?-webkit-user-select:\s*text;/, 'settings text fields must explicitly allow text selection');
+assert.match(css, /body\.plat-win \.canvas\s*\{[^}]*-webkit-app-region:\s*no-drag;/, 'cover canvas must accept Windows file drops outside native drag regions');
+assert.match(css, /body\.plat-win \.overlay-top\s*\{[^}]*-webkit-app-region:\s*drag;/, 'Windows cover title must remain available for moving the frameless window');
+assert.match(css, /body\.plat-win \.worship-layer\s*\{[^}]*-webkit-app-region:\s*drag;/, 'Windows worship video must remain available for moving the frameless window');
+assert.match(renderer, /function isSupportedImageFile[\s\S]*?jpe\?g[\s\S]*?function setupDragDrop/, 'Windows image drops must allow supported extensions without MIME metadata');
 assert.doesNotMatch(
   section(renderer, 'function buildScripturePagesByFit', 'function renderFlowPage'),
   /SCRIPTURE_MAX_VERSES_PER_PAGE/,
@@ -375,6 +386,7 @@ const packageLock = JSON.parse(read('package-lock.json'));
 const ciWorkflow = read('.github/workflows/ci.yml');
 const builderConfig = read('electron-builder.yml');
 const setupMac = read('scripts/setup-mac.sh');
+assert.match(setupMac, /native\/macos\/main\.swift/, 'macOS helper setup must compile the reviewed native source');
 assert.equal(packageJson.version, packageLock.version, 'package and lockfile versions must match');
 assert.equal(packageJson.version, packageLock.packages[''].version, 'lockfile root version must match package');
 assert.equal(packageJson.scripts['test:layout'], 'electron scripts/test-reading-layout.js', 'layout smoke script is missing');

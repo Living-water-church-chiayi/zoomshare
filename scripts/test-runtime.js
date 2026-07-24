@@ -152,6 +152,84 @@ test('compares real application versions without lexicographic mistakes', () => 
   assert.equal(versionParts('1.2.3.4'), null);
 });
 
+test('starts the Windows updater silently at most once and never on macOS', () => {
+  const calls = [];
+  const updater = {
+    quitAndInstall: (silent, forceRunAfter) => calls.push([silent, forceRunAfter])
+  };
+  const { requestUpdateInstallation } = loadFunctions(
+    mainSource,
+    ['requestUpdateInstallation'],
+    {
+      process: { platform: 'win32' },
+      autoUpdater: updater,
+      updateInstallRequested: false
+    }
+  );
+
+  assert.deepEqual(plain(requestUpdateInstallation('darwin', updater)), {
+    ok: false,
+    manual: true,
+    error: 'macOS 請從 GitHub Releases 手動安裝更新。'
+  });
+  assert.deepEqual(plain(requestUpdateInstallation('win32', updater)), { ok: true });
+  assert.deepEqual(plain(requestUpdateInstallation('win32', updater)), { ok: true, alreadyRequested: true });
+  assert.deepEqual(calls, [[true, true]]);
+});
+
+test('checks for a Windows update before one deduplicated download', async () => {
+  const calls = [];
+  let releaseCheck;
+  const checkGate = new Promise((resolve) => { releaseCheck = resolve; });
+  const updater = {
+    checkForUpdates: async () => {
+      calls.push('check');
+      await checkGate;
+      return { isUpdateAvailable: true };
+    },
+    downloadUpdate: async () => { calls.push('download'); }
+  };
+  const { downloadWindowsUpdate } = loadFunctions(
+    mainSource,
+    ['downloadWindowsUpdate'],
+    {
+      autoUpdater: updater,
+      windowsUpdateDownloadPromise: null
+    }
+  );
+
+  const first = downloadWindowsUpdate(updater);
+  const second = downloadWindowsUpdate(updater);
+  releaseCheck();
+  assert.deepEqual(plain(await first), { ok: true });
+  assert.deepEqual(plain(await second), { ok: true });
+  assert.deepEqual(calls, ['check', 'download']);
+
+  updater.checkForUpdates = async () => ({ isUpdateAvailable: false });
+  assert.deepEqual(plain(await downloadWindowsUpdate(updater)), {
+    ok: false,
+    noUpdate: true,
+    error: '目前已是最新版本'
+  });
+});
+
+test('reports background image save failures instead of leaking rejected promises', async () => {
+  const messages = [];
+  const { useImagePath } = loadFunctions(
+    rendererSource,
+    ['useImagePath'],
+    {
+      window: { api: { saveBackground: async () => { throw new Error('讀取失敗'); } } },
+      setBackground: () => assert.fail('failed images must not be applied'),
+      cfg: {},
+      toast: (message) => messages.push(message)
+    }
+  );
+
+  assert.equal(await useImagePath('/tmp/broken.png'), false);
+  assert.deepEqual(messages, ['背景更新失敗：讀取失敗']);
+});
+
 test('creates a valid file URL for spaces, Unicode, #, ? and %', () => {
   const { fileUrl } = loadFunctions(mainSource, ['fileUrl'], { pathToFileURL });
   const specialPath = path.join(projectRoot, '測試 folder', '歌曲 #1?100%.mp4');
@@ -225,6 +303,26 @@ test('starts the native macOS audio helper only for a load command', () => {
   for (const action of ['play', 'pause', 'seek', 'volume', 'stop']) {
     assert.equal(nativeAudioActionStartsHelper(action), false, `${action} must not start the helper`);
   }
+});
+
+test('parses only correlated native audio helper responses', () => {
+  const { parseNativeAudioMessage } = loadFunctions(
+    mainSource,
+    ['parseNativeAudioMessage']
+  );
+
+  assert.deepEqual(plain(parseNativeAudioMessage('{"event":"ack","requestId":7}')), {
+    event: 'ack',
+    requestId: 7
+  });
+  assert.deepEqual(plain(parseNativeAudioMessage('{"event":"error","requestId":8,"message":"bad"}')), {
+    event: 'error',
+    requestId: 8,
+    message: 'bad'
+  });
+  assert.equal(parseNativeAudioMessage('not json'), null);
+  assert.equal(parseNativeAudioMessage('{"event":"ack","requestId":0}'), null);
+  assert.equal(parseNativeAudioMessage('{"requestId":1}'), null);
 });
 
 test('serializes native audio commands while an earlier load is being validated', async () => {
@@ -380,39 +478,8 @@ test('reports pointer movement over the main window without resizing it', () => 
   ]);
 });
 
-test('persists only wide main-window bounds and restores them on startup', () => {
-  const displayProvider = {
-    getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 1440, height: 900 } }),
-    getPrimaryDisplay: () => ({ workArea: { x: 0, y: 0, width: 1440, height: 900 } })
-  };
-  const {
-    sanitizeWindowBounds,
-    fitAspectSize,
-    centeredBounds,
-    restoredMainWindowBounds,
-    shouldSaveMainWindowBounds
-  } = loadFunctions(
-    mainSource,
-    ['isPlainObject', 'boundedInteger', 'sanitizeWindowBounds', 'fitAspectSize', 'centeredBounds', 'restoredMainWindowBounds', 'shouldSaveMainWindowBounds'],
-    {
-      screen: displayProvider,
-      currentMainWindowMode: 'wide'
-    }
-  );
-  const saved = { x: 50, y: 60, width: 1000, height: 563 };
-  const fallback = { x: 80, y: 90, width: 1280, height: 720 };
-
-  assert.deepEqual(plain(sanitizeWindowBounds(saved)), saved);
-  assert.equal(sanitizeWindowBounds({ x: 50, y: 60, width: 360, height: 640 }), null);
-  assert.deepEqual(plain(restoredMainWindowBounds(saved, fallback, displayProvider)), saved);
-  assert.deepEqual(plain(restoredMainWindowBounds({ x: 50, y: 60, width: 360, height: 640 }, fallback, displayProvider)), fallback);
-  assert.equal(shouldSaveMainWindowBounds(saved, 'wide'), true);
-  assert.equal(shouldSaveMainWindowBounds(saved, 'mobile'), false);
-  assert.equal(shouldSaveMainWindowBounds({ x: 50, y: 60, width: 360, height: 640 }, 'wide'), false);
-});
-
-test('keeps one user-selected display scale across cover, worship, and reading modes', () => {
-  const calls = { bounds: [], aspectRatios: [], minimumSizes: [], saved: [] };
+test('uses the original fixed reading size without persisting user window bounds', () => {
+  const calls = { bounds: [], aspectRatios: [], minimumSizes: [] };
   let currentBounds = { x: 100, y: 100, width: 800, height: 450 };
   const mainWindow = {
     isDestroyed: () => false,
@@ -428,38 +495,27 @@ test('keeps one user-selected display scale across cover, worship, and reading m
     setWindowMode
   } = loadFunctions(
     mainSource,
-    ['fitAspectSize', 'centeredBounds', 'setMainWindowBoundsSafely', 'setWindowMode'],
+    ['fitAspectSize', 'centeredBounds', 'setWindowMode'],
     {
       mainWindow,
       screen: { getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 1440, height: 900 } }) },
       process: { platform: 'linux' },
-      currentMainWindowMode: 'wide',
-      lastWideBounds: null,
-      suppressMainWindowBoundsSave: false,
-      saveMainWindowBounds: (bounds) => {
-        calls.saved.push({ ...bounds });
-        return Promise.resolve(true);
-      },
-      setTimeout: (callback) => {
-        callback();
-        return 1;
-      },
-      console
+      lastWideBounds: null
     }
   );
 
   setWindowMode('wide');
   assert.deepEqual(currentBounds, { x: 100, y: 100, width: 800, height: 450 }, 'cover-to-worship must not enlarge the window');
-  assert.equal(calls.bounds.length, 0, 'same wide layout should not be resized programmatically');
 
   setWindowMode('mobile');
-  assert.deepEqual(currentBounds, { x: 374, y: 100, width: 253, height: 450 }, 'reading mode must keep the cover height and display scale');
-
-  setWindowMode('mobile');
-  assert.equal(calls.bounds.length, 1, 'Scripture-to-Utmost must not resize an already-mobile window');
+  assert.deepEqual(currentBounds, { x: 247, y: 0, width: 506, height: 900 }, 'reading mode must use the original display-fitted portrait size');
 
   setWindowMode('wide');
-  assert.deepEqual(currentBounds, { x: 100, y: 100, width: 800, height: 450 }, 'returning to cover must restore the user-selected wide bounds');
+  assert.deepEqual(
+    { width: currentBounds.width, height: currentBounds.height },
+    { width: 800, height: 450 },
+    'returning to cover may restore the in-session wide size without saving it for the next launch'
+  );
 });
 
 test('reveals reading navigation from pointer activity across a native drag region', () => {
@@ -539,6 +595,16 @@ test('native reading drag regions exclude navigation buttons', () => {
     /flow-screen:is\(\[data-step="scripture"\], \[data-step="utmost"\]\) \.flow-footer[\s\S]*?-webkit-app-region: no-drag;/,
     'reading navigation must remain clickable'
   );
+});
+
+test('accepts Windows image drops even when the browser does not provide a MIME type', () => {
+  const { isSupportedImageFile } = loadFunctions(rendererSource, ['isSupportedImageFile']);
+
+  assert.equal(isSupportedImageFile({ name: '封面.PNG', type: '' }), true);
+  assert.equal(isSupportedImageFile({ name: 'background.jpeg', type: 'application/octet-stream' }), true);
+  assert.equal(isSupportedImageFile({ name: 'pasted-image', type: 'image/webp' }), true);
+  assert.equal(isSupportedImageFile({ name: 'notes.txt', type: 'text/plain' }), false);
+  assert.equal(isSupportedImageFile(null), false);
 });
 
 test('does not close settings when text selection starts inside the panel', () => {
@@ -906,6 +972,41 @@ test('resumes Mac worship playback by reloading native audio instead of restarti
 
   await resumeWorshipPlayback(video);
   assert.deepEqual(calls, ['video:play', 'worship:load:73']);
+});
+
+test('pauses worship video when the Mac audio helper cannot resume', async () => {
+  const calls = [];
+  const desired = [];
+  const video = {
+    currentTime: 73,
+    paused: true,
+    async play() {
+      calls.push('video:play');
+      this.paused = false;
+    },
+    pause() {
+      calls.push('video:pause');
+      this.paused = true;
+    }
+  };
+  const { resumeWorshipPlayback } = loadFunctions(
+    rendererSource,
+    ['loadNativeWorshipAudio', 'resumeWorshipPlayback'],
+    {
+      nativeAudioCommand: async () => ({ ok: false, error: 'CoreAudio failed' }),
+      markWorshipNativeAudioLoaded: () => {},
+      setWorshipPlaybackDesired: (value) => desired.push(value),
+      stopNativeWorshipAudio: () => calls.push('audio:stop'),
+      USE_NATIVE_MAC_AUDIO: true,
+      currentWorshipAudioSrc: 'file:///cache/worship.m4a',
+      worshipNativeAudioLoadInFlightPosition: null
+    }
+  );
+
+  await assert.rejects(() => resumeWorshipPlayback(video), /CoreAudio failed/);
+  assert.equal(video.paused, true);
+  assert.deepEqual(calls, ['video:play', 'video:pause', 'audio:stop']);
+  assert.deepEqual(desired, [true, false]);
 });
 
 test('schedules Mac worship recovery instead of stopping audio after an unexpected lifecycle pause', () => {

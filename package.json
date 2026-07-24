@@ -1,6 +1,6 @@
 {
   "name": "lingxiu-cover",
-  "version": "1.0.33",
+  "version": "1.0.34",
   "description": "靈修封面 — 晨更/靈修班開始前的 16:9 封面與背景音樂/敬拜播放工具 (Windows/Mac)",
   "main": "src/main.js",
   "author": "",
@@ -25,7 +25,7 @@
   "devDependencies": {
     "electron": "43.1.1",
     "electron-builder": "26.15.3",
-    "wrangler": "4.112.0"
+    "wrangler": "4.114.0"
   },
   "dependencies": {
     "electron-updater": "^6.8.9",

@@ -2372,6 +2372,8 @@ function playWorshipVideo(src, audioSrc, retried, requestToken = worshipRequestT
     $('worshipLoading').classList.add('hidden');
   }).catch((error) => {
     setWorshipPlaybackDesired(false);
+    video.pause();
+    setWorshipPlayState(false);
     stopNativeWorshipAudio();
     if (requestToken !== worshipRequestToken || !worshipActive) return;
     if (!retried && worshipActive && requestToken === worshipRequestToken) {
@@ -2411,9 +2413,16 @@ async function loadNativeWorshipAudio(position = 0, autoplay = true) {
 
 async function resumeWorshipPlayback(video) {
   setWorshipPlaybackDesired(true);
-  await video.play();
-  const nativeResult = await loadNativeWorshipAudio(video.currentTime || 0, true);
-  if (!nativeResult.ok) throw new Error(nativeResult.error || 'macOS 原生音訊播放器無法播放');
+  try {
+    await video.play();
+    const nativeResult = await loadNativeWorshipAudio(video.currentTime || 0, true);
+    if (!nativeResult.ok) throw new Error(nativeResult.error || 'macOS 原生音訊播放器無法播放');
+  } catch (error) {
+    setWorshipPlaybackDesired(false);
+    video.pause();
+    stopNativeWorshipAudio();
+    throw error;
+  }
 }
 
 function stopWorshipPlayback() {
@@ -2631,9 +2640,25 @@ function handleEscapeNavigation(event) {
 
 // ---------- 背景圖片 ----------
 async function useImagePath(srcPath) {
-  if (!srcPath) return;
-  const r = await window.api.saveBackground(srcPath);
-  if (r && r.url) { setBackground(r.url); cfg.backgroundFile = r.fileName; toast('背景已更新'); }
+  if (!srcPath) return false;
+  try {
+    const r = await window.api.saveBackground(srcPath);
+    if (!r || !r.url) throw new Error((r && r.error) || '無法儲存背景圖片');
+    setBackground(r.url);
+    cfg.backgroundFile = r.fileName;
+    toast('背景已更新');
+    return true;
+  } catch (error) {
+    toast('背景更新失敗：' + String(error && error.message || error), 3600);
+    return false;
+  }
+}
+
+function isSupportedImageFile(file) {
+  if (!file) return false;
+  const mime = String(file.type || '').toLowerCase();
+  const name = String(file.name || '');
+  return mime.startsWith('image/') || /\.(?:bmp|gif|jpe?g|png|webp)$/i.test(name);
 }
 
 function setupDragDrop() {
@@ -2652,9 +2677,9 @@ function setupDragDrop() {
     canvas.classList.remove('dragging');
     const file = e.dataTransfer.files && e.dataTransfer.files[0];
     if (!file) return;
-    if (!file.type.startsWith('image/')) { toast('請拖入圖片檔'); return; }
+    if (!isSupportedImageFile(file)) { toast('請拖入圖片檔'); return; }
     const p = window.api.pathForFile(file);
-    if (p) useImagePath(p);
+    if (p) await useImagePath(p);
     else toast('無法讀取圖片');
   });
 }
@@ -2905,6 +2930,12 @@ async function commitWorshipSeek(video, seek) {
       setWorshipPlayState(shouldResume && !video.paused);
     }
     return true;
+  } catch (error) {
+    setWorshipPlaybackDesired(false);
+    video.pause();
+    stopNativeWorshipAudio();
+    setWorshipPlayState(false);
+    throw error;
   } finally {
     if (commitToken === worshipSeekCommitToken) {
       worshipSeeking = false;
@@ -2947,6 +2978,9 @@ function setupWorshipControls() {
   });
   v.addEventListener('error', () => {
     if (!worshipActive) return;
+    setWorshipPlaybackDesired(false);
+    stopNativeWorshipAudio();
+    setWorshipPlayState(false);
     $('worshipLoading').textContent = '影片播放失敗，請返回後再試一次';
     $('worshipLoading').classList.remove('hidden');
     showToolbar();
@@ -2965,12 +2999,22 @@ function setupWorshipControls() {
   seek.addEventListener('input', () => {
     updateWorshipSeek(v, seek);
   });
+  let seekFinishPromise = null;
+  let seekFinishValue = '';
   const finishSeek = () => {
-    commitWorshipSeek(v, seek).catch((e) => {
+    const requestedValue = String(seek.value);
+    if (seekFinishPromise && seekFinishValue === requestedValue) return seekFinishPromise;
+    seekFinishValue = requestedValue;
+    const task = commitWorshipSeek(v, seek).catch((e) => {
       $('worshipLoading').textContent = '播放失敗，請稍後再試';
       $('worshipLoading').classList.remove('hidden');
       toast('影片播放失敗：' + e.message, 3200);
     });
+    seekFinishPromise = task;
+    task.finally(() => {
+      if (seekFinishPromise === task) seekFinishPromise = null;
+    });
+    return task;
   };
   seek.addEventListener('change', finishSeek);
   seek.addEventListener('pointerup', finishSeek);
@@ -3166,7 +3210,9 @@ function setupAppUpdater() {
       if (d && d.manual) { await openManualUpdate(d); return; }
       if (!d || !d.ok) {
         updateProgress.classList.add('hidden');
-        updateMessage.textContent = '下載失敗：' + ((d && d.error) || '未知錯誤');
+        updateMessage.textContent = d && d.noUpdate
+          ? '目前已是最新版本'
+          : '下載失敗：' + ((d && d.error) || '未知錯誤');
       }
     } catch (e) {
       updateProgress.classList.add('hidden');
@@ -3176,7 +3222,14 @@ function setupAppUpdater() {
     }
   });
 
-  installButton.addEventListener('click', () => window.api.quitAndInstall());
+  installButton.addEventListener('click', async () => {
+    installButton.disabled = true;
+    const result = await window.api.quitAndInstall();
+    if (!result || !result.ok) {
+      installButton.disabled = false;
+      updateMessage.textContent = '無法啟動更新安裝：' + ((result && result.error) || '未知錯誤');
+    }
+  });
 
   window.api.onUpdateAvailable((d) => {
     toast('發現新版本 ' + d.version, 4000);
@@ -3193,12 +3246,18 @@ function setupAppUpdater() {
     toast('更新已下載完成，可以重新啟動安裝', 5000);
   });
   window.api.onUpdateError((d) => { updateMessage.textContent = '更新錯誤：' + d.error; });
-  window.api.onUpdateNone(() => { updateMessage.textContent = '目前已是最新版本'; });
+  window.api.onUpdateNone(() => {
+    updateMessage.textContent = '目前已是最新版本';
+    updateProgress.classList.add('hidden');
+    installButton.classList.add('hidden');
+    banner.classList.add('hidden');
+  });
 
   const isWin = window.api.platform === 'win32';
   let newVersionUrl = '';
   let newVersion = '';
   let winUpdating = false;
+  let winInstallScheduled = false;
   window.api.onNewVersion(({ version, url }) => {
     if (version && version === cfg.skippedVersion) return;
     newVersion = version || '';
@@ -3210,6 +3269,7 @@ function setupAppUpdater() {
   bannerDownload.addEventListener('click', async () => {
     if (isWin) {
       winUpdating = true;
+      winInstallScheduled = false;
       bannerDownload.disabled = true;
       bannerText.textContent = '下載更新中 0%';
       const r = await window.api.downloadAppUpdate();
@@ -3220,7 +3280,8 @@ function setupAppUpdater() {
       } else if (!r || !r.ok) {
         winUpdating = false;
         bannerDownload.disabled = false;
-        bannerText.textContent = '下載失敗，請稍後再試';
+        bannerText.textContent = r && r.noUpdate ? '目前已是最新版本' : '下載失敗，請稍後再試';
+        if (r && r.noUpdate) setTimeout(() => banner.classList.add('hidden'), 1800);
       }
     } else if (newVersionUrl) {
       window.api.openExternal(newVersionUrl);
@@ -3237,7 +3298,8 @@ function setupAppUpdater() {
     if (winUpdating) bannerText.textContent = '下載更新中 ' + Math.round(d.percent || 0) + '%';
   });
   window.api.onUpdateDownloaded(() => {
-    if (winUpdating) {
+    if (winUpdating && !winInstallScheduled) {
+      winInstallScheduled = true;
       bannerText.textContent = '下載完成，準備重新啟動...';
       setTimeout(() => window.api.quitAndInstall(), 900);
     }
@@ -3400,7 +3462,7 @@ async function init() {
   $('btnHost').addEventListener('click', () => window.api.openHostConsole());
   $('btnPickImage').addEventListener('click', async () => {
     const p = await window.api.pickImage();
-    if (p) useImagePath(p);
+    if (p) await useImagePath(p);
   });
 
   ['dateAuto','dateDay','inReading','inMusicUrl','inWorshipUrl','inWorshipTitle','inCustomWorshipUrl','musicVolume','autoPlayMusic','preventLeftArrowWorship',

@@ -77,8 +77,7 @@ const DEFAULT_CONFIG = {
   // 開機自動依日期抓取經文的 Google 試算表。
   scheduleEnabled: true,
   scheduleUrl: 'https://docs.google.com/spreadsheets/d/11O0As3DWpT45otcL5T7BadMpPVWcWKAoiZ5OUPocMpA/edit?usp=sharing',
-  skippedVersion: '', // 使用者選擇略過的版本。
-  windowBounds: null
+  skippedVersion: '' // 使用者選擇略過的版本。
 };
 
 // ---------- 二進位工具位置（yt-dlp / deno / ffmpeg） ----------
@@ -113,12 +112,28 @@ function nativeAudioActionStartsHelper(action) {
   return action === 'load';
 }
 
+function parseNativeAudioMessage(line) {
+  try {
+    const value = JSON.parse(String(line || ''));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    if (typeof value.event !== 'string') return null;
+    if (value.requestId !== undefined && (!Number.isSafeInteger(value.requestId) || value.requestId < 1)) return null;
+    return value;
+  } catch {
+    return null;
+  }
+}
+
 class NativeMacAudioController {
   constructor(options = {}) {
     this.platform = options.platform || process.platform;
     this.spawnProcess = options.spawnProcess || spawn;
     this.exists = options.exists || fs.existsSync;
+    this.commandTimeoutMs = options.commandTimeoutMs || 15_000;
     this.child = null;
+    this.stdoutBuffer = '';
+    this.nextRequestId = 1;
+    this.pending = new Map();
   }
 
   helperPath() {
@@ -139,17 +154,58 @@ class NativeMacAudioController {
     });
     this.child = child;
     child.stdin.on('error', () => {});
-    child.stdout.on('data', () => {});
+    child.stdout.on('data', (chunk) => this.consumeStdout(chunk));
     child.stderr.on('data', (chunk) => {
       const message = String(chunk || '').trim();
       if (message) console.warn('原生音訊播放器：', message);
     });
     child.on('error', (error) => {
       console.warn('原生音訊播放器啟動失敗：', error.message);
-      if (this.child === child) this.child = null;
+      if (this.child === child) {
+        this.child = null;
+        this.failPending(error.message);
+      }
     });
-    child.on('exit', () => { if (this.child === child) this.child = null; });
+    child.on('exit', (code, signal) => {
+      if (this.child === child) {
+        this.child = null;
+        this.failPending(`原生音訊播放器已結束 (${signal || code || 0})`);
+      }
+    });
     return child;
+  }
+
+  consumeStdout(chunk) {
+    this.stdoutBuffer += String(chunk || '');
+    let newline = this.stdoutBuffer.indexOf('\n');
+    while (newline >= 0) {
+      const line = this.stdoutBuffer.slice(0, newline).trim();
+      this.stdoutBuffer = this.stdoutBuffer.slice(newline + 1);
+      const message = parseNativeAudioMessage(line);
+      if (message && message.requestId) this.settlePending(message);
+      newline = this.stdoutBuffer.indexOf('\n');
+    }
+  }
+
+  settlePending(message) {
+    const pending = this.pending.get(message.requestId);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pending.delete(message.requestId);
+    if (message.event === 'ack') {
+      pending.resolve({ ok: true });
+    } else if (message.event === 'error') {
+      pending.resolve({ ok: false, error: String(message.message || '原生音訊播放器命令失敗') });
+    }
+  }
+
+  failPending(message) {
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.resolve({ ok: false, error: String(message || '原生音訊播放器已結束') });
+    }
+    this.pending.clear();
+    this.stdoutBuffer = '';
   }
 
   send(command) {
@@ -163,13 +219,28 @@ class NativeMacAudioController {
       return { ok: true, idle: true };
     }
     if (!child) child = this.ensureProcess();
-    child.stdin.write(`${JSON.stringify(command)}\n`);
-    return { ok: true };
+    const requestId = this.nextRequestId++;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(requestId);
+        resolve({ ok: false, error: '原生音訊播放器回應逾時' });
+      }, this.commandTimeoutMs);
+      if (typeof timer.unref === 'function') timer.unref();
+      this.pending.set(requestId, { resolve, timer });
+      try {
+        child.stdin.write(`${JSON.stringify({ ...command, requestId })}\n`);
+      } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(requestId);
+        resolve({ ok: false, error: error.message });
+      }
+    });
   }
 
   close() {
     const child = this.child;
     this.child = null;
+    this.failPending('原生音訊播放器已關閉');
     if (!child || child.killed) return;
     try { child.stdin.write('{"action":"shutdown"}\n'); } catch {}
     try { child.stdin.end(); } catch {}
@@ -1151,17 +1222,6 @@ function boundedInteger(value, fallback, min, max) {
   return Number.isInteger(number) ? Math.min(max, Math.max(min, number)) : fallback;
 }
 
-function sanitizeWindowBounds(value) {
-  if (!isPlainObject(value)) return null;
-  const x = boundedInteger(value.x, NaN, -100_000, 100_000);
-  const y = boundedInteger(value.y, NaN, -100_000, 100_000);
-  const width = boundedInteger(value.width, NaN, 320, 20_000);
-  const height = boundedInteger(value.height, NaN, 240, 20_000);
-  if (![x, y, width, height].every(Number.isFinite)) return null;
-  if (width < height) return null;
-  return { x, y, width, height };
-}
-
 const BACKGROUND_EXTENSIONS = new Set(['.bmp', '.gif', '.jpeg', '.jpg', '.png', '.webp']);
 
 function isSafeBackgroundFileName(fileName) {
@@ -1240,8 +1300,7 @@ function sanitizeConfig(input) {
     zoomUrl: boundedString(value.zoomUrl, DEFAULT_CONFIG.zoomUrl, 4096),
     scheduleEnabled: value.scheduleEnabled !== false,
     scheduleUrl: boundedString(value.scheduleUrl, DEFAULT_CONFIG.scheduleUrl, 4096),
-    skippedVersion: boundedString(value.skippedVersion, '', 64),
-    windowBounds: sanitizeWindowBounds(value.windowBounds)
+    skippedVersion: boundedString(value.skippedVersion, '', 64)
   };
 }
 
@@ -1418,7 +1477,7 @@ function enqueueNativeAudioCommand(request) {
     if (generation !== nativeAudioCommandGeneration) return { ok: false, cancelled: true };
     const command = await normalizeNativeAudioCommand(request);
     if (generation !== nativeAudioCommandGeneration) return { ok: false, cancelled: true };
-    const sent = nativeMacAudio.send(command);
+    const sent = await nativeMacAudio.send(command);
     updateNativeAudioPlaybackIntent(command, sent);
     return sent;
   });
@@ -1496,119 +1555,29 @@ function centeredBounds(area, currentBounds, width, height) {
   };
 }
 
-function defaultMainWindowBounds(area) {
-  const margin = Math.max(0, Math.min(40, Math.floor(area.width * 0.05), Math.floor(area.height * 0.05)));
-  const size = fitAspectSize(area.width - margin * 2, area.height - margin * 2, 16 / 9, 1280);
-  return {
-    x: area.x + Math.max(0, Math.floor((area.width - size.width) / 2)),
-    y: area.y + Math.max(0, Math.floor((area.height - size.height) / 2)),
-    ...size
-  };
-}
-
-function restoredMainWindowBounds(savedBounds, fallbackBounds, displayProvider = screen) {
-  const sanitized = sanitizeWindowBounds(savedBounds);
-  if (!sanitized) return fallbackBounds;
-  const display = displayProvider.getDisplayMatching(sanitized);
-  const area = display && display.workArea ? display.workArea : displayProvider.getPrimaryDisplay().workArea;
-  const minWidth = Math.min(640, area.width);
-  const minHeight = Math.min(360, area.height);
-  const maxWidth = Math.max(minWidth, area.width);
-  const maxHeight = Math.max(minHeight, area.height);
-  const size = fitAspectSize(maxWidth, maxHeight, 16 / 9, Math.max(minWidth, sanitized.width));
-  return centeredBounds(area, sanitized, Math.max(minWidth, size.width), Math.max(minHeight, size.height));
-}
-
-const WINDOW_BOUNDS_SAVE_MS = 300;
-let windowBoundsSaveTimer = null;
-let currentMainWindowMode = 'wide';
-let suppressMainWindowBoundsSave = false;
-
-function shouldSaveMainWindowBounds(bounds, mode = currentMainWindowMode) {
-  const sanitized = sanitizeWindowBounds(bounds);
-  return !!sanitized && mode === 'wide';
-}
-
-async function saveMainWindowBounds(bounds) {
-  if (!shouldSaveMainWindowBounds(bounds)) return false;
-  const cfg = await readConfig();
-  cfg.windowBounds = sanitizeWindowBounds(bounds);
-  await writeConfig(cfg);
-  return true;
-}
-
-function scheduleMainWindowBoundsSave() {
-  if (!mainWindow || mainWindow.isDestroyed() || suppressMainWindowBoundsSave) return false;
-  const bounds = mainWindow.getBounds();
-  if (!shouldSaveMainWindowBounds(bounds)) return false;
-  lastWideBounds = bounds;
-  if (windowBoundsSaveTimer) clearTimeout(windowBoundsSaveTimer);
-  windowBoundsSaveTimer = setTimeout(() => {
-    windowBoundsSaveTimer = null;
-    if (!mainWindow || mainWindow.isDestroyed() || suppressMainWindowBoundsSave) return;
-    saveMainWindowBounds(mainWindow.getBounds()).catch((error) => {
-      console.warn('儲存視窗大小失敗：', error.message);
-    });
-  }, WINDOW_BOUNDS_SAVE_MS);
-  return true;
-}
-
-function setMainWindowBoundsSafely(bounds, animate = process.platform === 'darwin') {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  suppressMainWindowBoundsSave = true;
-  try {
-    mainWindow.setBounds(bounds, animate);
-  } finally {
-    setTimeout(() => { suppressMainWindowBoundsSave = false; }, 120);
-  }
-}
-
 function setWindowMode(mode) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (mode !== 'mobile' && mode !== 'wide') throw new Error('視窗模式必須是 mobile 或 wide');
   const bounds = mainWindow.getBounds();
   const area = screen.getDisplayMatching(bounds).workArea;
-
-  // 同一種版型間切換（例如封面進入敬拜）必須保留使用者剛調整的大小，
-  // 不要因為 lastWideBounds 尚未寫入設定檔而跳回先前尺寸。
-  if (mode === currentMainWindowMode) {
-    if (mode === 'wide') {
-      lastWideBounds = bounds;
-      saveMainWindowBounds(bounds).catch((error) => console.warn('儲存視窗大小失敗：', error.message));
-      mainWindow.setMinimumSize(Math.min(640, bounds.width), Math.min(360, bounds.height));
-      mainWindow.setAspectRatio(16 / 9);
-    } else {
-      mainWindow.setMinimumSize(Math.min(320, bounds.width), Math.min(560, bounds.height));
-      mainWindow.setAspectRatio(9 / 16);
-    }
-    return;
-  }
-
   if (mode === 'mobile') {
-    lastWideBounds = bounds;
-    saveMainWindowBounds(bounds).catch((error) => console.warn('儲存視窗大小失敗：', error.message));
-    currentMainWindowMode = 'mobile';
-    // 直式閱讀頁沿用橫式封面的顯示高度（也就是同一縮放尺度），
-    // 而不是每次進入經文都放大到螢幕的完整可用高度。
-    const targetHeight = Math.min(area.height, Math.max(1, bounds.height));
-    const size = fitAspectSize(area.width, targetHeight, 9 / 16, Math.round(targetHeight * 9 / 16));
+    if (bounds.width > bounds.height) lastWideBounds = bounds;
+    const size = fitAspectSize(area.width, area.height, 9 / 16, Math.round(area.height * 9 / 16));
     mainWindow.setMinimumSize(1, 1);
     mainWindow.setAspectRatio(9 / 16);
-    setMainWindowBoundsSafely(centeredBounds(area, bounds, size.width, size.height));
+    mainWindow.setBounds(centeredBounds(area, bounds, size.width, size.height), process.platform === 'darwin');
     mainWindow.setMinimumSize(Math.min(320, size.width), Math.min(560, size.height));
     return;
   }
 
-  currentMainWindowMode = 'wide';
   const margin = Math.max(0, Math.min(40, Math.floor(area.width * 0.05), Math.floor(area.height * 0.05)));
   const maxWidth = Math.max(1, area.width - margin * 2);
   const maxHeight = Math.max(1, area.height - margin * 2);
-  const wideReferenceBounds = lastWideBounds || bounds;
-  const preferredWidth = Math.max(wideReferenceBounds.width, 640);
+  const preferredWidth = lastWideBounds ? lastWideBounds.width : Math.max(bounds.width, 640);
   const size = fitAspectSize(maxWidth, maxHeight, 16 / 9, preferredWidth);
   mainWindow.setMinimumSize(1, 1);
   mainWindow.setAspectRatio(16 / 9);
-  setMainWindowBoundsSafely(centeredBounds(area, wideReferenceBounds, size.width, size.height));
+  mainWindow.setBounds(centeredBounds(area, bounds, size.width, size.height), process.platform === 'darwin');
   mainWindow.setMinimumSize(Math.min(640, size.width), Math.min(360, size.height));
 }
 
@@ -1622,8 +1591,7 @@ function registerIpc() {
     let serialized;
     try { serialized = JSON.stringify(cfg); } catch { throw new Error('設定格式不正確'); }
     if (Buffer.byteLength(serialized, 'utf8') > 512 * 1024) throw new Error('設定內容過大');
-    const current = await readConfig();
-    await writeConfig({ ...cfg, windowBounds: current.windowBounds });
+    await writeConfig(cfg);
     sendHostScriptureConfig(await readConfig());
     return { ok: true };
   });
@@ -1725,16 +1693,11 @@ function registerIpc() {
       if (process.platform === 'darwin') {
         return { ok: true, manual: true, url: RELEASES_PAGE };
       }
-      await autoUpdater.downloadUpdate();
-      return { ok: true };
+      return await downloadWindowsUpdate();
     }
     catch (e) { return { ok: false, error: e.message }; }
   });
-  trustedHandle('app:quitAndInstall', () => {
-    if (process.platform === 'darwin') return { ok: false, manual: true, error: 'macOS 請從 GitHub Releases 手動安裝更新。' };
-    autoUpdater.quitAndInstall();
-    return { ok: true };
-  });
+  trustedHandle('app:quitAndInstall', () => requestUpdateInstallation());
 
   trustedHandle('open:external', async (url) => {
     try { return { ok: true, url: await openApprovedExternal(url) }; }
@@ -1859,12 +1822,16 @@ app.on('second-instance', () => {
 
 async function createWindow() {
   const area = screen.getPrimaryDisplay().workArea;
-  const cfg = await readConfig();
-  const fallbackBounds = defaultMainWindowBounds(area);
-  const initialBounds = restoredMainWindowBounds(cfg.windowBounds, fallbackBounds);
+  const margin = Math.max(0, Math.min(40, Math.floor(area.width * 0.05), Math.floor(area.height * 0.05)));
+  const size = fitAspectSize(area.width - margin * 2, area.height - margin * 2, 16 / 9, 1280);
+  const initialBounds = {
+    x: area.x + Math.max(0, Math.floor((area.width - size.width) / 2)),
+    y: area.y + Math.max(0, Math.floor((area.height - size.height) / 2)),
+    ...size
+  };
   const window = new BrowserWindow({
     ...initialBounds,
-    minWidth: Math.min(640, initialBounds.width), minHeight: Math.min(360, initialBounds.height),
+    minWidth: Math.min(640, size.width), minHeight: Math.min(360, size.height),
     backgroundColor: '#000000', title: '靈修封面', autoHideMenuBar: true,
     icon: APP_ICON_PATH,
     frame: false,
@@ -1876,8 +1843,9 @@ async function createWindow() {
     }
   });
   mainWindow = window;
-  currentMainWindowMode = 'wide';
-  lastWideBounds = initialBounds;
+  // 只允許同一個視窗在閱讀模式往返時恢復寬螢幕尺寸；Mac 從 Dock
+  // 重開新視窗時不得沿用已關閉視窗的暫存尺寸。
+  lastWideBounds = null;
   startMainWindowPointerMonitor();
   window.setAspectRatio(16 / 9);
   window.removeMenu();
@@ -1909,19 +1877,6 @@ async function createWindow() {
   });
 
   window.webContents.once('did-finish-load', () => { checkLatestVersion(); });
-  window.on('resize', scheduleMainWindowBoundsSave);
-  window.on('move', scheduleMainWindowBoundsSave);
-  window.on('close', () => {
-    if (windowBoundsSaveTimer) clearTimeout(windowBoundsSaveTimer);
-    windowBoundsSaveTimer = null;
-    if (currentMainWindowMode === 'wide' && !window.isDestroyed()) {
-      const bounds = window.getBounds();
-      if (shouldSaveMainWindowBounds(bounds)) {
-        lastWideBounds = bounds;
-        saveMainWindowBounds(bounds).catch((error) => console.warn('儲存視窗大小失敗：', error.message));
-      }
-    }
-  });
   window.on('closed', () => {
     stopMainWindowPointerMonitor();
     closeNativeAudio();
@@ -2002,6 +1957,44 @@ function openHostWindow() {
 }
 
 // ---------- 應用程式更新設定 ----------
+let updateInstallRequested = false;
+let windowsUpdateDownloadPromise = null;
+
+async function downloadWindowsUpdate(updater = autoUpdater) {
+  if (windowsUpdateDownloadPromise) return windowsUpdateDownloadPromise;
+  const task = (async () => {
+    const check = await updater.checkForUpdates();
+    if (!check || !check.isUpdateAvailable) {
+      return { ok: false, noUpdate: true, error: '目前已是最新版本' };
+    }
+    await updater.downloadUpdate();
+    return { ok: true };
+  })();
+  windowsUpdateDownloadPromise = task;
+  try {
+    return await task;
+  } finally {
+    if (windowsUpdateDownloadPromise === task) windowsUpdateDownloadPromise = null;
+  }
+}
+
+function requestUpdateInstallation(platform = process.platform, updater = autoUpdater) {
+  if (platform === 'darwin') {
+    return { ok: false, manual: true, error: 'macOS 請從 GitHub Releases 手動安裝更新。' };
+  }
+  if (updateInstallRequested) return { ok: true, alreadyRequested: true };
+  updateInstallRequested = true;
+  try {
+    // Windows 更新使用靜默模式，避免 assisted NSIS 安裝視窗在完成後
+    // 又被使用者誤認為尚未更新；安裝完成後強制重新啟動新版 App。
+    updater.quitAndInstall(true, true);
+    return { ok: true };
+  } catch (error) {
+    updateInstallRequested = false;
+    return { ok: false, error: String(error && error.message || error) };
+  }
+}
+
 function sendUpdate(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed())
     mainWindow.webContents.send(channel, payload);
@@ -2010,10 +2003,15 @@ function setupAutoUpdater() {
   // 未簽章的 macOS 應用程式不使用原生更新器，改由 GitHub Releases 手動安裝。
   if (process.platform === 'darwin') return;
   autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = true;
+  // 只在使用者明確要求時安裝，避免已下載的安裝程式在之後每次退出時再度啟動。
+  autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.on('update-available', (info) => sendUpdate('update:available', { version: info.version }));
   autoUpdater.on('update-not-available', () => sendUpdate('update:none', {}));
-  autoUpdater.on('error', (err) => sendUpdate('update:error', { error: String(err && err.message || err) }));
+  autoUpdater.on('error', (err) => {
+    // quitAndInstall 的部分錯誤只會透過事件回報；允許使用者修正環境後重試。
+    updateInstallRequested = false;
+    sendUpdate('update:error', { error: String(err && err.message || err) });
+  });
   autoUpdater.on('download-progress', (p) => sendUpdate('update:progress', { percent: p.percent }));
   autoUpdater.on('update-downloaded', (info) => sendUpdate('update:downloaded', { version: info.version }));
 }

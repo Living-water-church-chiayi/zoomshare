@@ -82,6 +82,9 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
     radial-gradient(circle at 12% 10%, rgba(241, 100, 30, .12), transparent 26%),
     linear-gradient(180deg, #fffdf8 0%, var(--paper) 100%);
 }
+/* Windows 不會把檔案 drop 事件送進原生視窗拖曳區域。封面本體要
+   保持 no-drag，讓圖片能拖入；上方標題仍是移動視窗的把手。 */
+body.plat-win .canvas { -webkit-app-region: no-drag; }
 .canvas::after {
   content: '';
   position: absolute;
@@ -136,6 +139,7 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
   top: 10cqh;
   text-shadow: none;
 }
+body.plat-win .overlay-top { -webkit-app-region: drag; }
 .canvas:not(.no-background) .overlay-top .title-main,
 .canvas:not(.no-background) .overlay-top .title2,
 .canvas:not(.no-background) .overlay-top .title3 {
@@ -731,6 +735,7 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
   align-items: center;
   justify-content: center;
 }
+body.plat-win .worship-layer { -webkit-app-region: drag; }
 .worship-video { width: 100%; height: 100%; object-fit: fill; background: #0f0c10; }
 .worship-loading {
   position: absolute;
