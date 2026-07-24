@@ -411,6 +411,57 @@ test('persists only wide main-window bounds and restores them on startup', () =>
   assert.equal(shouldSaveMainWindowBounds({ x: 50, y: 60, width: 360, height: 640 }, 'wide'), false);
 });
 
+test('keeps one user-selected display scale across cover, worship, and reading modes', () => {
+  const calls = { bounds: [], aspectRatios: [], minimumSizes: [], saved: [] };
+  let currentBounds = { x: 100, y: 100, width: 800, height: 450 };
+  const mainWindow = {
+    isDestroyed: () => false,
+    getBounds: () => ({ ...currentBounds }),
+    setBounds: (bounds) => {
+      currentBounds = { ...bounds };
+      calls.bounds.push({ ...bounds });
+    },
+    setAspectRatio: (ratio) => calls.aspectRatios.push(ratio),
+    setMinimumSize: (width, height) => calls.minimumSizes.push([width, height])
+  };
+  const {
+    setWindowMode
+  } = loadFunctions(
+    mainSource,
+    ['fitAspectSize', 'centeredBounds', 'setMainWindowBoundsSafely', 'setWindowMode'],
+    {
+      mainWindow,
+      screen: { getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 1440, height: 900 } }) },
+      process: { platform: 'linux' },
+      currentMainWindowMode: 'wide',
+      lastWideBounds: null,
+      suppressMainWindowBoundsSave: false,
+      saveMainWindowBounds: (bounds) => {
+        calls.saved.push({ ...bounds });
+        return Promise.resolve(true);
+      },
+      setTimeout: (callback) => {
+        callback();
+        return 1;
+      },
+      console
+    }
+  );
+
+  setWindowMode('wide');
+  assert.deepEqual(currentBounds, { x: 100, y: 100, width: 800, height: 450 }, 'cover-to-worship must not enlarge the window');
+  assert.equal(calls.bounds.length, 0, 'same wide layout should not be resized programmatically');
+
+  setWindowMode('mobile');
+  assert.deepEqual(currentBounds, { x: 374, y: 100, width: 253, height: 450 }, 'reading mode must keep the cover height and display scale');
+
+  setWindowMode('mobile');
+  assert.equal(calls.bounds.length, 1, 'Scripture-to-Utmost must not resize an already-mobile window');
+
+  setWindowMode('wide');
+  assert.deepEqual(currentBounds, { x: 100, y: 100, width: 800, height: 450 }, 'returning to cover must restore the user-selected wide bounds');
+});
+
 test('reveals reading navigation from pointer activity across a native drag region', () => {
   let hidden = false;
   const calls = [];

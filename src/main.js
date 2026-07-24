@@ -1541,6 +1541,7 @@ function scheduleMainWindowBoundsSave() {
   if (!mainWindow || mainWindow.isDestroyed() || suppressMainWindowBoundsSave) return false;
   const bounds = mainWindow.getBounds();
   if (!shouldSaveMainWindowBounds(bounds)) return false;
+  lastWideBounds = bounds;
   if (windowBoundsSaveTimer) clearTimeout(windowBoundsSaveTimer);
   windowBoundsSaveTimer = setTimeout(() => {
     windowBoundsSaveTimer = null;
@@ -1567,13 +1568,30 @@ function setWindowMode(mode) {
   if (mode !== 'mobile' && mode !== 'wide') throw new Error('視窗模式必須是 mobile 或 wide');
   const bounds = mainWindow.getBounds();
   const area = screen.getDisplayMatching(bounds).workArea;
-  if (mode === 'mobile') {
-    if (bounds.width > bounds.height) {
+
+  // 同一種版型間切換（例如封面進入敬拜）必須保留使用者剛調整的大小，
+  // 不要因為 lastWideBounds 尚未寫入設定檔而跳回先前尺寸。
+  if (mode === currentMainWindowMode) {
+    if (mode === 'wide') {
       lastWideBounds = bounds;
       saveMainWindowBounds(bounds).catch((error) => console.warn('儲存視窗大小失敗：', error.message));
+      mainWindow.setMinimumSize(Math.min(640, bounds.width), Math.min(360, bounds.height));
+      mainWindow.setAspectRatio(16 / 9);
+    } else {
+      mainWindow.setMinimumSize(Math.min(320, bounds.width), Math.min(560, bounds.height));
+      mainWindow.setAspectRatio(9 / 16);
     }
+    return;
+  }
+
+  if (mode === 'mobile') {
+    lastWideBounds = bounds;
+    saveMainWindowBounds(bounds).catch((error) => console.warn('儲存視窗大小失敗：', error.message));
     currentMainWindowMode = 'mobile';
-    const size = fitAspectSize(area.width, area.height, 9 / 16, Math.round(area.height * 9 / 16));
+    // 直式閱讀頁沿用橫式封面的顯示高度（也就是同一縮放尺度），
+    // 而不是每次進入經文都放大到螢幕的完整可用高度。
+    const targetHeight = Math.min(area.height, Math.max(1, bounds.height));
+    const size = fitAspectSize(area.width, targetHeight, 9 / 16, Math.round(targetHeight * 9 / 16));
     mainWindow.setMinimumSize(1, 1);
     mainWindow.setAspectRatio(9 / 16);
     setMainWindowBoundsSafely(centeredBounds(area, bounds, size.width, size.height));
@@ -1585,11 +1603,12 @@ function setWindowMode(mode) {
   const margin = Math.max(0, Math.min(40, Math.floor(area.width * 0.05), Math.floor(area.height * 0.05)));
   const maxWidth = Math.max(1, area.width - margin * 2);
   const maxHeight = Math.max(1, area.height - margin * 2);
-  const preferredWidth = lastWideBounds ? lastWideBounds.width : Math.max(bounds.width, 640);
+  const wideReferenceBounds = lastWideBounds || bounds;
+  const preferredWidth = Math.max(wideReferenceBounds.width, 640);
   const size = fitAspectSize(maxWidth, maxHeight, 16 / 9, preferredWidth);
   mainWindow.setMinimumSize(1, 1);
   mainWindow.setAspectRatio(16 / 9);
-  setMainWindowBoundsSafely(centeredBounds(area, bounds, size.width, size.height));
+  setMainWindowBoundsSafely(centeredBounds(area, wideReferenceBounds, size.width, size.height));
   mainWindow.setMinimumSize(Math.min(640, size.width), Math.min(360, size.height));
 }
 
