@@ -42,6 +42,7 @@ let state = {
     ]
   }
 };
+let rosterSheetOpenCount = 0;
 
 async function run() {
   ipcMain.handle('presence:state', () => state);
@@ -51,6 +52,7 @@ async function run() {
   ipcMain.handle('presence:assignments', () => state);
   ipcMain.handle('host:utmost-today', () => ({ ok: true, body: '第一段\n\n第二段\n\n第三段\n\n第四段' }));
   ipcMain.handle('host:scripture-current', () => ({ book: '提摩太前書', startCh: 6, startV: 9, endCh: 6, endV: 21 }));
+  ipcMain.handle('host:open-roster-sheet', () => { rosterSheetOpenCount += 1; return { ok: true }; });
   ipcMain.handle('host:close', () => ({ ok: true }));
 
   const window = new BrowserWindow({
@@ -73,6 +75,8 @@ async function run() {
     utmostSlots: document.querySelectorAll('#utmostAssignments .assignment-card').length,
     sharingName: document.getElementById('todaySharingName').textContent,
     onlineRows: document.querySelectorAll('#allOnlineList .online-row').length,
+    rosterRows: document.querySelectorAll('#rosterList .roster-row').length,
+    firstRosterAlias: document.querySelector('#rosterList .roster-row small').textContent,
     peakOnline: document.getElementById('onlineCount').textContent,
     eligibleColumns: getComputedStyle(document.getElementById('scriptureEligibleList')).gridTemplateColumns.split(' ').length,
     bodyScrollWidth: document.body.scrollWidth,
@@ -84,9 +88,15 @@ async function run() {
   assert.equal(initial.utmostSlots, 4);
   assert.equal(initial.sharingName, '今日分享者');
   assert.equal(initial.onlineRows, 4);
+  assert.equal(initial.rosterRows, 3);
+  assert.equal(initial.firstRosterAlias, 'Zoom：Amy 王');
   assert.equal(initial.peakOnline, '本次會議最高 4 人在線');
   assert.equal(initial.eligibleColumns, 3);
   assert.ok(initial.bodyScrollWidth <= initial.bodyClientWidth, 'host console overflows horizontally');
+
+  await window.webContents.executeJavaScript(`document.getElementById('openRosterSheetButton').click()`);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(rosterSheetOpenCount, 1);
 
   await window.webContents.executeJavaScript(`document.querySelector('#scriptureAssignments .assignment-card').click()`);
   const inlineCandidates = await window.webContents.executeJavaScript(`(() => ({
@@ -144,7 +154,14 @@ async function run() {
 
   const outputPath = process.env.HOST_PREVIEW_OUTPUT;
   if (outputPath) {
-    if (process.env.HOST_PREVIEW_SECTION === 'utmost') {
+    if (process.env.HOST_PREVIEW_SECTION === 'roster') {
+      await window.webContents.executeJavaScript(`(() => {
+        const roster = document.querySelector('.roster-overview');
+        roster.open = true;
+        roster.scrollIntoView({ block: 'start' });
+      })()`);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    } else if (process.env.HOST_PREVIEW_SECTION === 'utmost') {
       await window.webContents.executeJavaScript(`document.querySelector('.utmost-service').scrollIntoView({ block: 'start' })`);
       await new Promise((resolve) => setTimeout(resolve, 150));
     }

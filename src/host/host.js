@@ -245,6 +245,41 @@ function renderAllOnline(derived) {
   }
 }
 
+function renderRoster(roster) {
+  const members = [...(Array.isArray(roster) ? roster : [])].sort((left, right) =>
+    Number(left.order || 0) - Number(right.order || 0) || String(left.name).localeCompare(String(right.name), 'zh-Hant'));
+  $('rosterCount').textContent = String(members.length);
+  const container = $('rosterList');
+  container.replaceChildren();
+  if (!members.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = '目前沒有服務名單資料';
+    container.appendChild(empty);
+    return;
+  }
+  for (const member of members) {
+    const row = document.createElement('div');
+    row.className = 'roster-row';
+    if (!member.enabled) row.classList.add('disabled');
+    const identity = document.createElement('div');
+    const name = document.createElement('strong');
+    name.textContent = member.name;
+    const aliases = document.createElement('small');
+    aliases.textContent = member.aliases && member.aliases.length
+      ? `Zoom：${member.aliases.join('、')}`
+      : '尚未設定 Zoom 別名';
+    identity.append(name, aliases);
+    const roles = [];
+    if (member.canReadScripture) roles.push('經文');
+    if (member.canReadUtmost) roles.push('竭誠獻上');
+    const status = document.createElement('span');
+    status.textContent = member.enabled ? (roles.join('、') || '未設定服事') : '未啟用';
+    row.append(identity, status);
+    container.appendChild(row);
+  }
+}
+
 function selectedOnlineDepartures(derived) {
   const onlineIds = new Set(derived.onlineMembers.map((member) => String(member.memberId)));
   const departed = [];
@@ -310,6 +345,7 @@ function renderState(state) {
   renderEligibleList('scripture', derived);
   renderEligibleList('utmost', derived);
   renderAllOnline(derived);
+  renderRoster(state.roster || []);
 
   const acceptedSharedDuplicateMessages = derived.acceptedSharedDuplicateMessages || new Set();
   const errors = [...new Set([...(state.rosterErrors || []), ...derived.errors])]
@@ -440,6 +476,13 @@ async function init() {
     try { renderState(await window.hostApi.refresh()); }
     catch (error) { showNotice(error.message || '更新失敗'); }
     finally { $('refreshButton').disabled = false; }
+  });
+  $('openRosterSheetButton').addEventListener('click', async () => {
+    const button = $('openRosterSheetButton');
+    button.disabled = true;
+    try { await window.hostApi.openRosterSheet(); }
+    catch (error) { showNotice(error.message || '無法開啟 Google 名單'); }
+    finally { button.disabled = false; }
   });
   $('unpairButton').addEventListener('click', async () => {
     if (!window.confirm('解除後需要安裝金鑰才能重新配對。確定要解除嗎？')) return;

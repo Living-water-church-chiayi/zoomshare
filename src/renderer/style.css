@@ -900,7 +900,8 @@ body.plat-win .worship-layer { -webkit-app-region: drag; }
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  width: max-content;
   gap: calc(6px * var(--toolbar-display-scale, 1));
   padding: calc(8px * var(--toolbar-display-scale, 1));
   max-width: calc(100vw - 18px);
@@ -917,6 +918,7 @@ body.plat-win .worship-layer { -webkit-app-region: drag; }
 }
 .toolbar.show { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0); }
 .toolbar button {
+  flex: 0 0 auto;
   font-family: var(--ui);
   font-size: max(8px, calc(12px * var(--toolbar-display-scale, 1)));
   font-weight: 900;
@@ -932,6 +934,7 @@ body.plat-win .worship-layer { -webkit-app-region: drag; }
   align-items: center;
   justify-content: center;
   gap: calc(5px * var(--toolbar-display-scale, 1));
+  white-space: nowrap;
 }
 .toolbar .icon-btn svg {
   width: max(14px, calc(20px * var(--toolbar-display-scale, 1)));
@@ -965,6 +968,7 @@ body.plat-win .worship-layer { -webkit-app-region: drag; }
 .toolbar .btn-announce { color: var(--ink); }
 .toolbar .btn-close:hover { background: #d93025; color: #fff; }
 .toolbar .tb-sep {
+  flex: 0 0 1px;
   width: 1px;
   align-self: stretch;
   background: var(--line);

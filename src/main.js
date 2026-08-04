@@ -17,6 +17,7 @@ const { PresenceManager } = require('./presence');
 
 const presenceManager = new PresenceManager();
 const APP_ICON_PATH = path.join(__dirname, 'renderer', 'images', 'app-icon.png');
+const ROSTER_SHEET_URL = 'https://docs.google.com/spreadsheets/d/11O0As3DWpT45otcL5T7BadMpPVWcWKAoiZ5OUPocMpA/edit#gid=20260720';
 
 // macOS 上 Zoom「分享聲音」可能讓 Chromium 將虛擬音訊裝置當成輸入端。
 // 本程式只播放媒體，因此在 AudioManager 建立前強制所有輸入串流使用假裝置，
@@ -1740,6 +1741,10 @@ function registerIpc() {
     if (hostWindow && !hostWindow.isDestroyed()) hostWindow.close();
     return { ok: true };
   });
+  trustedHandle('host:open-roster-sheet', async () => ({
+    ok: true,
+    url: await openApprovedExternal(ROSTER_SHEET_URL)
+  }));
   trustedHandle('presence:state', () => presenceManager.publicState());
   trustedHandle('presence:pair', async (settings) => {
     if (!isPlainObject(settings)) throw new Error('配對資料格式不正確');
@@ -1764,6 +1769,8 @@ let hostWindow = null;
 let lastWideBounds = null;
 let pointerMonitorTimer = null;
 let lastPointerPoint = null;
+let hostPresenceRefreshTimer = null;
+const HOST_PRESENCE_REFRESH_INTERVAL_MS = 60_000;
 
 function pointInsideBounds(point, bounds) {
   return point.x >= bounds.x && point.x < bounds.x + bounds.width &&
@@ -1801,6 +1808,26 @@ function stopMainWindowPointerMonitor() {
   if (pointerMonitorTimer) clearInterval(pointerMonitorTimer);
   pointerMonitorTimer = null;
   lastPointerPoint = null;
+}
+
+function refreshHostPresence() {
+  if (!presenceManager.publicState().configured) return Promise.resolve(null);
+  return presenceManager.refreshBootstrap().catch((error) => {
+    console.warn('更新主持台名單失敗：', error.message);
+    return null;
+  });
+}
+
+function stopHostPresenceRefresh() {
+  if (hostPresenceRefreshTimer) clearInterval(hostPresenceRefreshTimer);
+  hostPresenceRefreshTimer = null;
+}
+
+function startHostPresenceRefresh() {
+  stopHostPresenceRefresh();
+  refreshHostPresence();
+  hostPresenceRefreshTimer = setInterval(refreshHostPresence, HOST_PRESENCE_REFRESH_INTERVAL_MS);
+  if (typeof hostPresenceRefreshTimer.unref === 'function') hostPresenceRefreshTimer.unref();
 }
 
 // 本程式只會播放本機媒體，不需要麥克風、攝影機或螢幕擷取。
@@ -1911,6 +1938,7 @@ function openHostWindow() {
     hostWindow.show();
     hostWindow.focus();
     sendPresenceState();
+    startHostPresenceRefresh();
     return hostWindow;
   }
   const display = mainWindow && !mainWindow.isDestroyed()
@@ -1939,6 +1967,7 @@ function openHostWindow() {
     }
   });
   hostWindow = window;
+  startHostPresenceRefresh();
   window.removeMenu();
   window.webContents.on('will-navigate', (event, targetUrl) => {
     if (!isTrustedRendererUrl(targetUrl, HOST_ENTRY_PATH)) event.preventDefault();
@@ -1952,7 +1981,11 @@ function openHostWindow() {
       readConfig().then(sendHostScriptureConfig).catch(() => {});
     }
   });
-  window.on('closed', () => { if (hostWindow === window) hostWindow = null; });
+  window.on('closed', () => {
+    if (hostWindow !== window) return;
+    hostWindow = null;
+    stopHostPresenceRefresh();
+  });
   return window;
 }
 
@@ -2070,6 +2103,7 @@ app.whenReady().then(async () => {
 });
 app.on('before-quit', () => {
   closeNativeAudio();
+  stopHostPresenceRefresh();
   presenceManager.stop();
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

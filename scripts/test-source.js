@@ -347,6 +347,8 @@ assert.match(
   /\.toolbar button[\s\S]*?font-size:\s*max\(8px, calc\(12px \* var\(--toolbar-display-scale, 1\)\)\)[\s\S]*?min-height:\s*max\(28px, calc\(42px \* var\(--toolbar-display-scale, 1\)\)\)/,
   'cover toolbar controls must scale their actual layout size with the app chrome'
 );
+assert.match(css, /\.toolbar\s*\{[\s\S]*?flex-wrap:\s*nowrap;[\s\S]*?width:\s*max-content;/, 'cover toolbar must stay on one row at the minimum window size');
+assert.match(css, /\.toolbar button\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?white-space:\s*nowrap;/, 'cover toolbar buttons must not shrink or wrap individually');
 assert.doesNotMatch(main, /pointInMainWindowInteractiveChrome/, 'hovering over toolbar hotzones must not activate the window');
 assert.match(renderer, /window\.addEventListener\('resize', updateFlowDisplayScale\)/, 'window resizing must only update the reading display scale');
 assert.doesNotMatch(renderer, /scheduleFlowLayoutRefresh/, 'window resizing must not repaginate reading content');

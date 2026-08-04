@@ -9,6 +9,7 @@ const projectRoot = path.resolve(__dirname, '..');
 const rendererEntry = path.join(projectRoot, 'src', 'renderer', 'index.html');
 const rendererSource = fs.readFileSync(path.join(projectRoot, 'src', 'renderer', 'app.js'), 'utf8');
 const coverViewports = [
+  { width: 640, height: 360 },
   { width: 1280, height: 720 },
   { width: 1920, height: 1080 }
 ];
@@ -252,6 +253,7 @@ function rendererHarnessSource() {
     setupFlowFooterReveal();
 
     window.__readingLayoutHarness = {
+      updateDisplayScale: updateFlowDisplayScale,
       async paginateScripture(verses) {
         prepare('scripture');
         if (document.fonts && document.fonts.ready) await document.fonts.ready;
@@ -593,6 +595,11 @@ function coverMeasurementScript() {
     document.getElementById('flowScreen').classList.add('hidden');
     document.querySelector('.overlay-top').classList.remove('hidden');
     document.querySelector('.overlay-bottom').classList.remove('hidden');
+    const harness = window.__readingLayoutHarness;
+    harness.updateDisplayScale();
+    const toolbar = document.getElementById('toolbar');
+    toolbar.style.transition = 'none';
+    toolbar.classList.add('show');
     const scriptureLabel = document.getElementById('scriptureLabel');
     scriptureLabel.textContent = '本日經文：';
     const reading = document.getElementById('readingLines');
@@ -610,6 +617,18 @@ function coverMeasurementScript() {
     const title = getComputedStyle(document.getElementById('title1'));
     const date = getComputedStyle(document.getElementById('dateText'));
     const card = getComputedStyle(document.querySelector('.overlay-bottom'));
+    const toolbarRect = toolbar.getBoundingClientRect();
+    const toolbarButtons = Array.from(toolbar.querySelectorAll('button:not(.hidden)'));
+    const toolbarButtonRects = toolbarButtons.map((button) => {
+      const rect = button.getBoundingClientRect();
+      return { id: button.id, top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left };
+    });
+    const toolbarMetrics = {
+      rect: { top: toolbarRect.top, right: toolbarRect.right, bottom: toolbarRect.bottom, left: toolbarRect.left },
+      clientWidth: toolbar.clientWidth,
+      scrollWidth: toolbar.scrollWidth,
+      buttonRects: toolbarButtonRects
+    };
     const withBackground = {
       gap: bottom.top - top.bottom,
       topBottom: top.bottom,
@@ -653,6 +672,7 @@ function coverMeasurementScript() {
       viewport: { width: innerWidth, height: innerHeight },
       withBackground,
       longContent,
+      toolbar: toolbarMetrics,
       withoutBackgroundStroke
     };
   })())()`;
@@ -684,6 +704,13 @@ function verifyCoverMetrics(metrics, expectedViewport) {
   assert.ok(metrics.longContent.scrollWidth <= metrics.longContent.clientWidth + 1, `${label}: long scripture text overflows horizontally`);
   assert.ok(metrics.longContent.labelScrollWidth <= metrics.longContent.labelClientWidth + 1, `${label}: long scripture label overflows horizontally`);
   assert.ok(metrics.longContent.gap > 0, `${label}: long scripture card overlaps the title`);
+  const toolbar = metrics.toolbar;
+  const firstButton = toolbar.buttonRects[0];
+  const closeButton = toolbar.buttonRects.find((rect) => rect.id === 'btnClose');
+  assert.ok(firstButton && closeButton, `${label}: toolbar buttons are missing`);
+  assert.ok(Math.abs(firstButton.top - closeButton.top) <= 1, `${label}: close button wrapped onto another row`);
+  assert.ok(toolbar.rect.left >= -1 && toolbar.rect.right <= expectedViewport.width + 1, `${label}: toolbar crosses the viewport edge`);
+  assert.ok(toolbar.scrollWidth <= toolbar.clientWidth + 1, `${label}: toolbar content overflows its pill`);
 }
 
 function verifyMetrics(metrics, fixture, expectedViewport) {

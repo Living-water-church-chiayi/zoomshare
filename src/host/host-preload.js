@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('hostApi', {
   saveAssignments: (assignments) => ipcRenderer.invoke('presence:assignments', assignments),
   utmostToday: () => ipcRenderer.invoke('host:utmost-today'),
   scriptureCurrent: () => ipcRenderer.invoke('host:scripture-current'),
+  openRosterSheet: () => ipcRenderer.invoke('host:open-roster-sheet'),
   close: () => ipcRenderer.invoke('host:close'),
   onState: (callback) => {
     const listener = (_event, state) => callback(state);

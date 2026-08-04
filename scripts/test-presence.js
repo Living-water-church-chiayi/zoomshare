@@ -194,4 +194,27 @@ test('host console is a separate locked-down renderer', () => {
   assert.match(html, /id="utmostEligibleList"/);
   assert.doesNotMatch(html, /id="slotPicker"/);
   assert.match(html, /id="allOnlineList"/);
+  assert.match(html, /id="rosterList"/);
+  assert.match(html, /id="openRosterSheetButton"/);
+});
+
+test('keeps the host roster current without removing manual refresh', () => {
+  const main = fs.readFileSync(path.join(root, 'src', 'main.js'), 'utf8');
+  const presence = fs.readFileSync(path.join(root, 'src', 'presence.js'), 'utf8');
+  const host = fs.readFileSync(path.join(root, 'src', 'host', 'host.js'), 'utf8');
+  const hostPreload = fs.readFileSync(path.join(root, 'src', 'host', 'host-preload.js'), 'utf8');
+
+  assert.match(main, /const HOST_PRESENCE_REFRESH_INTERVAL_MS = 60_000;/);
+  assert.match(main, /function startHostPresenceRefresh\(\)[\s\S]*?refreshHostPresence\(\);[\s\S]*?setInterval\(refreshHostPresence, HOST_PRESENCE_REFRESH_INTERVAL_MS\)/);
+  assert.match(main, /function openHostWindow\(\)[\s\S]*?startHostPresenceRefresh\(\)/);
+  assert.match(main, /window\.on\('closed',[\s\S]*?stopHostPresenceRefresh\(\)/);
+  assert.match(presence, /if \(this\.bootstrapRefreshPromise\) return this\.bootstrapRefreshPromise;/);
+  assert.match(presence, /this\.bootstrapGeneration \+= 1;[\s\S]*?this\.bootstrapRefreshPromise = null;/);
+  assert.match(presence, /generation !== this\.bootstrapGeneration \|\| device !== this\.device/);
+  assert.match(presence, /const reconnected = this\.connectedOnce;[\s\S]*?if \(reconnected\) this\.refreshBootstrap\(\)/);
+  assert.match(host, /refreshButton'[\s\S]*?window\.hostApi\.refresh\(\)/);
+  assert.match(host, /function renderRoster\(roster\)/);
+  assert.match(host, /openRosterSheetButton'[\s\S]*?window\.hostApi\.openRosterSheet\(\)/);
+  assert.match(hostPreload, /openRosterSheet: \(\) => ipcRenderer\.invoke\('host:open-roster-sheet'\)/);
+  assert.match(main, /trustedHandle\('host:open-roster-sheet'[\s\S]*?openApprovedExternal\(ROSTER_SHEET_URL\)/);
 });

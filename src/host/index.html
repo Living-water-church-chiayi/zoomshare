@@ -45,9 +45,18 @@
 
       <div id="notice" class="notice hidden" role="alert"></div>
 
-        <details class="all-online">
+      <details class="all-online">
         <summary><span>全部在線</span><strong id="allOnlineCount">0</strong></summary>
         <div id="allOnlineList" class="online-list"></div>
+      </details>
+
+      <details class="roster-overview">
+        <summary><span>服務名單</span><strong id="rosterCount">0</strong></summary>
+        <div class="roster-tools">
+          <p>名單由 Google Sheet 管理；新增或修改後，主持台會自動同步。</p>
+          <button id="openRosterSheetButton" type="button">開啟 Google 名單</button>
+        </div>
+        <div id="rosterList" class="roster-list"></div>
       </details>
 
       <section class="service-group scripture-service" aria-labelledby="scriptureServiceTitle">

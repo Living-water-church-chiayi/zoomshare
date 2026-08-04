@@ -140,6 +140,9 @@ class PresenceManager extends EventEmitter {
     this.socket = null;
     this.reconnectTimer = null;
     this.reconnectAttempt = 0;
+    this.connectedOnce = false;
+    this.bootstrapRefreshPromise = null;
+    this.bootstrapGeneration = 0;
     this.stopped = true;
     this.state = {
       configured: false,
@@ -213,6 +216,9 @@ class PresenceManager extends EventEmitter {
     this.stopped = true;
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
+    this.connectedOnce = false;
+    this.bootstrapGeneration += 1;
+    this.bootstrapRefreshPromise = null;
     if (this.socket) {
       try { this.socket.close(1000, 'app closing'); } catch {}
       this.socket = null;
@@ -321,13 +327,21 @@ class PresenceManager extends EventEmitter {
     return this.publicState();
   }
 
-  async refreshBootstrap() {
-    if (!this.device) throw new Error('裝置尚未配對');
-    const response = await fetch(`${this.device.serviceUrl}/v1/bootstrap`, {
-      headers: { authorization: `Bearer ${this.device.token}` },
-      signal: AbortSignal.timeout(20_000)
-    });
+  async fetchBootstrap(device, generation) {
+    if (!device) throw new Error('裝置尚未配對');
+    let response;
+    try {
+      response = await fetch(`${device.serviceUrl}/v1/bootstrap`, {
+        headers: { authorization: `Bearer ${device.token}` },
+        signal: AbortSignal.timeout(20_000)
+      });
+    } catch (error) {
+      if (generation !== this.bootstrapGeneration || device !== this.device) return this.publicState();
+      this.publish({ error: `同步失敗：${error.message}`, stale: true });
+      throw error;
+    }
     const data = await responseJsonLimited(response);
+    if (generation !== this.bootstrapGeneration || device !== this.device) return this.publicState();
     if (!response.ok || !data.ok) {
       const error = new Error(data.error || `同步失敗（HTTP ${response.status}）`);
       if (response.status === 401) this.publish({ connection: 'error', error: '裝置配對已失效，請重新配對' });
@@ -336,6 +350,17 @@ class PresenceManager extends EventEmitter {
     }
     this.applyBootstrap(data);
     return this.publicState();
+  }
+
+  refreshBootstrap() {
+    if (this.bootstrapRefreshPromise) return this.bootstrapRefreshPromise;
+    const generation = this.bootstrapGeneration;
+    const request = this.fetchBootstrap(this.device, generation);
+    const tracked = request.finally(() => {
+      if (this.bootstrapRefreshPromise === tracked) this.bootstrapRefreshPromise = null;
+    });
+    this.bootstrapRefreshPromise = tracked;
+    return tracked;
   }
 
   async scheduleToday() {
@@ -362,8 +387,11 @@ class PresenceManager extends EventEmitter {
     this.socket = socket;
     socket.on('open', () => {
       if (this.socket !== socket) return;
+      const reconnected = this.connectedOnce;
+      this.connectedOnce = true;
       this.reconnectAttempt = 0;
       this.publish({ connection: 'connected', error: '' });
+      if (reconnected) this.refreshBootstrap().catch(() => {});
     });
     socket.on('message', (buffer) => {
       if (this.socket !== socket) return;
