@@ -1613,7 +1613,12 @@ function moveManualWindowDrag(point) {
   const dy = normalized.y - manualWindowDrag.lastPoint.y;
   if (dx || dy) {
     const bounds = mainWindow.getBounds();
-    mainWindow.setPosition(Math.round(bounds.x + dx), Math.round(bounds.y + dy));
+    mainWindow.setBounds({
+      x: Math.round(bounds.x + dx),
+      y: Math.round(bounds.y + dy),
+      width: bounds.width,
+      height: bounds.height
+    }, false);
   }
   manualWindowDrag.lastPoint = normalized;
 }

@@ -480,7 +480,7 @@ test('reports pointer movement over the main window without resizing it', () => 
 
 test('moves the Windows cover window with the manual drag fallback', () => {
   let bounds = { x: 100, y: 200, width: 960, height: 540 };
-  const positions = [];
+  const movedBounds = [];
   const drag = loadFunctions(
     mainSource,
     ['isPlainObject', 'normalizeWindowDragPoint', 'startManualWindowDrag', 'moveManualWindowDrag', 'finishManualWindowDrag'],
@@ -490,9 +490,10 @@ test('moves the Windows cover window with the manual drag fallback', () => {
       mainWindow: {
         isDestroyed: () => false,
         getBounds: () => ({ ...bounds }),
-        setPosition: (x, y) => {
-          positions.push([x, y]);
-          bounds = { ...bounds, x, y };
+        setPosition: () => assert.fail('manual cover dragging must lock width and height instead of using setPosition'),
+        setBounds: (nextBounds, animate) => {
+          movedBounds.push({ ...nextBounds, animate });
+          bounds = { ...bounds, ...nextBounds };
         }
       }
     }
@@ -504,7 +505,10 @@ test('moves the Windows cover window with the manual drag fallback', () => {
   drag.finishManualWindowDrag();
   drag.moveManualWindowDrag({ x: 600, y: 400 });
 
-  assert.deepEqual(positions, [[130, 225], [135, 220]]);
+  assert.deepEqual(movedBounds, [
+    { x: 130, y: 225, width: 960, height: 540, animate: false },
+    { x: 135, y: 220, width: 960, height: 540, animate: false }
+  ]);
 });
 
 test('does not run the manual window drag fallback outside Windows', () => {
