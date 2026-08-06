@@ -478,6 +478,57 @@ test('reports pointer movement over the main window without resizing it', () => 
   ]);
 });
 
+test('moves the Windows cover window with the manual drag fallback', () => {
+  let bounds = { x: 100, y: 200, width: 960, height: 540 };
+  const positions = [];
+  const drag = loadFunctions(
+    mainSource,
+    ['isPlainObject', 'normalizeWindowDragPoint', 'startManualWindowDrag', 'moveManualWindowDrag', 'finishManualWindowDrag'],
+    {
+      process: { platform: 'win32' },
+      manualWindowDrag: null,
+      mainWindow: {
+        isDestroyed: () => false,
+        getBounds: () => ({ ...bounds }),
+        setPosition: (x, y) => {
+          positions.push([x, y]);
+          bounds = { ...bounds, x, y };
+        }
+      }
+    }
+  );
+
+  drag.startManualWindowDrag({ x: 500, y: 300 });
+  drag.moveManualWindowDrag({ x: 530, y: 325 });
+  drag.moveManualWindowDrag({ x: 535, y: 320 });
+  drag.finishManualWindowDrag();
+  drag.moveManualWindowDrag({ x: 600, y: 400 });
+
+  assert.deepEqual(positions, [[130, 225], [135, 220]]);
+});
+
+test('does not run the manual window drag fallback outside Windows', () => {
+  const positions = [];
+  const drag = loadFunctions(
+    mainSource,
+    ['isPlainObject', 'normalizeWindowDragPoint', 'startManualWindowDrag', 'moveManualWindowDrag'],
+    {
+      process: { platform: 'darwin' },
+      manualWindowDrag: null,
+      mainWindow: {
+        isDestroyed: () => false,
+        getBounds: () => ({ x: 100, y: 200, width: 960, height: 540 }),
+        setPosition: (x, y) => positions.push([x, y])
+      }
+    }
+  );
+
+  drag.startManualWindowDrag({ x: 500, y: 300 });
+  drag.moveManualWindowDrag({ x: 530, y: 325 });
+
+  assert.deepEqual(positions, []);
+});
+
 test('uses the original fixed reading size without persisting user window bounds', () => {
   const calls = { bounds: [], aspectRatios: [], minimumSizes: [] };
   let currentBounds = { x: 100, y: 100, width: 800, height: 450 };
@@ -518,30 +569,85 @@ test('uses the original fixed reading size without persisting user window bounds
   );
 });
 
-test('reveals reading navigation from pointer activity across a native drag region', () => {
+test('reveals reading navigation only from the bottom hotzone', () => {
   let hidden = false;
   const calls = [];
   const surface = {
     dataset: { step: 'scripture' },
-    classList: { contains: (name) => name === 'hidden' ? hidden : false }
+    classList: { contains: (name) => name === 'hidden' ? hidden : false },
+    getBoundingClientRect: () => ({ top: 0, bottom: 720, height: 720 })
   };
   const { handleReadingPointerActivity } = loadFunctions(
     rendererSource,
-    ['handleReadingPointerActivity'],
+    [
+      'pointerCoordinate',
+      'isReadingFlowStep',
+      'flowFooterHotzoneHeight',
+      'shouldRevealFlowFooterFromPointer',
+      'handleReadingPointerActivity'
+    ],
     {
       $: () => surface,
       flowStep: 'scripture',
-      isReadingFlowStep: () => true,
+      window: { innerHeight: 720 },
+      FLOW_FOOTER_HOTZONE_RATIO: 0.16,
+      FLOW_FOOTER_HOTZONE_MIN: 72,
+      FLOW_FOOTER_HOTZONE_MAX: 150,
       revealFlowFooter: () => calls.push('reveal'),
       scheduleFlowFooterHide: () => calls.push('schedule')
     },
   );
 
-  assert.equal(handleReadingPointerActivity(), true);
+  assert.equal(handleReadingPointerActivity({ y: 360, height: 720 }), false);
+  assert.deepEqual(calls, []);
+  assert.equal(handleReadingPointerActivity({ y: 650, height: 720 }), true);
   assert.deepEqual(calls, ['reveal', 'schedule']);
   hidden = true;
-  assert.equal(handleReadingPointerActivity(), false);
+  assert.equal(handleReadingPointerActivity({ y: 650, height: 720 }), false);
   assert.deepEqual(calls, ['reveal', 'schedule']);
+});
+
+test('hides reading navigation after one idle second even when the pointer stays over it', () => {
+  let footerVisible = false;
+  let timer = null;
+  let delay = 0;
+  const screen = {
+    dataset: { step: 'scripture' },
+    classList: {
+      contains: (name) => name === 'hidden' ? false : (name === 'footer-visible' ? footerVisible : false),
+      add: (name) => { if (name === 'footer-visible') footerVisible = true; },
+      remove: (name) => { if (name === 'footer-visible') footerVisible = false; }
+    }
+  };
+  const footer = {
+    contains: () => false,
+    classList: {
+      remove: () => {}
+    }
+  };
+  const { revealFlowFooter, scheduleFlowFooterHide } = loadFunctions(
+    rendererSource,
+    ['isReadingFlowStep', 'hideFlowFooterImmediately', 'revealFlowFooter', 'scheduleFlowFooterHide'],
+    {
+      $: () => screen,
+      document: { querySelector: () => footer, activeElement: null },
+      flowStep: 'scripture',
+      flowFooterHideTimer: null,
+      clearTimeout: () => {},
+      setTimeout: (callback, milliseconds) => {
+        timer = callback;
+        delay = milliseconds;
+        return 1;
+      }
+    }
+  );
+
+  revealFlowFooter();
+  assert.equal(footerVisible, true);
+  scheduleFlowFooterHide();
+  assert.equal(delay, 1000);
+  timer();
+  assert.equal(footerVisible, false);
 });
 
 test('reveals the cover toolbar from native pointer activity only in the bottom hotzone', () => {
@@ -605,6 +711,38 @@ test('accepts Windows image drops even when the browser does not provide a MIME 
   assert.equal(isSupportedImageFile({ name: 'pasted-image', type: 'image/webp' }), true);
   assert.equal(isSupportedImageFile({ name: 'notes.txt', type: 'text/plain' }), false);
   assert.equal(isSupportedImageFile(null), false);
+});
+
+test('starts manual cover window dragging only from the Windows cover surface', () => {
+  const flowScreen = { classList: { contains: (name) => name === 'hidden' } };
+  const plainTarget = { closest: () => null };
+  const buttonTarget = { closest: (selector) => selector.includes('button') ? buttonTarget : null };
+  const { shouldStartCoverWindowDrag } = loadFunctions(
+    rendererSource,
+    ['isMainCover', 'isCoverWindowDragBlockedTarget', 'shouldStartCoverWindowDrag'],
+    {
+      $: (id) => id === 'flowScreen' ? flowScreen : null,
+      flowStep: 'cover',
+      worshipActive: false,
+      window: { api: { platform: 'win32' } }
+    }
+  );
+
+  assert.equal(shouldStartCoverWindowDrag({ button: 0, target: plainTarget }), true);
+  assert.equal(shouldStartCoverWindowDrag({ button: 2, target: plainTarget }), false);
+  assert.equal(shouldStartCoverWindowDrag({ button: 0, target: buttonTarget }), false);
+
+  const mac = loadFunctions(
+    rendererSource,
+    ['isMainCover', 'isCoverWindowDragBlockedTarget', 'shouldStartCoverWindowDrag'],
+    {
+      $: (id) => id === 'flowScreen' ? flowScreen : null,
+      flowStep: 'cover',
+      worshipActive: false,
+      window: { api: { platform: 'darwin' } }
+    }
+  );
+  assert.equal(mac.shouldStartCoverWindowDrag({ button: 0, target: plainTarget }), false);
 });
 
 test('does not close settings when text selection starts inside the panel', () => {

@@ -76,6 +76,33 @@ test('matches unique consecutive Chinese name characters inside a longer Zoom na
   assert.equal(derived.participants[2].memberId, '');
 });
 
+test('ignores church name prefixes when fuzzy matching Zoom display names', () => {
+  const roster = [
+    {
+      memberId: 'xiu-zhu', name: '秀珠阿姨', aliases: ['秀珠'], canReadScripture: true,
+      canReadUtmost: true, enabled: true, order: 1
+    },
+    {
+      memberId: 'hui-wen', name: '惠文阿姨', aliases: ['惠文', '嘉義活水早靈修班'], canReadScripture: true,
+      canReadUtmost: true, enabled: true, order: 2
+    }
+  ];
+  const matcher = buildRosterMatcher(roster);
+  const derived = deriveRosterPresence({
+    status: 'active',
+    participants: [{ sessionId: 'xiu-zhu', displayName: '嘉義活水-詹秀珠' }]
+  }, roster);
+
+  assert.equal(matcher.matchByHanToken.has('嘉義'), false);
+  assert.equal(matcher.matchByHanToken.has('義活'), false);
+  assert.equal(matcher.matchByHanToken.has('活水'), false);
+  assert.deepEqual(matcher.errors, []);
+  assert.deepEqual(matchRosterMemberIds(matcher, '活水-詹秀珠'), ['xiu-zhu']);
+  assert.deepEqual(matchRosterMemberIds(matcher, '嘉義活水-詹秀珠'), ['xiu-zhu']);
+  assert.equal(derived.participants[0].memberId, 'xiu-zhu');
+  assert.deepEqual(matchRosterMemberIds(matcher, '嘉義活水早靈修班'), ['hui-wen']);
+});
+
 test('does not guess when the same two-character fragment belongs to multiple members', () => {
   const roster = [
     { memberId: 'a', name: '王小明', aliases: [], enabled: true },

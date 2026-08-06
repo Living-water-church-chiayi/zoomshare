@@ -214,13 +214,19 @@ assert.match(
 );
 assert.match(
   renderer,
-  /footer\.addEventListener\('pointerenter',[\s\S]*?flowFooterHovered = true;[\s\S]*?footer\.addEventListener\('pointerleave',[\s\S]*?flowFooterHovered = false;/,
-  'reading navigation must remain visible while the pointer is over it'
+  /footer\.addEventListener\('pointerenter',[\s\S]*?revealFlowFooter\(\);[\s\S]*?scheduleFlowFooterHide\(\);/,
+  'reading navigation must hide after idle hover instead of staying visible forever'
+);
+assert.doesNotMatch(renderer, /flowFooterHovered/, 'reading navigation idle hiding must not be blocked by hover state');
+assert.match(
+  renderer,
+  /function shouldRevealFlowFooterFromPointer\(event\)[\s\S]*?flowFooterHotzoneHeight/,
+  'reading navigation must use a bottom hotzone before revealing'
 );
 assert.match(renderer, /onWindowPointerActivity\(handleWindowPointerActivity\);/, 'native pointer activity must reveal inactive-window controls');
 assert.match(
   renderer,
-  /function handleWindowPointerActivity\(detail\)[\s\S]*?handleReadingPointerActivity\(\)[\s\S]*?isMainCover\(\)[\s\S]*?shouldRevealCoverToolbarFromPointer\(detail\)[\s\S]*?showToolbar\(\)/,
+  /function handleWindowPointerActivity\(detail\)[\s\S]*?handleReadingPointerActivity\(detail\)[\s\S]*?isMainCover\(\)[\s\S]*?shouldRevealCoverToolbarFromPointer\(detail\)[\s\S]*?showToolbar\(\)/,
   'native pointer activity must cover reading navigation and bottom-hotzone cover toolbar reveal'
 );
 assert.match(renderer, /const MAIN_TOOLBAR_HIDE_MS = 1000;/, 'cover toolbar must hide after one second');
@@ -358,6 +364,11 @@ assert.match(css, /body\.plat-win \.canvas\s*\{[^}]*-webkit-app-region:\s*no-dra
 assert.match(css, /body\.plat-win \.overlay-top\s*\{[^}]*-webkit-app-region:\s*drag;/, 'Windows cover title must remain available for moving the frameless window');
 assert.match(css, /body\.plat-win \.worship-layer\s*\{[^}]*-webkit-app-region:\s*drag;/, 'Windows worship video must remain available for moving the frameless window');
 assert.match(renderer, /function isSupportedImageFile[\s\S]*?jpe\?g[\s\S]*?function setupDragDrop/, 'Windows image drops must allow supported extensions without MIME metadata');
+assert.match(renderer, /function setupWindowsCoverWindowDrag[\s\S]*?startWindowDrag/, 'Windows cover drag fallback must start while the canvas accepts file drops');
+assert.match(renderer, /function setupWindowsCoverWindowDrag[\s\S]*?moveWindowDrag/, 'Windows cover drag fallback must move while the canvas accepts file drops');
+assert.match(renderer, /function setupWindowsCoverWindowDrag[\s\S]*?endWindowDrag/, 'Windows cover drag fallback must end while the canvas accepts file drops');
+assert.match(renderer, /setupDragDrop\(\);\s*setupWindowsCoverWindowDrag\(\);/, 'Windows cover drag fallback must be initialized with drag/drop');
+assert.match(main, /trustedOn\('win:drag-start'[\s\S]*?trustedOn\('win:drag-move'[\s\S]*?trustedOn\('win:drag-end'/, 'main process must accept trusted manual window drag events');
 assert.doesNotMatch(
   section(renderer, 'function buildScripturePagesByFit', 'function renderFlowPage'),
   /SCRIPTURE_MAX_VERSES_PER_PAGE/,

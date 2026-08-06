@@ -558,8 +558,7 @@ body.plat-win .overlay-top { -webkit-app-region: drag; }
   will-change: opacity, transform;
 }
 .flow-screen:is([data-step="scripture"], [data-step="utmost"]) .flow-footer.footer-visible,
-.flow-screen:is([data-step="scripture"], [data-step="utmost"]).footer-visible .flow-footer,
-.flow-screen:is([data-step="scripture"], [data-step="utmost"]) .flow-footer:focus-within {
+.flow-screen:is([data-step="scripture"], [data-step="utmost"]).footer-visible .flow-footer {
   opacity: 1;
   transform: translate(-50%, 0);
   pointer-events: auto;

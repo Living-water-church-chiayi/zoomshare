@@ -210,6 +210,9 @@ function rendererHarnessSource() {
     'hideFlowFooterImmediately',
     'revealFlowFooter',
     'scheduleFlowFooterHide',
+    'pointerCoordinate',
+    'flowFooterHotzoneHeight',
+    'shouldRevealFlowFooterFromPointer',
     'setupFlowFooterReveal',
     'updateFlowPageProgress'
   ];
@@ -222,6 +225,9 @@ function rendererHarnessSource() {
     ${extractConst(rendererSource, 'FLOW_LAYOUT_HEIGHT')}
     ${extractConst(rendererSource, 'FLOW_MIN_CONTROL_SIZE')}
     ${extractConst(rendererSource, 'FLOW_MIN_ICON_SIZE')}
+    ${extractConst(rendererSource, 'FLOW_FOOTER_HOTZONE_RATIO')}
+    ${extractConst(rendererSource, 'FLOW_FOOTER_HOTZONE_MIN')}
+    ${extractConst(rendererSource, 'FLOW_FOOTER_HOTZONE_MAX')}
     ${extractConst(rendererSource, 'UTMOST_MIN_REGULAR_SCALE')}
     ${extractConst(rendererSource, 'MAIN_TOOLBAR_SCALE_MIN')}
     ${extractConst(rendererSource, 'MAIN_TOOLBAR_SCALE_MAX')}
@@ -232,7 +238,6 @@ function rendererHarnessSource() {
     let flowPageRenderToken = 0;
     let flowStep = 'cover';
     let flowFooterHideTimer = null;
-    let flowFooterHovered = false;
     ${implementations}
 
     const prepare = (step) => {
@@ -328,32 +333,37 @@ function rendererHarnessSource() {
 
         hideFlowFooterImmediately();
         const hiddenInitially = !screen.classList.contains('footer-visible');
-        screen.dispatchEvent(new PointerEvent('pointermove', { pointerType: 'mouse' }));
+        const screenRect = screen.getBoundingClientRect();
+        screen.dispatchEvent(new PointerEvent('pointermove', {
+          pointerType: 'mouse',
+          clientY: screenRect.top + screenRect.height / 2
+        }));
+        const middleMoveStayedHidden = !screen.classList.contains('footer-visible');
+        screen.dispatchEvent(new PointerEvent('pointermove', {
+          pointerType: 'mouse',
+          clientY: screenRect.bottom - 8
+        }));
         const setupRevealWorked = screen.classList.contains('footer-visible');
 
         hideFlowFooterImmediately();
         revealFlowFooter();
         const directRevealWorked = screen.classList.contains('footer-visible');
 
+        const startedAt = performance.now();
         footer.dispatchEvent(new PointerEvent('pointerenter', { pointerType: 'mouse' }));
         scheduleFlowFooterHide();
-        await new Promise((resolve) => setTimeout(resolve, 1150));
-        const stayedVisibleWhileHovered = screen.classList.contains('footer-visible');
-
-        footer.dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'mouse' }));
-        const startedAt = performance.now();
         while (screen.classList.contains('footer-visible') && performance.now() - startedAt < 1800) {
           await new Promise((resolve) => setTimeout(resolve, 20));
         }
         const hideElapsed = performance.now() - startedAt;
-        const hiddenAfterSchedule = !screen.classList.contains('footer-visible');
+        const hiddenAfterIdleHover = !screen.classList.contains('footer-visible');
         hideFlowFooterImmediately();
         return {
           hiddenInitially,
+          middleMoveStayedHidden,
           setupRevealWorked,
           directRevealWorked,
-          stayedVisibleWhileHovered,
-          hiddenAfterSchedule,
+          hiddenAfterIdleHover,
           hideElapsed
         };
       }
@@ -1029,10 +1039,10 @@ async function run() {
         `${step} footer auto-hide`
       );
       assert.equal(footerLifecycle.hiddenInitially, true, `${step} footer lifecycle: footer did not start hidden`);
-      assert.equal(footerLifecycle.setupRevealWorked, true, `${step} footer lifecycle: mouse movement did not reveal the arrows`);
+      assert.equal(footerLifecycle.middleMoveStayedHidden, true, `${step} footer lifecycle: middle mouse movement revealed the arrows`);
+      assert.equal(footerLifecycle.setupRevealWorked, true, `${step} footer lifecycle: bottom mouse movement did not reveal the arrows`);
       assert.equal(footerLifecycle.directRevealWorked, true, `${step} footer lifecycle: revealFlowFooter did not reveal the footer`);
-      assert.equal(footerLifecycle.stayedVisibleWhileHovered, true, `${step} footer lifecycle: footer disappeared while the pointer was over it`);
-      assert.equal(footerLifecycle.hiddenAfterSchedule, true, `${step} footer lifecycle: scheduled hide did not hide the footer`);
+      assert.equal(footerLifecycle.hiddenAfterIdleHover, true, `${step} footer lifecycle: idle hover did not hide the footer`);
       assert.ok(
         footerLifecycle.hideElapsed >= 850 && footerLifecycle.hideElapsed <= 1750,
         `${step} footer lifecycle: expected about 1000ms, observed ${footerLifecycle.hideElapsed.toFixed(1)}ms`

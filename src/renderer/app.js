@@ -27,7 +27,6 @@ let flowNavigationToken = 0;
 let flowPageRenderToken = 0;
 let flowTransitioning = false;
 let flowFooterHideTimer = null;
-let flowFooterHovered = false;
 let settingsPointerStartedOutside = false;
 let utmostFinishConfirmUntil = 0;
 let utmostFinishConfirmTimer = null;
@@ -58,6 +57,9 @@ const FLOW_MIN_ICON_SIZE = 19;
 const UTMOST_FINISH_CONFIRM_MS = 3500;
 const FLOW_WHEEL_THRESHOLD = 36;
 const FLOW_WHEEL_IDLE_MS = 300;
+const FLOW_FOOTER_HOTZONE_RATIO = 0.16;
+const FLOW_FOOTER_HOTZONE_MIN = 72;
+const FLOW_FOOTER_HOTZONE_MAX = 150;
 const MAIN_TOOLBAR_HOTZONE_RATIO = 0.16;
 const MAIN_TOOLBAR_HOTZONE_MIN = 72;
 const MAIN_TOOLBAR_HOTZONE_MAX = 150;
@@ -1291,7 +1293,6 @@ function hideFlowFooterImmediately() {
   ) document.activeElement.blur();
   if (flowFooterHideTimer) clearTimeout(flowFooterHideTimer);
   flowFooterHideTimer = null;
-  flowFooterHovered = false;
   if (screen) screen.classList.remove('footer-visible');
   if (footer) footer.classList.remove('footer-visible');
 }
@@ -1324,20 +1325,38 @@ function scheduleFlowFooterHide() {
     hideFlowFooterImmediately();
     return;
   }
-  if (flowFooterHovered || (footer && footer.contains(document.activeElement))) {
-    revealFlowFooter();
-    return;
-  }
   flowFooterHideTimer = setTimeout(() => {
     flowFooterHideTimer = null;
     if (
       flowStep === scheduledStep &&
       screen.dataset.step === scheduledStep &&
-      !screen.classList.contains('hidden') &&
-      !flowFooterHovered &&
-      !(footer && footer.contains(document.activeElement))
+      !screen.classList.contains('hidden')
     ) hideFlowFooterImmediately();
   }, 1000);
+}
+
+function flowFooterHotzoneHeight(surfaceHeight = window.innerHeight) {
+  const height = Math.max(1, Number(surfaceHeight) || 1);
+  return Math.max(
+    FLOW_FOOTER_HOTZONE_MIN,
+    Math.min(FLOW_FOOTER_HOTZONE_MAX, height * FLOW_FOOTER_HOTZONE_RATIO)
+  );
+}
+
+function shouldRevealFlowFooterFromPointer(event) {
+  const surface = $('flowScreen');
+  if (!surface) return false;
+  const rect = typeof surface.getBoundingClientRect === 'function'
+    ? surface.getBoundingClientRect()
+    : null;
+  const surfaceTop = rect ? rect.top : 0;
+  const surfaceBottom = rect
+    ? rect.bottom
+    : Math.max(1, Number((event && event.height) || window.innerHeight) || 1);
+  const surfaceHeight = rect ? rect.height : surfaceBottom - surfaceTop;
+  const pointerY = pointerCoordinate(event && (event.clientY ?? event.y), surfaceTop - 1);
+  return pointerY >= surfaceBottom - flowFooterHotzoneHeight(surfaceHeight) &&
+    pointerY <= surfaceBottom + 1;
 }
 
 function setupFlowFooterReveal() {
@@ -1346,25 +1365,22 @@ function setupFlowFooterReveal() {
   hideFlowFooterImmediately();
 
   if (screen) {
-    screen.addEventListener('pointermove', () => {
-      revealFlowFooter();
+    screen.addEventListener('pointermove', (event) => {
+      if (shouldRevealFlowFooterFromPointer(event)) revealFlowFooter();
       scheduleFlowFooterHide();
     });
     screen.addEventListener('pointerleave', scheduleFlowFooterHide);
   }
   if (!footer) return;
   footer.addEventListener('pointerenter', () => {
-    flowFooterHovered = true;
     revealFlowFooter();
+    scheduleFlowFooterHide();
   });
   footer.addEventListener('pointerleave', () => {
-    flowFooterHovered = false;
     scheduleFlowFooterHide();
   });
   footer.addEventListener('focusin', revealFlowFooter);
-  footer.addEventListener('pointerup', () => {
-    if (!flowFooterHovered) scheduleFlowFooterHide();
-  });
+  footer.addEventListener('pointerup', scheduleFlowFooterHide);
   footer.addEventListener('focusout', (event) => {
     if (event.relatedTarget && footer.contains(event.relatedTarget)) return;
     scheduleFlowFooterHide();
@@ -1809,7 +1825,7 @@ function currentScriptureSegments(ref = currentRefPayload()) {
   }
 }
 
-function handleReadingPointerActivity() {
+function handleReadingPointerActivity(detail) {
   const surface = $('flowScreen');
   if (
     !isReadingFlowStep() ||
@@ -1817,13 +1833,14 @@ function handleReadingPointerActivity() {
     surface.classList.contains('hidden') ||
     surface.dataset.step !== flowStep
   ) return false;
+  if (!shouldRevealFlowFooterFromPointer(detail)) return false;
   revealFlowFooter();
   scheduleFlowFooterHide();
   return true;
 }
 
 function handleWindowPointerActivity(detail) {
-  if (handleReadingPointerActivity()) return true;
+  if (handleReadingPointerActivity(detail)) return true;
   if (!isMainCover()) return false;
   if (!shouldRevealCoverToolbarFromPointer(detail)) return false;
   showToolbar();
@@ -2684,6 +2701,62 @@ function setupDragDrop() {
   });
 }
 
+function windowDragPoint(event) {
+  return { x: Number(event && event.screenX), y: Number(event && event.screenY) };
+}
+
+function isCoverWindowDragBlockedTarget(target) {
+  return Boolean(target && typeof target.closest === 'function' && target.closest(
+    'button, input, select, textarea, a, .toolbar, .settings, .settings-backdrop, .update-banner, .flow-screen, .worship-layer'
+  ));
+}
+
+function shouldStartCoverWindowDrag(event) {
+  return window.api.platform === 'win32' &&
+    isMainCover() &&
+    event &&
+    event.button === 0 &&
+    !isCoverWindowDragBlockedTarget(event.target);
+}
+
+function setupWindowsCoverWindowDrag() {
+  const canvas = $('canvas');
+  if (!canvas || window.api.platform !== 'win32') return;
+  let dragPointerId = null;
+
+  function finish(event) {
+    if (dragPointerId === null || (event && event.pointerId !== dragPointerId)) return;
+    const pointerId = dragPointerId;
+    dragPointerId = null;
+    try {
+      if (typeof canvas.hasPointerCapture === 'function' && canvas.hasPointerCapture(pointerId)) {
+        canvas.releasePointerCapture(pointerId);
+      }
+    } catch {}
+    window.api.endWindowDrag();
+  }
+
+  canvas.addEventListener('pointerdown', (event) => {
+    if (!shouldStartCoverWindowDrag(event)) return;
+    dragPointerId = event.pointerId;
+    try { canvas.setPointerCapture(event.pointerId); } catch {}
+    window.api.startWindowDrag(windowDragPoint(event));
+    event.preventDefault();
+  });
+  canvas.addEventListener('pointermove', (event) => {
+    if (dragPointerId === null || event.pointerId !== dragPointerId) return;
+    if (event.buttons !== undefined && !(event.buttons & 1)) {
+      finish(event);
+      return;
+    }
+    window.api.moveWindowDrag(windowDragPoint(event));
+    event.preventDefault();
+  });
+  canvas.addEventListener('pointerup', finish);
+  canvas.addEventListener('pointercancel', finish);
+  canvas.addEventListener('lostpointercapture', finish);
+}
+
 // ---------- 自動顯示與隱藏工具列 ----------
 let hideTimer = null;
 let mainToolbarHovered = false;
@@ -3511,6 +3584,7 @@ async function init() {
   });
 
   setupDragDrop();
+  setupWindowsCoverWindowDrag();
   setupWorshipControls();
   setupAppUpdater();
   setupCache();

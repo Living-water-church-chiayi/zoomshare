@@ -1511,6 +1511,13 @@ function trustedHandle(channel, handler) {
   });
 }
 
+function trustedOn(channel, handler) {
+  ipcMain.on(channel, (event, ...args) => {
+    if (!isTrustedIpcSender(event)) return;
+    handler(event, ...args);
+  });
+}
+
 function normalizeExternalUrl(value) {
   if (typeof value !== 'string' || value.length === 0 || value.length > 4096) throw new Error('外部網址格式不正確');
   let parsed;
@@ -1580,6 +1587,39 @@ function setWindowMode(mode) {
   mainWindow.setAspectRatio(16 / 9);
   mainWindow.setBounds(centeredBounds(area, bounds, size.width, size.height), process.platform === 'darwin');
   mainWindow.setMinimumSize(Math.min(640, size.width), Math.min(360, size.height));
+}
+
+function normalizeWindowDragPoint(value) {
+  if (!isPlainObject(value)) return null;
+  const x = Number(value.x);
+  const y = Number(value.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  if (Math.abs(x) > 100_000 || Math.abs(y) > 100_000) return null;
+  return { x, y };
+}
+
+function startManualWindowDrag(point) {
+  if (process.platform !== 'win32' || !mainWindow || mainWindow.isDestroyed()) return;
+  const normalized = normalizeWindowDragPoint(point);
+  if (!normalized) return;
+  manualWindowDrag = { lastPoint: normalized };
+}
+
+function moveManualWindowDrag(point) {
+  if (process.platform !== 'win32' || !manualWindowDrag || !mainWindow || mainWindow.isDestroyed()) return;
+  const normalized = normalizeWindowDragPoint(point);
+  if (!normalized) return;
+  const dx = normalized.x - manualWindowDrag.lastPoint.x;
+  const dy = normalized.y - manualWindowDrag.lastPoint.y;
+  if (dx || dy) {
+    const bounds = mainWindow.getBounds();
+    mainWindow.setPosition(Math.round(bounds.x + dx), Math.round(bounds.y + dy));
+  }
+  manualWindowDrag.lastPoint = normalized;
+}
+
+function finishManualWindowDrag() {
+  manualWindowDrag = null;
 }
 
 function registerIpc() {
@@ -1726,6 +1766,9 @@ function registerIpc() {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
   });
   trustedHandle('win:mode', (mode) => setWindowMode(mode));
+  trustedOn('win:drag-start', (_event, point) => startManualWindowDrag(point));
+  trustedOn('win:drag-move', (_event, point) => moveManualWindowDrag(point));
+  trustedOn('win:drag-end', () => finishManualWindowDrag());
   trustedHandle('clipboard:read', () => clipboard.readText());
   trustedHandle('clipboard:write', (text) => {
     if (typeof text !== 'string' || text.length > 200_000) throw new Error('剪貼簿文字格式或大小不符合限制');
@@ -1769,6 +1812,7 @@ let hostWindow = null;
 let lastWideBounds = null;
 let pointerMonitorTimer = null;
 let lastPointerPoint = null;
+let manualWindowDrag = null;
 let hostPresenceRefreshTimer = null;
 const HOST_PRESENCE_REFRESH_INTERVAL_MS = 60_000;
 
