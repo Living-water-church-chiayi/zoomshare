@@ -420,6 +420,21 @@ body.plat-win .overlay-top { -webkit-app-region: drag; }
 .flow-screen:is([data-step="scripture"], [data-step="utmost"]) .flow-content {
   -webkit-app-region: drag;
 }
+.flow-footer-hotzone {
+  display: none;
+}
+.flow-screen:is([data-step="scripture"], [data-step="utmost"]) .flow-footer-hotzone {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  display: block;
+  height: var(--flow-footer-hotzone-h, 16cqh);
+  background: transparent;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+}
 .flow-screen:is([data-step="scripture"], [data-step="utmost"]) .flow-footer {
   -webkit-app-region: no-drag;
 }

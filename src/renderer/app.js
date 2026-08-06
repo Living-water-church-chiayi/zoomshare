@@ -1310,6 +1310,19 @@ function revealFlowFooter() {
   screen.classList.add('footer-visible');
 }
 
+function revealFlowFooterBrieflyAfterPageRender() {
+  const screen = $('flowScreen');
+  if (
+    flowLoading ||
+    !isReadingFlowStep() ||
+    !screen ||
+    screen.classList.contains('hidden') ||
+    screen.dataset.step !== flowStep
+  ) return;
+  revealFlowFooter();
+  scheduleFlowFooterHide();
+}
+
 function scheduleFlowFooterHide() {
   if (flowFooterHideTimer) clearTimeout(flowFooterHideTimer);
   flowFooterHideTimer = null;
@@ -1880,7 +1893,9 @@ function updateFlowPageProgress() {
   }
 }
 
-function renderFlowPage() {
+function renderFlowPage(options) {
+  options = options || {};
+  const revealFooter = options && options.revealFooter !== false;
   resetUtmostFinishConfirmation();
   const page = flowPages[flowPageIndex] || textPage('');
   flowPageRenderToken++;
@@ -1895,9 +1910,10 @@ function renderFlowPage() {
   setFlowButtonLabel('flowPrevPage', prevLabel);
   setFlowButtonLabel('flowNextPage', nextLabel);
   $('flowNextPage').disabled = false;
+  if (revealFooter) revealFlowFooterBrieflyAfterPageRender();
 }
 
-function setFlowContent({ eyebrow, title, meta, pages, scales }) {
+function setFlowContent({ eyebrow, title, meta, pages, scales, revealFooter }) {
   $('flowEyebrow').textContent = eyebrow;
   $('flowTitle').textContent = title;
   $('flowMeta').textContent = meta || '';
@@ -1905,7 +1921,7 @@ function setFlowContent({ eyebrow, title, meta, pages, scales }) {
   flowPageScales = scales || flowPages.map(() => 1);
   flowPageIndex = 0;
   setFlowVisible(true);
-  renderFlowPage();
+  renderFlowPage({ revealFooter });
 }
 
 async function fitCurrentFlowPageToScreen(
@@ -2090,7 +2106,8 @@ function scheduleDailyReadingRefresh() {
   scheduleNext();
 }
 
-async function showScriptureFlow(navigationToken) {
+async function showScriptureFlow(navigationToken, options) {
+  options = options || {};
   if (flowLoading) return;
   flowLoading = true;
   setFlowContent({ eyebrow: '', title: '載入中...', meta: '', pages: [textPage('正在抓取今天的經文內容...')] });
@@ -2112,7 +2129,8 @@ async function showScriptureFlow(navigationToken) {
       eyebrow: '',
       title: formatScriptureBookTitle(),
       meta: '',
-      pages
+      pages,
+      revealFooter: options.revealFooter
     });
     return true;
   } finally {
@@ -2120,7 +2138,8 @@ async function showScriptureFlow(navigationToken) {
   }
 }
 
-async function showUtmostFlow(navigationToken) {
+async function showUtmostFlow(navigationToken, options) {
+  options = options || {};
   if (flowLoading) return;
   hideFlowFooterImmediately();
   flowLoading = true;
@@ -2135,7 +2154,7 @@ async function showUtmostFlow(navigationToken) {
     const data = await ensureUtmostData();
     if (navigationToken !== flowNavigationToken) return false;
     flowLoading = false;
-    setFlowContent({ eyebrow: '', title: '', meta: '', pages: [createUtmostPage(data)], scales: [1] });
+    setFlowContent({ eyebrow: '', title: '', meta: '', pages: [createUtmostPage(data)], scales: [1], revealFooter: options.revealFooter });
     const pageRenderToken = flowPageRenderToken;
     if (!await waitForFlowLayout(navigationToken) || pageRenderToken !== flowPageRenderToken) return false;
     return await fitCurrentFlowPageToScreen(UTMOST_MIN_REGULAR_SCALE, navigationToken, pageRenderToken);
@@ -2156,7 +2175,8 @@ function showEndScreen() {
   });
 }
 
-async function goFlowStep(step) {
+async function goFlowStep(step, options) {
+  options = options || {};
   if (flowTransitioning) return false;
   resetUtmostFinishConfirmation();
   if (flowStep === 'cover' && step !== 'cover') flowReachedUtmost = false;
@@ -2192,8 +2212,8 @@ async function goFlowStep(step) {
     if (navigationToken !== flowNavigationToken) return false;
     updateFlowDisplayScale();
     if (!await waitForFlowLayout(navigationToken)) return false;
-    if (step === 'scripture') return await showScriptureFlow(navigationToken);
-    if (step === 'utmost') return await showUtmostFlow(navigationToken);
+    if (step === 'scripture') return await showScriptureFlow(navigationToken, options);
+    if (step === 'utmost') return await showUtmostFlow(navigationToken, options);
     return true;
   } finally {
     if (navigationToken === flowNavigationToken) flowTransitioning = false;
@@ -2219,11 +2239,11 @@ async function returnToMainCover() {
   }
 }
 
-function nextFlowStep() {
+function nextFlowStep(source = 'button') {
   if (flowTransitioning) return;
   const idx = FLOW_ORDER.indexOf(flowStep);
   if (idx >= FLOW_ORDER.length - 1) return;
-  goFlowStep(FLOW_ORDER[Math.min(idx + 1, FLOW_ORDER.length - 1)] || 'cover');
+  goFlowStep(FLOW_ORDER[Math.min(idx + 1, FLOW_ORDER.length - 1)] || 'cover', { revealFooter: source !== 'keyboard' });
 }
 
 function prevFlowStep() {
@@ -2287,20 +2307,20 @@ function nextFlowPageOrStep(source = 'button') {
   if (flowStep === 'end') {
     return;
   }
-  if ($('flowScreen').classList.contains('hidden')) { nextFlowStep(); return; }
+  if ($('flowScreen').classList.contains('hidden')) { nextFlowStep(source); return; }
   if (flowPageIndex < flowPages.length - 1) {
     flowPageIndex++;
-    renderFlowPage();
+    renderFlowPage({ revealFooter: source !== 'keyboard' });
   } else {
     if (flowStep === FLOW_ORDER[FLOW_ORDER.length - 1]) {
       requestFlowReturnToCover(source);
       return;
     }
-    nextFlowStep();
+    nextFlowStep(source);
   }
 }
 
-function prevFlowPageOrStep() {
+function prevFlowPageOrStep(source = 'button') {
   if (flowTransitioning) return;
   if (resetUtmostFinishConfirmation()) {
     revealFlowFooter();
@@ -2310,12 +2330,12 @@ function prevFlowPageOrStep() {
   if ($('flowScreen').classList.contains('hidden')) { prevFlowStep(); return; }
   if (flowPageIndex > 0) {
     flowPageIndex--;
-    renderFlowPage();
+    renderFlowPage({ revealFooter: source !== 'keyboard' });
   } else if (flowStep === 'utmost') {
     goFlowStep('scripture').then((ok) => {
       if (!ok || flowStep !== 'scripture') return;
       flowPageIndex = Math.max(flowPages.length - 1, 0);
-      renderFlowPage();
+      renderFlowPage({ revealFooter: source !== 'keyboard' });
     });
   } else if (flowStep === 'scripture') {
     goFlowStep('worship');
@@ -2609,7 +2629,7 @@ function handleFlowArrowNavigation(event) {
   } else if (cfg.preventLeftArrowWorship !== false && flowStep === 'scripture' && flowPageIndex <= 0) {
     return true;
   } else {
-    prevFlowPageOrStep();
+    prevFlowPageOrStep('keyboard');
   }
   return true;
 }

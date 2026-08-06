@@ -650,6 +650,84 @@ test('hides reading navigation after one idle second even when the pointer stays
   assert.equal(footerVisible, false);
 });
 
+test('makes reading navigation clickable immediately after a page render', () => {
+  const calls = [];
+  let footerVisible = false;
+  const elements = {
+    flowScreen: {
+      dataset: { step: 'scripture' },
+      style: { setProperty: (name, value) => calls.push(['style', name, value]) },
+      classList: {
+        contains: (name) => name === 'hidden' ? false : (name === 'footer-visible' ? footerVisible : false),
+        add: (name) => {
+          if (name === 'footer-visible') footerVisible = true;
+          calls.push(['add', name]);
+        },
+        remove: (name) => {
+          if (name === 'footer-visible') footerVisible = false;
+          calls.push(['remove', name]);
+        }
+      }
+    },
+    flowPrevPage: {
+      disabled: true,
+      setAttribute: (name, value) => calls.push(['prev-attr', name, value]),
+      querySelector: () => ({ textContent: '' })
+    },
+    flowNextPage: {
+      disabled: true,
+      setAttribute: (name, value) => calls.push(['next-attr', name, value]),
+      querySelector: () => ({ textContent: '' })
+    }
+  };
+  const { renderFlowPage } = loadFunctions(
+    rendererSource,
+    [
+      'isReadingFlowStep',
+      'hideFlowFooterImmediately',
+      'revealFlowFooter',
+      'revealFlowFooterBrieflyAfterPageRender',
+      'scheduleFlowFooterHide',
+      'setFlowButtonLabel',
+      'renderFlowPage'
+    ],
+    {
+      $: (id) => elements[id],
+      document: { querySelector: () => ({ contains: () => false, classList: { remove: () => {} } }), activeElement: null },
+      flowLoading: false,
+      flowFooterHideTimer: null,
+      clearTimeout: () => {},
+      setTimeout: (callback, milliseconds) => {
+        calls.push(['timer', milliseconds]);
+        return 1;
+      },
+      resetUtmostFinishConfirmation: () => {},
+      textPage: (text) => ({ type: 'text', text }),
+      renderFlowPageContent: (page) => calls.push(['content', page.type]),
+      updateFlowPageProgress: () => calls.push(['progress']),
+      flowPages: [{ type: 'scripture', verses: [] }, { type: 'scripture', verses: [] }],
+      flowPageScales: [1],
+      flowPageIndex: 0,
+      flowPageRenderToken: 0,
+      flowStep: 'scripture',
+      FLOW_ORDER: ['cover', 'worship', 'scripture', 'utmost']
+    }
+  );
+
+  renderFlowPage();
+
+  assert.equal(footerVisible, true);
+  assert.equal(elements.flowPrevPage.disabled, false);
+  assert.equal(elements.flowNextPage.disabled, false);
+  assert.ok(calls.some((call) => call[0] === 'timer' && call[1] === 1000), 'reading footer should still auto-hide after becoming clickable');
+
+  footerVisible = false;
+  calls.length = 0;
+  renderFlowPage({ revealFooter: false });
+  assert.equal(footerVisible, false, 'keyboard page changes should not reveal the reading footer');
+  assert.ok(!calls.some((call) => call[0] === 'timer'), 'keyboard page changes should not schedule footer auto-hide');
+});
+
 test('reveals the cover toolbar from native pointer activity only in the bottom hotzone', () => {
   const calls = [];
   const { handleWindowPointerActivity } = loadFunctions(
@@ -700,6 +778,11 @@ test('native reading drag regions exclude navigation buttons', () => {
     css,
     /flow-screen:is\(\[data-step="scripture"\], \[data-step="utmost"\]\) \.flow-footer[\s\S]*?-webkit-app-region: no-drag;/,
     'reading navigation must remain clickable'
+  );
+  assert.match(
+    css,
+    /flow-screen:is\(\[data-step="scripture"\], \[data-step="utmost"\]\) \.flow-footer-hotzone[\s\S]*?-webkit-app-region: no-drag;/,
+    'reading footer reveal hotzone must not be swallowed by the native drag region'
   );
 });
 
@@ -2343,7 +2426,7 @@ test('uses arrow keys for reading while optionally blocking Scripture-to-worship
       flowTransitioning: false,
       flowLoading: false,
       nextFlowPageOrStep: (source) => calls.push(['next', source]),
-      prevFlowPageOrStep: () => calls.push(['prev'])
+      prevFlowPageOrStep: (source) => calls.push(['prev', source])
     }
   );
   const target = { tagName: 'DIV', isContentEditable: false, closest: () => null };
@@ -2376,7 +2459,7 @@ test('uses arrow keys for reading while optionally blocking Scripture-to-worship
   const unlockedLeft = arrowEvent('ArrowLeft');
   assert.equal(handleFlowArrowNavigation(unlockedLeft.event), true);
   assert.equal(unlockedLeft.prevented(), true);
-  assert.deepEqual(calls, [['next', 'keyboard'], ['prev']], 'disabling the safeguard should restore back navigation');
+  assert.deepEqual(calls, [['next', 'keyboard'], ['prev', 'keyboard']], 'disabling the safeguard should restore keyboard back navigation');
 
   for (const blocked of [
     arrowEvent('ArrowRight', { repeat: true }),
@@ -2391,7 +2474,7 @@ test('uses arrow keys for reading while optionally blocking Scripture-to-worship
   const inSettings = arrowEvent('ArrowRight');
   assert.equal(handleFlowArrowNavigation(inSettings.event), false);
   assert.equal(inSettings.prevented(), false);
-  assert.deepEqual(calls, [['next', 'keyboard'], ['prev']]);
+  assert.deepEqual(calls, [['next', 'keyboard'], ['prev', 'keyboard']]);
 
   settingsOpen = false;
   const laterCalls = [];
@@ -2407,13 +2490,13 @@ test('uses arrow keys for reading while optionally blocking Scripture-to-worship
       flowTransitioning: false,
       flowLoading: false,
       nextFlowPageOrStep: (source) => laterCalls.push(['next', source]),
-      prevFlowPageOrStep: () => laterCalls.push(['prev'])
+      prevFlowPageOrStep: (source) => laterCalls.push(['prev', source])
     }
   );
   const laterLeft = arrowEvent('ArrowLeft');
   assert.equal(laterNavigation.handleFlowArrowNavigation(laterLeft.event), true);
   assert.equal(laterLeft.prevented(), true);
-  assert.deepEqual(laterCalls, [['prev']], 'left arrow must still move between Scripture pages');
+  assert.deepEqual(laterCalls, [['prev', 'keyboard']], 'left arrow must still move between Scripture pages without showing footer controls');
   const utmostCalls = [];
   const utmostNavigation = loadFunctions(
     rendererSource,
@@ -2427,7 +2510,7 @@ test('uses arrow keys for reading while optionally blocking Scripture-to-worship
       flowTransitioning: false,
       flowLoading: false,
       nextFlowPageOrStep: (source) => utmostCalls.push(['next', source]),
-      prevFlowPageOrStep: () => utmostCalls.push(['prev'])
+      prevFlowPageOrStep: (source) => utmostCalls.push(['prev', source])
     }
   );
   const utmostRight = arrowEvent('ArrowRight');
@@ -2436,7 +2519,7 @@ test('uses arrow keys for reading while optionally blocking Scripture-to-worship
   const utmostLeft = arrowEvent('ArrowLeft');
   assert.equal(utmostNavigation.handleFlowArrowNavigation(utmostLeft.event), true);
   assert.equal(utmostLeft.prevented(), true);
-  assert.deepEqual(utmostCalls, [['next', 'keyboard'], ['prev']]);
+  assert.deepEqual(utmostCalls, [['next', 'keyboard'], ['prev', 'keyboard']]);
 });
 
 test('uses right arrow as a global flow shortcut on cover and worship', () => {
@@ -2496,6 +2579,31 @@ test('uses right arrow as a global flow shortcut on cover and worship', () => {
   assert.equal(worshipNavigation.handleFlowArrowNavigation(worshipRight.event), true);
   assert.equal(worshipRight.prevented(), true);
   assert.deepEqual(worshipCalls, [{ nextAfterWorship: true }]);
+});
+
+test('does not reveal Utmost footer when keyboard advances from the final Scripture page', () => {
+  const calls = [];
+  const elements = {
+    flowScreen: { classList: { contains: (name) => name === 'hidden' ? false : false } }
+  };
+  const { nextFlowPageOrStep } = loadFunctions(
+    rendererSource,
+    ['nextFlowPageOrStep'],
+    {
+      $: (id) => elements[id],
+      flowTransitioning: false,
+      flowStep: 'scripture',
+      flowPageIndex: 1,
+      flowPages: [{ type: 'scripture' }, { type: 'scripture' }],
+      FLOW_ORDER: ['cover', 'worship', 'scripture', 'utmost'],
+      requestFlowReturnToCover: (source) => calls.push(['return', source]),
+      nextFlowStep: (source) => calls.push(['next-step', source]),
+      renderFlowPage: (options) => calls.push(['render', plain(options)])
+    }
+  );
+
+  nextFlowPageOrStep('keyboard');
+  assert.deepEqual(calls, [['next-step', 'keyboard']]);
 });
 
 test('space toggles worship playback even when the seek bar keeps focus', () => {
