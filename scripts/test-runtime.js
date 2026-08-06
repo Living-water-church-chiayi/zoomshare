@@ -481,19 +481,22 @@ test('reports pointer movement over the main window without resizing it', () => 
 test('moves the Windows cover window with the manual drag fallback', () => {
   let bounds = { x: 100, y: 200, width: 960, height: 540 };
   const movedBounds = [];
+  const aspectRatios = [];
   const drag = loadFunctions(
     mainSource,
     ['isPlainObject', 'normalizeWindowDragPoint', 'startManualWindowDrag', 'moveManualWindowDrag', 'finishManualWindowDrag'],
     {
       process: { platform: 'win32' },
       manualWindowDrag: null,
+      mainWindowAspectRatio: 16 / 9,
       mainWindow: {
         isDestroyed: () => false,
         getBounds: () => ({ ...bounds }),
         setPosition: () => assert.fail('manual cover dragging must lock width and height instead of using setPosition'),
+        setAspectRatio: (ratio) => aspectRatios.push(ratio),
         setBounds: (nextBounds, animate) => {
           movedBounds.push({ ...nextBounds, animate });
-          bounds = { ...bounds, ...nextBounds };
+          bounds = { ...nextBounds };
         }
       }
     }
@@ -509,10 +512,11 @@ test('moves the Windows cover window with the manual drag fallback', () => {
     { x: 130, y: 225, width: 960, height: 540, animate: false },
     { x: 135, y: 220, width: 960, height: 540, animate: false }
   ]);
+  assert.deepEqual(aspectRatios, [0, 16 / 9, 0, 16 / 9]);
 });
 
 test('does not run the manual window drag fallback outside Windows', () => {
-  const positions = [];
+  const calls = [];
   const drag = loadFunctions(
     mainSource,
     ['isPlainObject', 'normalizeWindowDragPoint', 'startManualWindowDrag', 'moveManualWindowDrag'],
@@ -522,7 +526,9 @@ test('does not run the manual window drag fallback outside Windows', () => {
       mainWindow: {
         isDestroyed: () => false,
         getBounds: () => ({ x: 100, y: 200, width: 960, height: 540 }),
-        setPosition: (x, y) => positions.push([x, y])
+        setAspectRatio: (ratio) => calls.push(['aspect', ratio]),
+        setBounds: (nextBounds) => calls.push(['bounds', nextBounds]),
+        setPosition: (x, y) => calls.push(['position', x, y])
       }
     }
   );
@@ -530,7 +536,7 @@ test('does not run the manual window drag fallback outside Windows', () => {
   drag.startManualWindowDrag({ x: 500, y: 300 });
   drag.moveManualWindowDrag({ x: 530, y: 325 });
 
-  assert.deepEqual(positions, []);
+  assert.deepEqual(calls, []);
 });
 
 test('uses the original fixed reading size without persisting user window bounds', () => {
@@ -555,7 +561,8 @@ test('uses the original fixed reading size without persisting user window bounds
       mainWindow,
       screen: { getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 1440, height: 900 } }) },
       process: { platform: 'linux' },
-      lastWideBounds: null
+      lastWideBounds: null,
+      mainWindowAspectRatio: 16 / 9
     }
   );
 

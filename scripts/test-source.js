@@ -369,6 +369,7 @@ assert.match(renderer, /function setupWindowsCoverWindowDrag[\s\S]*?moveWindowDr
 assert.match(renderer, /function setupWindowsCoverWindowDrag[\s\S]*?endWindowDrag/, 'Windows cover drag fallback must end while the canvas accepts file drops');
 assert.match(renderer, /setupDragDrop\(\);\s*setupWindowsCoverWindowDrag\(\);/, 'Windows cover drag fallback must be initialized with drag/drop');
 assert.match(main, /trustedOn\('win:drag-start'[\s\S]*?trustedOn\('win:drag-move'[\s\S]*?trustedOn\('win:drag-end'/, 'main process must accept trusted manual window drag events');
+assert.match(main, /function moveManualWindowDrag[\s\S]*?setAspectRatio\(0\)[\s\S]*?setBounds\(\{[\s\S]*?width:\s*manualWindowDrag\.width[\s\S]*?height:\s*manualWindowDrag\.height[\s\S]*?setAspectRatio\(manualWindowDrag\.aspectRatio\)/, 'Windows manual cover drag must freeze bounds while bypassing Electron aspect-ratio drift');
 assert.doesNotMatch(
   section(renderer, 'function buildScripturePagesByFit', 'function renderFlowPage'),
   /SCRIPTURE_MAX_VERSES_PER_PAGE/,

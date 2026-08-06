@@ -1572,6 +1572,7 @@ function setWindowMode(mode) {
     if (bounds.width > bounds.height) lastWideBounds = bounds;
     const size = fitAspectSize(area.width, area.height, 9 / 16, Math.round(area.height * 9 / 16));
     mainWindow.setMinimumSize(1, 1);
+    mainWindowAspectRatio = 9 / 16;
     mainWindow.setAspectRatio(9 / 16);
     mainWindow.setBounds(centeredBounds(area, bounds, size.width, size.height), process.platform === 'darwin');
     mainWindow.setMinimumSize(Math.min(320, size.width), Math.min(560, size.height));
@@ -1584,6 +1585,7 @@ function setWindowMode(mode) {
   const preferredWidth = lastWideBounds ? lastWideBounds.width : Math.max(bounds.width, 640);
   const size = fitAspectSize(maxWidth, maxHeight, 16 / 9, preferredWidth);
   mainWindow.setMinimumSize(1, 1);
+  mainWindowAspectRatio = 16 / 9;
   mainWindow.setAspectRatio(16 / 9);
   mainWindow.setBounds(centeredBounds(area, bounds, size.width, size.height), process.platform === 'darwin');
   mainWindow.setMinimumSize(Math.min(640, size.width), Math.min(360, size.height));
@@ -1602,7 +1604,13 @@ function startManualWindowDrag(point) {
   if (process.platform !== 'win32' || !mainWindow || mainWindow.isDestroyed()) return;
   const normalized = normalizeWindowDragPoint(point);
   if (!normalized) return;
-  manualWindowDrag = { lastPoint: normalized };
+  const bounds = mainWindow.getBounds();
+  manualWindowDrag = {
+    lastPoint: normalized,
+    width: bounds.width,
+    height: bounds.height,
+    aspectRatio: mainWindowAspectRatio
+  };
 }
 
 function moveManualWindowDrag(point) {
@@ -1613,12 +1621,17 @@ function moveManualWindowDrag(point) {
   const dy = normalized.y - manualWindowDrag.lastPoint.y;
   if (dx || dy) {
     const bounds = mainWindow.getBounds();
-    mainWindow.setBounds({
-      x: Math.round(bounds.x + dx),
-      y: Math.round(bounds.y + dy),
-      width: bounds.width,
-      height: bounds.height
-    }, false);
+    mainWindow.setAspectRatio(0);
+    try {
+      mainWindow.setBounds({
+        x: Math.round(bounds.x + dx),
+        y: Math.round(bounds.y + dy),
+        width: manualWindowDrag.width,
+        height: manualWindowDrag.height
+      }, false);
+    } finally {
+      mainWindow.setAspectRatio(manualWindowDrag.aspectRatio);
+    }
   }
   manualWindowDrag.lastPoint = normalized;
 }
@@ -1818,6 +1831,7 @@ let lastWideBounds = null;
 let pointerMonitorTimer = null;
 let lastPointerPoint = null;
 let manualWindowDrag = null;
+let mainWindowAspectRatio = 16 / 9;
 let hostPresenceRefreshTimer = null;
 const HOST_PRESENCE_REFRESH_INTERVAL_MS = 60_000;
 
@@ -1923,6 +1937,7 @@ async function createWindow() {
   // 重開新視窗時不得沿用已關閉視窗的暫存尺寸。
   lastWideBounds = null;
   startMainWindowPointerMonitor();
+  mainWindowAspectRatio = 16 / 9;
   window.setAspectRatio(16 / 9);
   window.removeMenu();
 
