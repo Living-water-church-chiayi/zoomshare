@@ -82,8 +82,8 @@ button, input, select, textarea, a { -webkit-app-region: no-drag; }
     radial-gradient(circle at 12% 10%, rgba(241, 100, 30, .12), transparent 26%),
     linear-gradient(180deg, #fffdf8 0%, var(--paper) 100%);
 }
-/* Windows 不會把檔案 drop 事件送進原生視窗拖曳區域。封面本體要
-   保持 no-drag，讓圖片能拖入；上方標題仍是移動視窗的把手。 */
+/* Windows 不會把檔案 drop 事件送進原生視窗拖曳區域。封面整體保持
+   no-drag，改由 renderer 手動拖動，避免原生拖動路徑造成尺寸漂移。 */
 body.plat-win .canvas { -webkit-app-region: no-drag; }
 .canvas::after {
   content: '';
@@ -139,7 +139,7 @@ body.plat-win .canvas { -webkit-app-region: no-drag; }
   top: 10cqh;
   text-shadow: none;
 }
-body.plat-win .overlay-top { -webkit-app-region: drag; }
+body.plat-win .overlay-top { -webkit-app-region: no-drag; }
 .canvas:not(.no-background) .overlay-top .title-main,
 .canvas:not(.no-background) .overlay-top .title2,
 .canvas:not(.no-background) .overlay-top .title3 {

@@ -361,7 +361,7 @@ assert.doesNotMatch(renderer, /scheduleFlowLayoutRefresh/, 'window resizing must
 assert.match(renderer, /setupSettingsTextSelection\(\)/, 'settings text fields must preserve fast drag selection beyond their edges');
 assert.match(css, /\.settings input\[type="text"\][\s\S]*?-webkit-user-select:\s*text;/, 'settings text fields must explicitly allow text selection');
 assert.match(css, /body\.plat-win \.canvas\s*\{[^}]*-webkit-app-region:\s*no-drag;/, 'cover canvas must accept Windows file drops outside native drag regions');
-assert.match(css, /body\.plat-win \.overlay-top\s*\{[^}]*-webkit-app-region:\s*drag;/, 'Windows cover title must remain available for moving the frameless window');
+assert.match(css, /body\.plat-win \.overlay-top\s*\{[^}]*-webkit-app-region:\s*no-drag;/, 'Windows cover title must avoid the native drag path and use the manual drag fallback');
 assert.match(css, /body\.plat-win \.worship-layer\s*\{[^}]*-webkit-app-region:\s*drag;/, 'Windows worship video must remain available for moving the frameless window');
 assert.match(renderer, /function isSupportedImageFile[\s\S]*?jpe\?g[\s\S]*?function setupDragDrop/, 'Windows image drops must allow supported extensions without MIME metadata');
 assert.match(renderer, /function setupWindowsCoverWindowDrag[\s\S]*?startWindowDrag/, 'Windows cover drag fallback must start while the canvas accepts file drops');
