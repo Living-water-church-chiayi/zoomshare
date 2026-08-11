@@ -106,16 +106,35 @@ test('ignores church name prefixes when fuzzy matching Zoom display names', () =
 test('does not guess when the same two-character fragment belongs to multiple members', () => {
   const roster = [
     { memberId: 'a', name: '王小明', aliases: [], enabled: true },
-    { memberId: 'b', name: '王小美', aliases: [], enabled: true }
+    { memberId: 'b', name: '李小明', aliases: [], enabled: true }
   ];
   const matcher = buildRosterMatcher(roster);
   const derived = deriveRosterPresence({
-    status: 'active', participants: [{ sessionId: 'guest', displayName: '訪客 王小 同學' }]
+    status: 'active', participants: [{ sessionId: 'guest', displayName: '訪客 小明 同學' }]
   }, roster);
 
-  assert.equal(matcher.matchByHanToken.has('王小'), false);
-  assert.match(matcher.errors.join('\n'), /王小/);
+  assert.equal(matcher.matchByHanToken.has('小明'), false);
+  assert.match(matcher.errors.join('\n'), /小明/);
   assert.equal(derived.participants[0].memberId, '');
+});
+
+test('does not warn when different members only share surname plus first given-name character', () => {
+  const roster = [
+    { memberId: '24', name: '淑玲阿姨', aliases: ['嘉義活水-李淑玲'], enabled: true },
+    { memberId: '34', name: '淑貞阿姨', aliases: ['李淑貞'], enabled: true },
+    { memberId: '35', name: '怡君姊姊', aliases: ['施怡君'], enabled: true },
+    { memberId: '36', name: '怡婷姊姊', aliases: ['施怡婷'], enabled: true }
+  ];
+  const matcher = buildRosterMatcher(roster);
+
+  assert.deepEqual(matcher.errors, []);
+  assert.equal(matcher.matchByHanToken.has('李淑'), false);
+  assert.equal(matcher.matchByHanToken.has('施怡'), false);
+  assert.deepEqual(matchRosterMemberIds(matcher, '李淑'), []);
+  assert.deepEqual(matchRosterMemberIds(matcher, '施怡'), []);
+  assert.deepEqual(matchRosterMemberIds(matcher, '嘉義活水-李淑玲'), ['24']);
+  assert.deepEqual(matchRosterMemberIds(matcher, '李淑貞'), ['34']);
+  assert.deepEqual(matchRosterMemberIds(matcher, '施怡君'), ['35']);
 });
 
 test('allows an explicit shared Zoom account name to mark multiple roster members online', () => {

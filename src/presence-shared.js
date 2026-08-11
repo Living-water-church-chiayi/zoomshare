@@ -15,6 +15,9 @@
     '傳道', '長老', '執事', '師母', '先生', '小姐', '大哥', '大姐',
     '嘉義', '義活', '活水'
   ]);
+  const COMMON_SINGLE_CHINESE_SURNAMES = new Set(Array.from(
+    '王李張陳林黃吳劉蔡楊許鄭謝郭洪曾邱廖賴徐周葉蘇莊呂江何蕭羅高簡朱鍾游詹沈彭胡余盧潘顏梁趙柯翁魏孫戴范方宋鄧杜侯曹薛傅丁溫紀范姜蔣歐藍連馬董石卓程姚康馮古姜湯汪白田涂鄒巫尤鐘黎龔嚴韓袁金童陸夏柳凃施任孔武崔尹錢段倪易熊秦伍韋申尤毛殷向凌岳丘韋柏鄺祝華車符萬俞皮卜穆饒魯關谷祁艾舒桂花牛解鮑梅盛費成陽裴衛查屈房滕安樊左甘邵苗池季伍阮練駱牟鄢畢聶叢姬申向單杭陽景伏麥賀包寇文聞莘冷甄商鄔談岑胥農尚管柯喬葛全佘封冼隋竇竺濮桑隗郝鄂翟譚裘荀席師辛焦路婁宗宣冉宓雍郁霍亓禹都稽'
+  ));
 
   function normalizeDisplayName(value) {
     return String(value || '')
@@ -41,15 +44,38 @@
 
   function twoCharacterHanTokens(value) {
     const tokens = new Set();
+    for (const origin of hanTokenOrigins(value)) {
+      if (!GENERIC_HAN_TOKENS.has(origin.token)) tokens.add(origin.token);
+    }
+    return tokens;
+  }
+
+  function hanTokenOrigins(value) {
+    const origins = [];
     const nameWithoutHonorific = stripHonorificSuffixes(value);
     for (const run of nameWithoutHonorific.match(/[\p{Script=Han}]+/gu) || []) {
       const characters = Array.from(run);
       for (let index = 0; index < characters.length - 1; index += 1) {
         const token = characters[index] + characters[index + 1];
-        if (!GENERIC_HAN_TOKENS.has(token)) tokens.add(token);
+        origins.push({ token, run, index, runLength: characters.length });
       }
     }
-    return tokens;
+    return origins;
+  }
+
+  function isLikelySurnamePrefixDuplicate(token, memberIds, tokenOrigins) {
+    const characters = Array.from(token);
+    if (characters.length !== 2 || !COMMON_SINGLE_CHINESE_SURNAMES.has(characters[0])) return false;
+    for (const memberId of memberIds) {
+      const origins = tokenOrigins.get(memberId) || [];
+      const hasFullNamePrefix = origins.some((origin) => (
+        origin.index === 0 &&
+        origin.runLength >= 3 &&
+        origin.token === token
+      ));
+      if (!hasFullNamePrefix) return false;
+    }
+    return true;
   }
 
   function sameStringSet(left, right) {
@@ -73,6 +99,7 @@
   function buildRosterMatcher(roster) {
     const claims = new Map();
     const tokenClaims = new Map();
+    const tokenClaimOrigins = new Map();
     const membersById = new Map();
     const errors = [];
     for (const member of Array.isArray(roster) ? roster : []) {
@@ -89,9 +116,15 @@
         if (!claims.has(key)) claims.set(key, { memberIds: new Set(), aliasMemberIds: new Set() });
         claims.get(key).memberIds.add(memberId);
         if (label.alias) claims.get(key).aliasMemberIds.add(memberId);
-        for (const token of twoCharacterHanTokens(label.value)) {
+        for (const origin of hanTokenOrigins(label.value)) {
+          const token = origin.token;
+          if (GENERIC_HAN_TOKENS.has(token)) continue;
           if (!tokenClaims.has(token)) tokenClaims.set(token, new Set());
           tokenClaims.get(token).add(memberId);
+          if (!tokenClaimOrigins.has(token)) tokenClaimOrigins.set(token, new Map());
+          const originsByMember = tokenClaimOrigins.get(token);
+          if (!originsByMember.has(memberId)) originsByMember.set(memberId, []);
+          originsByMember.get(memberId).push(origin);
         }
       }
     }
@@ -122,7 +155,10 @@
     const matchByHanToken = new Map();
     for (const [token, memberIds] of tokenClaims) {
       if (memberIds.size === 1) matchByHanToken.set(token, [...memberIds][0]);
-      else if (!sameStringSet(suppressedSharedTokenClaims.get(token), memberIds)) {
+      else if (
+        !sameStringSet(suppressedSharedTokenClaims.get(token), memberIds) &&
+        !isLikelySurnamePrefixDuplicate(token, memberIds, tokenClaimOrigins.get(token) || new Map())
+      ) {
         errors.push(duplicateMessage('姓名片段重複', token, memberIds));
       }
     }
