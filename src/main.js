@@ -462,13 +462,60 @@ function cleanBibleTextV2(text, ref) {
     .filter(Boolean);
   const verses = [];
   let cur = '';
+  const startChapter = Math.max(1, Number(ref && ref.startCh) || 1);
+  const endChapter = Math.max(startChapter, Number(ref && ref.endCh) || startChapter);
+  let chapter = startChapter;
+  let previousNumber = null;
   for (const originalLine of lines) {
-    const line = normalizeBibleLeadingReferenceLine(originalLine, ref, !cur);
+    let line = normalizeBibleLeadingReferenceLine(originalLine, ref, !cur);
     if (stopRe.test(line)) break;
     if (navRe.test(line)) continue;
+    const standaloneChapter = line.match(/^(\d+)$/);
+    if (
+      standaloneChapter &&
+      previousNumber !== null &&
+      Number(standaloneChapter[1]) === chapter + 1 &&
+      chapter < endChapter
+    ) {
+      chapter += 1;
+      continue;
+    }
+    const expectedNextChapter = previousNumber !== null && chapter < endChapter ? chapter + 1 : null;
+    const combinedChapterVerse = line.match(/^(\d+)\s+(\d+)\s+(.+)$/);
+    if (
+      combinedChapterVerse &&
+      Number(combinedChapterVerse[1]) === expectedNextChapter &&
+      Number(combinedChapterVerse[2]) === 1
+    ) {
+      chapter = expectedNextChapter;
+      line = `1 ${combinedChapterVerse[3]}`;
+    } else {
+      const chapterWithVerseText = line.match(/^(\d+)\s+(.+)$/);
+      if (
+        chapterWithVerseText &&
+        Number(chapterWithVerseText[1]) === expectedNextChapter &&
+        Number(chapterWithVerseText[1]) < previousNumber
+      ) {
+        chapter = expectedNextChapter;
+        line = `1 ${chapterWithVerseText[2]}`;
+      } else {
+        const compactChapterWithVerseText = line.match(/^(\d+)([^\d\s].+)$/);
+        if (
+          compactChapterWithVerseText &&
+          Number(compactChapterWithVerseText[1]) === expectedNextChapter &&
+          Number(compactChapterWithVerseText[1]) < previousNumber
+        ) {
+          chapter = expectedNextChapter;
+          line = `1 ${compactChapterWithVerseText[2].trim()}`;
+        }
+      }
+    }
     if (/^\d+\s*\S/.test(line)) {
       if (cur) verses.push(cur);
       cur = line;
+      const verseNumber = Number((line.match(/^(\d+)/) || [])[1]);
+      if (verseNumber === 1 && previousNumber !== null && previousNumber > 1 && chapter < endChapter) chapter += 1;
+      previousNumber = verseNumber;
     } else if (cur && !headingRe.test(line)) {
       cur += ' ' + line;
     }

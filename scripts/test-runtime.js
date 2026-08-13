@@ -2082,7 +2082,10 @@ test('parses scripture verses across chapter boundaries without losing chapter i
     ['parseScriptureVerses'],
     {
       window: {
-        BIBLE: [{ n: '測試書', v: [31, 25] }]
+        BIBLE: [
+          { n: '測試書', v: [31, 25, 25, 25, 25, 25, 25, 25, 28, 18] },
+          { n: '長測試書', v: [31, 25, 25, 25, 25, 25, 25, 25, 41, 10] }
+        ]
       }
     }
   );
@@ -2126,6 +2129,74 @@ test('parses scripture verses across chapter boundaries without losing chapter i
   assert.deepEqual(
     withStandaloneChapterMarker.map(({ chapter, number }) => [chapter, number]),
     [[1, 30], [1, 31], [2, 1], [2, 2]]
+  );
+
+  const chapterTenMarkerAsVerseText = plain(parseScriptureVerses(
+    '40 第九章第四十節\n41 第九章第四十一節\n10第十章第一節\n2 第十章第二節\n10 第十章第十節',
+    { book: '長測試書', startCh: 9, startV: 40, endCh: 10, endV: 10 }
+  ));
+  assert.deepEqual(
+    chapterTenMarkerAsVerseText.map(({ chapter, number, text }) => [chapter, number, text]),
+    [
+      [9, 40, '第九章第四十節'],
+      [9, 41, '第九章第四十一節'],
+      [10, 1, '第十章第一節'],
+      [10, 2, '第十章第二節'],
+      [10, 10, '第十章第十節']
+    ]
+  );
+  assert.deepEqual(
+    chapterTenMarkerAsVerseText.map(({ startsChapter }) => startsChapter),
+    [false, false, true, false, false]
+  );
+
+  const fullPassage = plain(parseScriptureVerses(
+    [
+      '23 第九章第二十三節',
+      '24 第九章第二十四節',
+      '25 第九章第二十五節',
+      '26 第九章第二十六節',
+      '27 第九章第二十七節',
+      '28 第九章第二十八節',
+      '10律法既是將來美事的影兒',
+      '2 第十章第二節',
+      '3 第十章第三節',
+      '4 第十章第四節',
+      '5 第十章第五節',
+      '6 第十章第六節',
+      '7 第十章第七節',
+      '8 第十章第八節',
+      '9 第十章第九節',
+      '10 第十章第十節',
+      '11 第十章第十一節',
+      '12 第十章第十二節',
+      '13 第十章第十三節',
+      '14 第十章第十四節',
+      '15 第十章第十五節',
+      '16 第十章第十六節',
+      '17 第十章第十七節',
+      '18 第十章第十八節'
+    ].join('\n'),
+    { book: '測試書', startCh: 9, startV: 23, endCh: 10, endV: 18 }
+  ));
+  const segments = scriptureSegments(
+    { book: '測試書', startCh: 9, startV: 23, endCh: 10, endV: 18 },
+    [{ n: '測試書', v: [31, 25, 25, 25, 25, 25, 25, 25, 28, 18] }]
+  );
+  assert.deepEqual(segments.map((segment) => segment.label), ['9:23–28', '10:1–6', '10:7–12', '10:13–18']);
+  assert.ok(
+    fullPassage.slice(6, 12).every((verse) =>
+      verse.chapter === 10 &&
+      verse.number >= 1 &&
+      verse.number <= 6
+    ),
+    'chapter 10 opening verses must stay in the second reader segment'
+  );
+  const { buildScripturePagesByFit } = loadScripturePaginationFunctions(() => true);
+  const pages = plain(buildScripturePagesByFit(fullPassage, () => true, segments));
+  assert.deepEqual(
+    pages.flatMap((page) => page.readerMarkers.map((marker) => marker.label)),
+    ['第 1 位・9:23–28', '第 2 位・10:1–6', '第 3 位・10:7–12', '第 4 位・10:13–18']
   );
 });
 

@@ -1458,6 +1458,30 @@ function parseScriptureVerses(text, ref = currentRefPayload()) {
   let expectedIndex = 0;
   let current = null;
 
+  const normalizeChapterStartLine = (line) => {
+    const expectedNext = expected[expectedIndex];
+    if (!expectedNext || expectedNext.number !== 1 || expectedNext.chapter <= chapter) return line;
+
+    const combinedChapterVerse = String(line || '').match(/^(\d+)\s+(\d+)\s+(.+)$/);
+    if (combinedChapterVerse
+      && Number(combinedChapterVerse[1]) === expectedNext.chapter
+      && Number(combinedChapterVerse[2]) === expectedNext.number) {
+      return `${combinedChapterVerse[2]} ${combinedChapterVerse[3]}`;
+    }
+
+    const chapterWithVerseText = String(line || '').match(/^(\d+)\s+(.+)$/);
+    if (chapterWithVerseText && Number(chapterWithVerseText[1]) === expectedNext.chapter) {
+      return `${expectedNext.number} ${chapterWithVerseText[2]}`;
+    }
+
+    const compactChapterWithVerseText = String(line || '').match(/^(\d+)([^\d\s].+)$/);
+    if (compactChapterWithVerseText && Number(compactChapterWithVerseText[1]) === expectedNext.chapter) {
+      return `${expectedNext.number} ${compactChapterWithVerseText[2].trim()}`;
+    }
+
+    return line;
+  };
+
   const pushCurrent = () => {
     if (!current || !current.text) return;
     current.text = current.text.trim();
@@ -1472,6 +1496,7 @@ function parseScriptureVerses(text, ref = currentRefPayload()) {
     if (combinedStart && Number(combinedStart[1]) === startChapter && Number(combinedStart[2]) === startVerse && startChapter !== startVerse) {
       line = `${combinedStart[2]} ${combinedStart[3]}`;
     }
+    line = normalizeChapterStartLine(line);
     const match = line.match(/^(\d+)\s*[.)、]?\s*(.+)$/);
     if (!match) {
       if (current) current.text += ` ${line}`;
