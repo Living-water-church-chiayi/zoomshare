@@ -9,7 +9,9 @@ const projectRoot = path.resolve(__dirname, '..');
 const rendererEntry = path.join(projectRoot, 'src', 'renderer', 'index.html');
 const rendererSource = fs.readFileSync(path.join(projectRoot, 'src', 'renderer', 'app.js'), 'utf8');
 const coverViewports = [
+  { width: 480, height: 270 },
   { width: 640, height: 360 },
+  { width: 960, height: 540 },
   { width: 1280, height: 720 },
   { width: 1920, height: 1080 }
 ];
@@ -639,6 +641,29 @@ function coverMeasurementScript() {
       scrollWidth: toolbar.scrollWidth,
       buttonRects: toolbarButtonRects
     };
+    const settings = document.getElementById('settingsPanel');
+    const settingsBackdrop = document.getElementById('settingsBackdrop');
+    settings.style.transition = 'none';
+    settings.classList.remove('hidden');
+    settingsBackdrop.classList.remove('hidden');
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const settingsRect = settings.getBoundingClientRect();
+    const settingsBody = settings.querySelector('.settings-body');
+    const settingsClose = document.getElementById('btnCloseSettings').getBoundingClientRect();
+    const settingsFirstInput = document.getElementById('inMusicUrl').getBoundingClientRect();
+    const settingsRootStyle = getComputedStyle(document.documentElement);
+    const settingsMetrics = {
+      scale: Number.parseFloat(settingsRootStyle.getPropertyValue('--settings-display-scale')) || 1,
+      rect: { top: settingsRect.top, right: settingsRect.right, bottom: settingsRect.bottom, left: settingsRect.left },
+      clientWidth: settings.clientWidth,
+      scrollWidth: settings.scrollWidth,
+      bodyClientWidth: settingsBody.clientWidth,
+      bodyScrollWidth: settingsBody.scrollWidth,
+      closeRect: { top: settingsClose.top, right: settingsClose.right, bottom: settingsClose.bottom, left: settingsClose.left },
+      firstInputRect: { top: settingsFirstInput.top, right: settingsFirstInput.right, bottom: settingsFirstInput.bottom, left: settingsFirstInput.left }
+    };
+    settings.classList.add('hidden');
+    settingsBackdrop.classList.add('hidden');
     const withBackground = {
       gap: bottom.top - top.bottom,
       topBottom: top.bottom,
@@ -683,6 +708,7 @@ function coverMeasurementScript() {
       withBackground,
       longContent,
       toolbar: toolbarMetrics,
+      settings: settingsMetrics,
       withoutBackgroundStroke
     };
   })())()`;
@@ -721,6 +747,18 @@ function verifyCoverMetrics(metrics, expectedViewport) {
   assert.ok(Math.abs(firstButton.top - closeButton.top) <= 1, `${label}: close button wrapped onto another row`);
   assert.ok(toolbar.rect.left >= -1 && toolbar.rect.right <= expectedViewport.width + 1, `${label}: toolbar crosses the viewport edge`);
   assert.ok(toolbar.scrollWidth <= toolbar.clientWidth + 1, `${label}: toolbar content overflows its pill`);
+  const settings = metrics.settings;
+  const expectedSettingsScale = Math.max(0.72, Math.min(1, Math.min(expectedViewport.width / 1280, expectedViewport.height / 720)));
+  assert.ok(Math.abs(settings.scale - expectedSettingsScale) <= 0.001, `${label}: settings scale is incorrect`);
+  assert.ok(settings.rect.left >= -1, `${label}: settings panel crosses the left viewport edge`);
+  assert.ok(settings.rect.right <= expectedViewport.width + 1, `${label}: settings panel crosses the right viewport edge`);
+  assert.ok(settings.rect.top >= -1, `${label}: settings panel crosses the top viewport edge`);
+  assert.ok(settings.rect.bottom <= expectedViewport.height + 1, `${label}: settings panel crosses the bottom viewport edge`);
+  assert.ok(settings.scrollWidth <= settings.clientWidth + 1, `${label}: settings panel overflows horizontally`);
+  assert.ok(settings.bodyScrollWidth <= settings.bodyClientWidth + 1, `${label}: settings body overflows horizontally`);
+  assert.ok(settings.closeRect.right <= settings.rect.right + 1, `${label}: settings close button escaped its panel`);
+  assert.ok(settings.firstInputRect.right <= settings.rect.right + 1, `${label}: settings first input escaped its panel`);
+  assert.ok(settings.firstInputRect.top >= settings.rect.top - 1, `${label}: settings first input is not reachable in the panel`);
 }
 
 function verifyMetrics(metrics, fixture, expectedViewport) {

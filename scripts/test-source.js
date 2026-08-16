@@ -274,8 +274,18 @@ assert.doesNotMatch(main, /windowBounds/, 'main window bounds must not be persis
 assert.doesNotMatch(main, /scheduleMainWindowBoundsSave|saveMainWindowBounds/, 'main window resize and movement must not be remembered');
 assert.match(
   main,
-  /fitAspectSize\(area\.width - margin \* 2,\s*area\.height - margin \* 2,\s*16 \/ 9,\s*1280\)/,
-  'main window must start from the original fixed 1280-wide layout'
+  /function coverWindowPreferredWidth[\s\S]*?safeWidth < 1280[\s\S]*?safeWidth \* 0\.75[\s\S]*?: 1280;/,
+  'main window must use a compact 75% startup width on small work areas'
+);
+assert.match(
+  main,
+  /function coverWindowMinimumSize[\s\S]*?area\.width[\s\S]*?\* 0\.5[\s\S]*?fitAspectSize\(area\.width, area\.height, 16 \/ 9, targetWidth\)/,
+  'main window minimum size must be based on half of the work area'
+);
+assert.match(
+  main,
+  /const size = coverWindowSizeForArea\(area\);[\s\S]*?const minimum = coverWindowMinimumSize\(area\);/,
+  'main window startup must use the centralized compact sizing helpers'
 );
 assert.match(
   main,

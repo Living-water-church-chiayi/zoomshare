@@ -556,7 +556,7 @@ test('uses the original fixed reading size without persisting user window bounds
     setWindowMode
   } = loadFunctions(
     mainSource,
-    ['fitAspectSize', 'centeredBounds', 'setWindowMode'],
+    ['fitAspectSize', 'coverWindowMargin', 'coverWindowMinimumSize', 'coverWindowSizeForArea', 'centeredBounds', 'setWindowMode'],
     {
       mainWindow,
       screen: { getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 1440, height: 900 } }) },
@@ -578,6 +578,37 @@ test('uses the original fixed reading size without persisting user window bounds
     { width: 800, height: 450 },
     'returning to cover may restore the in-session wide size without saving it for the next launch'
   );
+});
+
+test('sizes cover and host windows compactly on small high-DPI work areas', () => {
+  const {
+    coverWindowPreferredWidth,
+    coverWindowSizeForArea,
+    coverWindowMinimumSize,
+    hostWindowSizeForArea
+  } = loadFunctions(
+    mainSource,
+    [
+      'fitAspectSize',
+      'coverWindowMargin',
+      'coverWindowPreferredWidth',
+      'coverWindowSizeForArea',
+      'coverWindowMinimumSize',
+      'hostWindowSizeForArea'
+    ]
+  );
+
+  const compactArea = { x: 0, y: 0, width: 960, height: 540 };
+  assert.equal(coverWindowPreferredWidth(compactArea), 720);
+  assert.deepEqual(plain(coverWindowSizeForArea(compactArea)), { width: 720, height: 405 });
+  assert.deepEqual(plain(coverWindowMinimumSize(compactArea)), { width: 480, height: 270 });
+  assert.deepEqual(plain(hostWindowSizeForArea(compactArea)), { width: 403, height: 475 });
+
+  const largeArea = { x: 0, y: 0, width: 1440, height: 900 };
+  assert.equal(coverWindowPreferredWidth(largeArea), 1280);
+  assert.deepEqual(plain(coverWindowSizeForArea(largeArea)), { width: 1280, height: 720 });
+  assert.deepEqual(plain(coverWindowMinimumSize(largeArea)), { width: 640, height: 360 });
+  assert.deepEqual(plain(hostWindowSizeForArea(largeArea)), { width: 460, height: 760 });
 });
 
 test('reveals reading navigation only from the bottom hotzone', () => {
@@ -2374,6 +2405,7 @@ test('scales the fixed reading canvas without changing its logical dimensions', 
 
   assert.equal(updateFlowDisplayScale(), 1.5);
   assert.equal(rootProperties.get('--toolbar-display-scale'), '0.500000');
+  assert.equal(rootProperties.get('--settings-display-scale'), '0.720000');
   assert.equal(properties.get('--flow-display-scale'), '1.500000');
   assert.equal(properties.get('--flow-control-min-size'), '29.333px');
   assert.equal(properties.get('--flow-icon-min-size'), '12.667px');

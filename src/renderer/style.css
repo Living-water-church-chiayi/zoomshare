@@ -47,6 +47,7 @@
   --accent: var(--brand);
   --accent-2: #d94f12;
   --accent-soft: rgba(241, 100, 30, .14);
+  --settings-display-scale: 1;
 }
 
 body.plat-mac { --ui: var(--ui-mac); }
@@ -1070,12 +1071,12 @@ body.plat-win .worship-layer { -webkit-app-region: drag; }
 }
 .settings {
   position: fixed;
-  top: 18px;
-  right: 18px;
-  bottom: 18px;
+  top: calc(18px * var(--settings-display-scale, 1));
+  right: calc(18px * var(--settings-display-scale, 1));
+  bottom: calc(18px * var(--settings-display-scale, 1));
   height: auto;
-  width: 500px;
-  max-width: calc(100vw - 36px);
+  width: calc(500px * var(--settings-display-scale, 1));
+  max-width: calc(100vw - calc(36px * var(--settings-display-scale, 1)));
   z-index: 30;
   display: flex;
   flex-direction: column;
@@ -1085,7 +1086,7 @@ body.plat-win .worship-layer { -webkit-app-region: drag; }
   backdrop-filter: var(--panel-blur);
   -webkit-backdrop-filter: var(--panel-blur);
   border: 1px solid rgba(47,41,51,.12);
-  border-radius: 34px;
+  border-radius: calc(34px * var(--settings-display-scale, 1));
   box-shadow: 0 24px 70px rgba(47,41,51,.22);
   font-family: var(--ui);
   transform: translateX(0);
@@ -1093,43 +1094,43 @@ body.plat-win .worship-layer { -webkit-app-region: drag; }
 }
 .settings.hidden {
   opacity: .4;
-  transform: translateX(calc(100% + 38px));
+  transform: translateX(calc(100% + calc(38px * var(--settings-display-scale, 1))));
 }
 body.plat-mac .settings {
-  top: 18px;
-  right: 18px;
-  bottom: 18px;
+  top: calc(18px * var(--settings-display-scale, 1));
+  right: calc(18px * var(--settings-display-scale, 1));
+  bottom: calc(18px * var(--settings-display-scale, 1));
   height: auto;
   border: 1px solid rgba(47,41,51,.12);
-  border-radius: 34px;
+  border-radius: calc(34px * var(--settings-display-scale, 1));
   overflow: hidden;
 }
-body.plat-mac .settings.hidden { transform: translateX(calc(100% + 38px)); }
+body.plat-mac .settings.hidden { transform: translateX(calc(100% + calc(38px * var(--settings-display-scale, 1)))); }
 .settings-head {
   display: flex;
   justify-content: center;
   align-items: center;
-  min-height: 76px;
-  padding: 20px 64px;
+  min-height: calc(76px * var(--settings-display-scale, 1));
+  padding: calc(20px * var(--settings-display-scale, 1)) calc(64px * var(--settings-display-scale, 1));
   position: relative;
   background: rgba(255,253,248,.94);
   border-bottom: 1px solid var(--line);
-  font-size: 22px;
+  font-size: calc(22px * var(--settings-display-scale, 1));
   font-weight: 900;
   letter-spacing: 0;
 }
 .settings-head .close {
   position: absolute;
-  right: 18px;
+  right: calc(18px * var(--settings-display-scale, 1));
   top: 50%;
   transform: translateY(-50%);
   background: #fff;
   border: 1px solid var(--line);
   color: var(--ink);
-  width: 40px;
-  height: 40px;
+  width: calc(40px * var(--settings-display-scale, 1));
+  height: calc(40px * var(--settings-display-scale, 1));
   border-radius: var(--pill);
-  font-size: 16px;
+  font-size: calc(16px * var(--settings-display-scale, 1));
   cursor: pointer;
   box-shadow: var(--elev-soft);
   transition: background .15s, color .15s, transform .1s;
@@ -1137,32 +1138,32 @@ body.plat-mac .settings.hidden { transform: translateX(calc(100% + 38px)); }
 .settings-head .close:hover { background: #f4eee8; color: var(--primary); box-shadow: 0 7px 16px rgba(47,41,51,.14); }
 .settings-head .close:active { transform: translateY(-50%) scale(1.06); }
 .settings-body {
-  padding: 18px 18px 26px;
+  padding: calc(18px * var(--settings-display-scale, 1)) calc(18px * var(--settings-display-scale, 1)) calc(26px * var(--settings-display-scale, 1));
   overflow-y: auto;
   flex: 1 1 auto;
   min-height: 0;
 }
-.settings-body::-webkit-scrollbar { width: 10px; }
+.settings-body::-webkit-scrollbar { width: calc(10px * var(--settings-display-scale, 1)); }
 .settings-body::-webkit-scrollbar-thumb {
   background: rgba(47,41,51,.2);
-  border-radius: 10px;
-  border: 3px solid transparent;
+  border-radius: calc(10px * var(--settings-display-scale, 1));
+  border: calc(3px * var(--settings-display-scale, 1)) solid transparent;
   background-clip: content-box;
 }
 .settings fieldset {
   border: 0;
-  border-radius: 24px;
-  padding: 20px 18px 14px;
-  margin-bottom: 16px;
+  border-radius: calc(24px * var(--settings-display-scale, 1));
+  padding: calc(20px * var(--settings-display-scale, 1)) calc(18px * var(--settings-display-scale, 1)) calc(14px * var(--settings-display-scale, 1));
+  margin-bottom: calc(16px * var(--settings-display-scale, 1));
   background: #fffdf8;
   box-shadow: 0 10px 26px rgba(47,41,51,.07);
 }
 .settings legend {
   float: left;
   width: 100%;
-  padding: 0 0 14px;
+  padding: 0 0 calc(14px * var(--settings-display-scale, 1));
   color: var(--ink);
-  font-size: 20px;
+  font-size: calc(20px * var(--settings-display-scale, 1));
   font-weight: 900;
   letter-spacing: 0;
   background: transparent;
@@ -1171,29 +1172,31 @@ body.plat-mac .settings.hidden { transform: translateX(calc(100% + 38px)); }
 .settings legend + * { clear: both; }
 .settings label {
   display: block;
-  font-size: 13.5px;
+  min-width: 0;
+  font-size: calc(13.5px * var(--settings-display-scale, 1));
   color: var(--ink);
-  margin-bottom: 14px;
+  margin-bottom: calc(14px * var(--settings-display-scale, 1));
   font-weight: 900;
 }
 .settings label.inline {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: calc(10px * var(--settings-display-scale, 1));
   width: 100%;
   clear: both;
-  margin: 4px 0 14px;
-  min-height: 48px;
-  padding: 12px 14px;
+  min-width: 0;
+  margin: calc(4px * var(--settings-display-scale, 1)) 0 calc(14px * var(--settings-display-scale, 1));
+  min-height: calc(48px * var(--settings-display-scale, 1));
+  padding: calc(12px * var(--settings-display-scale, 1)) calc(14px * var(--settings-display-scale, 1));
   background: #f8f4ef;
   border: 1px solid transparent;
-  border-radius: 16px;
+  border-radius: calc(16px * var(--settings-display-scale, 1));
   color: var(--ink);
 }
 .settings label.inline input[type="checkbox"] {
   flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
+  width: calc(18px * var(--settings-display-scale, 1));
+  height: calc(18px * var(--settings-display-scale, 1));
   accent-color: var(--primary);
 }
 .settings label.inline:hover {
@@ -1205,14 +1208,15 @@ body.plat-mac .settings.hidden { transform: translateX(calc(100% + 38px)); }
 .settings textarea,
 .settings select {
   width: 100%;
-  margin-top: 8px;
-  padding: 13px 14px;
+  min-width: 0;
+  margin-top: calc(8px * var(--settings-display-scale, 1));
+  padding: calc(13px * var(--settings-display-scale, 1)) calc(14px * var(--settings-display-scale, 1));
   background: #f8f4ef;
   color: var(--ink);
   border: 1px solid transparent;
-  border-radius: 14px;
+  border-radius: calc(14px * var(--settings-display-scale, 1));
   font-family: var(--ui);
-  font-size: 14px;
+  font-size: calc(14px * var(--settings-display-scale, 1));
   font-weight: 700;
   transition: border-color .15s ease, box-shadow .15s ease, background .15s;
 }
@@ -1222,32 +1226,32 @@ body.plat-mac .settings.hidden { transform: translateX(calc(100% + 38px)); }
   user-select: text;
   cursor: text;
 }
-.settings textarea { min-height: 92px; resize: vertical; }
+.settings textarea { min-height: calc(92px * var(--settings-display-scale, 1)); resize: vertical; }
 .settings input[type="text"]:focus,
 .settings textarea:focus,
 .settings select:focus {
   outline: none;
   border-color: rgba(49,38,53,.28);
   background: #fff;
-  box-shadow: 0 0 0 4px rgba(49,38,53,.08);
+  box-shadow: 0 0 0 calc(4px * var(--settings-display-scale, 1)) rgba(49,38,53,.08);
 }
 .settings input[type="text"]::placeholder,
 .settings textarea::placeholder { color: #aaa39c; }
 .settings input[type="range"] {
   width: 100%;
   accent-color: var(--primary);
-  margin-top: 8px;
+  margin-top: calc(8px * var(--settings-display-scale, 1));
 }
 .settings .full-btn {
   width: 100%;
-  min-height: 48px;
-  padding: 13px 18px;
+  min-height: calc(48px * var(--settings-display-scale, 1));
+  padding: calc(13px * var(--settings-display-scale, 1)) calc(18px * var(--settings-display-scale, 1));
   background: var(--primary);
   color: #fff;
   border: none;
   border-radius: var(--pill);
   cursor: pointer;
-  font-size: 14px;
+  font-size: calc(14px * var(--settings-display-scale, 1));
   font-weight: 900;
   font-family: var(--ui);
   transition: transform .1s ease, box-shadow .15s ease;
@@ -1256,19 +1260,24 @@ body.plat-mac .full-btn { border-radius: var(--pill); background: var(--primary)
 .settings .full-btn:hover { background: var(--primary); box-shadow: 0 7px 16px rgba(47,41,51,.18); transform: translateY(-1px); }
 .settings .full-btn:active { transform: scale(1.025); box-shadow: 0 8px 18px rgba(47,41,51,.16); }
 .settings .hint {
-  font-size: 12px;
+  font-size: calc(12px * var(--settings-display-scale, 1));
   color: var(--muted);
-  margin: 9px 0;
+  margin: calc(9px * var(--settings-display-scale, 1)) 0;
   line-height: 1.55;
   font-weight: 700;
 }
-.settings .url-row { display: flex; gap: 9px; margin-top: 7px; }
+.settings .url-row {
+  display: flex;
+  min-width: 0;
+  gap: calc(9px * var(--settings-display-scale, 1));
+  margin-top: calc(7px * var(--settings-display-scale, 1));
+}
 .settings .url-row input { margin-top: 0; flex: 1; min-width: 0; }
 .settings .field-note {
   display: block;
-  margin-top: 7px;
+  margin-top: calc(7px * var(--settings-display-scale, 1));
   color: var(--muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--settings-display-scale, 1));
   font-weight: 700;
   line-height: 1.5;
 }
@@ -1279,15 +1288,15 @@ body.plat-mac .full-btn { border-radius: var(--pill); background: var(--primary)
 }
 .settings .paste-btn {
   flex: 0 0 auto;
-  min-height: 45px;
-  padding: 10px 16px;
+  min-height: calc(45px * var(--settings-display-scale, 1));
+  padding: calc(10px * var(--settings-display-scale, 1)) calc(16px * var(--settings-display-scale, 1));
   background: #fffdf8;
   color: var(--ink);
   border: 1px solid rgba(47,41,51,.18);
   border-radius: var(--pill);
   cursor: pointer;
   font-family: var(--ui);
-  font-size: 13px;
+  font-size: calc(13px * var(--settings-display-scale, 1));
   font-weight: 900;
   transition: transform .1s ease, border-color .15s;
 }
@@ -1310,8 +1319,8 @@ body.plat-mac .full-btn { border-radius: var(--pill); background: var(--primary)
 }
 .custom-worship-list {
   display: grid;
-  gap: 8px;
-  margin: 12px 0 14px;
+  gap: calc(8px * var(--settings-display-scale, 1));
+  margin: calc(12px * var(--settings-display-scale, 1)) 0 calc(14px * var(--settings-display-scale, 1));
 }
 .custom-worship-list:empty,
 .custom-worship-list[hidden] {
@@ -1321,12 +1330,13 @@ body.plat-mac .full-btn { border-radius: var(--pill); background: var(--primary)
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
-  min-height: 46px;
-  padding: 8px 9px 8px 12px;
+  min-width: 0;
+  gap: calc(10px * var(--settings-display-scale, 1));
+  min-height: calc(46px * var(--settings-display-scale, 1));
+  padding: calc(8px * var(--settings-display-scale, 1)) calc(9px * var(--settings-display-scale, 1)) calc(8px * var(--settings-display-scale, 1)) calc(12px * var(--settings-display-scale, 1));
   background: #f8f4ef;
   border: 1px solid transparent;
-  border-radius: 16px;
+  border-radius: calc(16px * var(--settings-display-scale, 1));
   cursor: grab;
   transition: transform .12s ease, border-color .15s ease, box-shadow .15s ease, background .15s ease;
 }
@@ -1343,21 +1353,21 @@ body.plat-mac .full-btn { border-radius: var(--pill); background: var(--primary)
 .custom-worship-item:active { cursor: grabbing; }
 .drag-handle {
   color: var(--muted);
-  font-size: 18px;
+  font-size: calc(18px * var(--settings-display-scale, 1));
   font-weight: 900;
   line-height: 1;
-  letter-spacing: -4px;
+  letter-spacing: calc(-4px * var(--settings-display-scale, 1));
 }
 .settings .custom-worship-title-input {
   width: 100%;
   min-width: 0;
-  min-height: 34px;
+  min-height: calc(34px * var(--settings-display-scale, 1));
   margin: 0;
-  padding: 6px 9px;
+  padding: calc(6px * var(--settings-display-scale, 1)) calc(9px * var(--settings-display-scale, 1));
   background: transparent;
   border-color: transparent;
   color: var(--ink);
-  font-size: 13px;
+  font-size: calc(13px * var(--settings-display-scale, 1));
   font-weight: 900;
   cursor: text;
 }
@@ -1369,8 +1379,8 @@ body.plat-mac .full-btn { border-radius: var(--pill); background: var(--primary)
   background: #fff;
 }
 .custom-delete-btn {
-  width: 36px;
-  height: 36px;
+  width: calc(36px * var(--settings-display-scale, 1));
+  height: calc(36px * var(--settings-display-scale, 1));
   display: grid;
   place-items: center;
   border: 0;
@@ -1386,8 +1396,8 @@ body.plat-mac .full-btn { border-radius: var(--pill); background: var(--primary)
 }
 .custom-delete-btn:active { transform: scale(1.08); }
 .custom-delete-btn svg {
-  width: 21px;
-  height: 21px;
+  width: calc(21px * var(--settings-display-scale, 1));
+  height: calc(21px * var(--settings-display-scale, 1));
   fill: none;
   stroke: currentColor;
   stroke-width: 2.2;
@@ -1397,20 +1407,27 @@ body.plat-mac .full-btn { border-radius: var(--pill); background: var(--primary)
 .settings .date-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  min-width: 0;
+  gap: calc(12px * var(--settings-display-scale, 1));
 }
 .settings .date-row label { margin-bottom: 0; }
 .settings .settings-divider {
   height: 1px;
   background: var(--divider);
-  margin: 16px 0 14px;
+  margin: calc(16px * var(--settings-display-scale, 1)) 0 calc(14px * var(--settings-display-scale, 1));
 }
-.settings .ref-book { width: 100%; margin-top: 7px; }
-.settings .ref-row { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
+.settings .ref-book { width: 100%; margin-top: calc(7px * var(--settings-display-scale, 1)); }
+.settings .ref-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: calc(8px * var(--settings-display-scale, 1));
+  margin: calc(10px * var(--settings-display-scale, 1)) 0;
+}
 .settings .ref-row select { flex: 1; min-width: 0; margin-top: 0; }
 .settings .ref-lab {
   color: var(--brand);
-  font-size: 13px;
+  font-size: calc(13px * var(--settings-display-scale, 1));
   font-weight: 900;
   width: 1.7em;
   flex: 0 0 auto;

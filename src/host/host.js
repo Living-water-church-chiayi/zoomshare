@@ -15,6 +15,20 @@ let currentScriptureConfig = null;
 let assignmentsHydrated = false;
 let previousOnlineMemberIds = new Set();
 let saveTimer = null;
+const HOST_LAYOUT_WIDTH = 460;
+const HOST_LAYOUT_HEIGHT = 760;
+const HOST_DISPLAY_SCALE_MIN = 0.76;
+
+function updateHostDisplayScale() {
+  const viewportWidth = Math.max(1, Number(window.innerWidth) || HOST_LAYOUT_WIDTH);
+  const viewportHeight = Math.max(1, Number(window.innerHeight) || HOST_LAYOUT_HEIGHT);
+  const scale = Math.max(
+    HOST_DISPLAY_SCALE_MIN,
+    Math.min(1, Math.min(viewportWidth / HOST_LAYOUT_WIDTH, viewportHeight / HOST_LAYOUT_HEIGHT))
+  );
+  document.documentElement.style.setProperty('--host-display-scale', scale.toFixed(6));
+  return scale;
+}
 
 function setHidden(element, hidden) {
   element.classList.toggle('hidden', hidden);
@@ -465,6 +479,8 @@ async function loadUtmostParagraphs() {
 
 async function init() {
   document.body.classList.add(window.hostApi.platform === 'darwin' ? 'plat-mac' : 'plat-win');
+  updateHostDisplayScale();
+  window.addEventListener('resize', updateHostDisplayScale);
   $('deviceLabel').value = `${window.hostApi.platform === 'darwin' ? 'Mac' : 'Windows'} 主持人電腦`;
   $('pairForm').addEventListener('submit', submitPair);
   $('scriptureEligibleList').addEventListener('click', chooseCandidate);

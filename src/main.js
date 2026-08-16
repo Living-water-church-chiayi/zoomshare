@@ -1597,6 +1597,34 @@ function fitAspectSize(maxWidth, maxHeight, aspect, preferredWidth) {
   return { width, height };
 }
 
+function coverWindowMargin(area) {
+  return Math.max(0, Math.min(40, Math.floor(area.width * 0.05), Math.floor(area.height * 0.05)));
+}
+
+function coverWindowPreferredWidth(area) {
+  const safeWidth = Math.max(1, Math.floor(area.width));
+  return safeWidth < 1280 ? Math.max(426, Math.floor(safeWidth * 0.75)) : 1280;
+}
+
+function coverWindowSizeForArea(area, preferredWidth = coverWindowPreferredWidth(area)) {
+  const margin = coverWindowMargin(area);
+  const maxWidth = Math.max(1, area.width - margin * 2);
+  const maxHeight = Math.max(1, area.height - margin * 2);
+  return fitAspectSize(maxWidth, maxHeight, 16 / 9, preferredWidth);
+}
+
+function coverWindowMinimumSize(area) {
+  const targetWidth = Math.min(640, Math.max(426, Math.floor(Math.max(1, area.width) * 0.5)));
+  return fitAspectSize(area.width, area.height, 16 / 9, targetWidth);
+}
+
+function hostWindowSizeForArea(area) {
+  return {
+    width: Math.min(area.width, Math.min(460, Math.max(320, Math.floor(area.width * 0.42)))),
+    height: Math.min(area.height, Math.min(760, Math.max(420, Math.floor(area.height * 0.88))))
+  };
+}
+
 function centeredBounds(area, currentBounds, width, height) {
   const centerX = currentBounds.x + currentBounds.width / 2;
   const centerY = currentBounds.y + currentBounds.height / 2;
@@ -1626,16 +1654,14 @@ function setWindowMode(mode) {
     return;
   }
 
-  const margin = Math.max(0, Math.min(40, Math.floor(area.width * 0.05), Math.floor(area.height * 0.05)));
-  const maxWidth = Math.max(1, area.width - margin * 2);
-  const maxHeight = Math.max(1, area.height - margin * 2);
-  const preferredWidth = lastWideBounds ? lastWideBounds.width : Math.max(bounds.width, 640);
-  const size = fitAspectSize(maxWidth, maxHeight, 16 / 9, preferredWidth);
+  const minimum = coverWindowMinimumSize(area);
+  const preferredWidth = lastWideBounds ? lastWideBounds.width : Math.max(bounds.width, minimum.width);
+  const size = coverWindowSizeForArea(area, preferredWidth);
   mainWindow.setMinimumSize(1, 1);
   mainWindowAspectRatio = 16 / 9;
   mainWindow.setAspectRatio(16 / 9);
   mainWindow.setBounds(centeredBounds(area, bounds, size.width, size.height), process.platform === 'darwin');
-  mainWindow.setMinimumSize(Math.min(640, size.width), Math.min(360, size.height));
+  mainWindow.setMinimumSize(Math.min(minimum.width, size.width), Math.min(minimum.height, size.height));
 }
 
 function normalizeWindowDragPoint(value) {
@@ -1959,8 +1985,8 @@ app.on('second-instance', () => {
 
 async function createWindow() {
   const area = screen.getPrimaryDisplay().workArea;
-  const margin = Math.max(0, Math.min(40, Math.floor(area.width * 0.05), Math.floor(area.height * 0.05)));
-  const size = fitAspectSize(area.width - margin * 2, area.height - margin * 2, 16 / 9, 1280);
+  const size = coverWindowSizeForArea(area);
+  const minimum = coverWindowMinimumSize(area);
   const initialBounds = {
     x: area.x + Math.max(0, Math.floor((area.width - size.width) / 2)),
     y: area.y + Math.max(0, Math.floor((area.height - size.height) / 2)),
@@ -1968,7 +1994,7 @@ async function createWindow() {
   };
   const window = new BrowserWindow({
     ...initialBounds,
-    minWidth: Math.min(640, size.width), minHeight: Math.min(360, size.height),
+    minWidth: Math.min(minimum.width, size.width), minHeight: Math.min(minimum.height, size.height),
     backgroundColor: '#000000', title: '靈修封面', autoHideMenuBar: true,
     icon: APP_ICON_PATH,
     frame: false,
@@ -2056,13 +2082,12 @@ function openHostWindow() {
     ? screen.getDisplayMatching(mainWindow.getBounds())
     : screen.getPrimaryDisplay();
   const workArea = display.workArea;
-  const width = Math.min(460, workArea.width);
-  const height = Math.min(760, workArea.height);
+  const { width, height } = hostWindowSizeForArea(workArea);
   const window = new BrowserWindow({
     width,
     height,
-    minWidth: Math.min(360, width),
-    minHeight: Math.min(560, height),
+    minWidth: Math.min(320, width),
+    minHeight: Math.min(420, height),
     x: Math.max(workArea.x, workArea.x + workArea.width - width - 18),
     y: Math.max(workArea.y, workArea.y + 18),
     title: '靈修班主持台',

@@ -1262,11 +1262,14 @@ function updateFlowDisplayScale() {
   const screen = $('flowScreen');
   const viewportWidth = Math.max(1, Number(window.innerWidth) || FLOW_LAYOUT_WIDTH);
   const viewportHeight = Math.max(1, Number(window.innerHeight) || FLOW_LAYOUT_HEIGHT);
+  const appChromeScale = Math.min(viewportWidth / COVER_LAYOUT_WIDTH, viewportHeight / COVER_LAYOUT_HEIGHT);
   const toolbarScale = Math.max(MAIN_TOOLBAR_SCALE_MIN, Math.min(
     MAIN_TOOLBAR_SCALE_MAX,
-    Math.min(viewportWidth / COVER_LAYOUT_WIDTH, viewportHeight / COVER_LAYOUT_HEIGHT)
+    appChromeScale
   ));
+  const settingsScale = Math.max(0.72, Math.min(1, appChromeScale));
   document.documentElement.style.setProperty('--toolbar-display-scale', toolbarScale.toFixed(6));
+  document.documentElement.style.setProperty('--settings-display-scale', settingsScale.toFixed(6));
   if (!screen) return 1;
   const scale = Math.max(0.01, Math.min(
     viewportWidth / FLOW_LAYOUT_WIDTH,

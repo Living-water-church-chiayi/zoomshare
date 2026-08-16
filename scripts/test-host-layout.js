@@ -58,6 +58,7 @@ async function run() {
   const window = new BrowserWindow({
     width: 460,
     height: 760,
+    useContentSize: true,
     show: false,
     webPreferences: {
       preload: path.join(projectRoot, 'src', 'host', 'host-preload.js'),
@@ -68,20 +69,37 @@ async function run() {
   });
   await window.loadFile(path.join(projectRoot, 'src', 'host', 'index.html'));
   await new Promise((resolve) => setTimeout(resolve, 200));
-  const initial = await window.webContents.executeJavaScript(`(() => ({
-    setupHidden: document.getElementById('setupView').classList.contains('hidden'),
-    consoleVisible: !document.getElementById('consoleView').classList.contains('hidden'),
-    scriptureSlots: document.querySelectorAll('#scriptureAssignments .assignment-card').length,
-    utmostSlots: document.querySelectorAll('#utmostAssignments .assignment-card').length,
-    sharingName: document.getElementById('todaySharingName').textContent,
-    onlineRows: document.querySelectorAll('#allOnlineList .online-row').length,
-    rosterRows: document.querySelectorAll('#rosterList .roster-row').length,
-    firstRosterAlias: document.querySelector('#rosterList .roster-row small').textContent,
-    peakOnline: document.getElementById('onlineCount').textContent,
-    eligibleColumns: getComputedStyle(document.getElementById('scriptureEligibleList')).gridTemplateColumns.split(' ').length,
-    bodyScrollWidth: document.body.scrollWidth,
-    bodyClientWidth: document.body.clientWidth
-  }))()`);
+
+  async function measureConsole() {
+    return window.webContents.executeJavaScript(`(() => {
+      const card = document.querySelector('#scriptureAssignments .assignment-card');
+      const cardRect = card ? card.getBoundingClientRect() : { height: 0 };
+      const titleStyle = getComputedStyle(document.querySelector('.console-header h1'));
+      const rootStyle = getComputedStyle(document.documentElement);
+      return {
+        viewportWidth: innerWidth,
+        viewportHeight: innerHeight,
+        hostScale: Number.parseFloat(rootStyle.getPropertyValue('--host-display-scale')) || 1,
+        setupHidden: document.getElementById('setupView').classList.contains('hidden'),
+        consoleVisible: !document.getElementById('consoleView').classList.contains('hidden'),
+        scriptureSlots: document.querySelectorAll('#scriptureAssignments .assignment-card').length,
+        utmostSlots: document.querySelectorAll('#utmostAssignments .assignment-card').length,
+        sharingName: document.getElementById('todaySharingName').textContent,
+        onlineRows: document.querySelectorAll('#allOnlineList .online-row').length,
+        rosterRows: document.querySelectorAll('#rosterList .roster-row').length,
+        firstRosterAlias: document.querySelector('#rosterList .roster-row small').textContent,
+        peakOnline: document.getElementById('onlineCount').textContent,
+        assignmentColumns: getComputedStyle(document.getElementById('scriptureAssignments')).gridTemplateColumns.split(' ').length,
+        eligibleColumns: getComputedStyle(document.getElementById('scriptureEligibleList')).gridTemplateColumns.split(' ').length,
+        headingFontSize: Number.parseFloat(titleStyle.fontSize) || 0,
+        assignmentCardHeight: cardRect.height,
+        bodyScrollWidth: document.body.scrollWidth,
+        bodyClientWidth: document.body.clientWidth
+      };
+    })()`);
+  }
+
+  const initial = await measureConsole();
   assert.equal(initial.setupHidden, true);
   assert.equal(initial.consoleVisible, true);
   assert.equal(initial.scriptureSlots, 3);
@@ -91,8 +109,22 @@ async function run() {
   assert.equal(initial.rosterRows, 3);
   assert.equal(initial.firstRosterAlias, 'Zoom：Amy 王');
   assert.equal(initial.peakOnline, '本次會議最高 4 人在線');
+  assert.equal(initial.assignmentColumns, 2);
   assert.equal(initial.eligibleColumns, 3);
+  assert.equal(initial.hostScale, 1);
   assert.ok(initial.bodyScrollWidth <= initial.bodyClientWidth, 'host console overflows horizontally');
+
+  window.setContentSize(340, 460);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const compact = await measureConsole();
+  assert.equal(compact.viewportWidth, 340);
+  assert.equal(compact.viewportHeight, 460);
+  assert.equal(compact.assignmentColumns, 2, 'compact host console must keep the two-column assignment layout');
+  assert.equal(compact.eligibleColumns, 3, 'compact host console must keep the three-column candidate layout');
+  assert.ok(compact.hostScale < initial.hostScale, 'compact host console did not reduce its display scale');
+  assert.ok(compact.headingFontSize < initial.headingFontSize, 'compact host heading did not scale down');
+  assert.ok(compact.assignmentCardHeight < initial.assignmentCardHeight, 'compact host cards did not scale down');
+  assert.ok(compact.bodyScrollWidth <= compact.bodyClientWidth, 'compact host console overflows horizontally');
 
   await window.webContents.executeJavaScript(`document.getElementById('openRosterSheetButton').click()`);
   await new Promise((resolve) => setTimeout(resolve, 50));
