@@ -611,6 +611,130 @@ test('sizes cover and host windows compactly on small high-DPI work areas', () =
   assert.deepEqual(plain(hostWindowSizeForArea(largeArea)), { width: 460, height: 760 });
 });
 
+test('coordinates cover and host windows without overlap on compact and large work areas', () => {
+  const {
+    dualWindowLayoutForArea,
+    rectsOverlap
+  } = loadFunctions(
+    mainSource,
+    [
+      'fitAspectSize',
+      'coverWindowMargin',
+      'coverWindowPreferredWidth',
+      'coverWindowSizeForArea',
+      'hostWindowSizeForArea',
+      'insetWindowArea',
+      'clampSizeToArea',
+      'centeredYInArea',
+      'rectsOverlap',
+      'mainWindowPreferredSizeForDualArea',
+      'dualWindowLayoutForArea'
+    ]
+  );
+
+  const compact = plain(dualWindowLayoutForArea({ x: 0, y: 0, width: 960, height: 540 }, 16 / 9));
+  assert.deepEqual(compact.cover, { x: 12, y: 100, width: 604, height: 340 });
+  assert.deepEqual(compact.host, { x: 628, y: 12, width: 320, height: 475 });
+  assert.equal(rectsOverlap(compact.cover, compact.host), false);
+
+  const large = plain(dualWindowLayoutForArea({ x: 0, y: 0, width: 1920, height: 1080 }, 16 / 9));
+  assert.deepEqual(
+    { width: large.cover.width, height: large.cover.height, hostWidth: large.host.width, hostHeight: large.host.height },
+    { width: 1280, height: 720, hostWidth: 460, hostHeight: 760 }
+  );
+  assert.equal(large.cover.x, 84);
+  assert.equal(large.host.x, large.cover.x + large.cover.width + 12);
+  assert.equal(large.host.x + large.host.width, 1836);
+  assert.equal(rectsOverlap(large.cover, large.host), false);
+
+  const reading = plain(dualWindowLayoutForArea({ x: 0, y: 0, width: 960, height: 540 }, 9 / 16));
+  assert.deepEqual(
+    { width: reading.cover.width, height: reading.cover.height },
+    { width: 290, height: 516 },
+    'reading mode should preserve a portrait 9:16 window while avoiding the host console'
+  );
+  assert.equal(rectsOverlap(reading.cover, reading.host), false);
+});
+
+test('coordinated window layout preserves manual bounds unless overlap forces correction', () => {
+  const {
+    coordinatedWindowLayoutForState,
+    rectsOverlap
+  } = loadFunctions(
+    mainSource,
+    [
+      'fitAspectSize',
+      'coverWindowMargin',
+      'coverWindowPreferredWidth',
+      'coverWindowSizeForArea',
+      'hostWindowSizeForArea',
+      'insetWindowArea',
+      'clampSizeToArea',
+      'centeredYInArea',
+      'rectsOverlap',
+      'clampNumber',
+      'rectInsideArea',
+      'clampBoundsToArea',
+      'movementDistance',
+      'bestBoundsCandidate',
+      'movedBoundsAroundFixed',
+      'resizedHostBoundsAroundFixed',
+      'resizedCoverBoundsAroundFixed',
+      'mainWindowPreferredSizeForDualArea',
+      'dualWindowLayoutForArea',
+      'coordinatedWindowLayoutForState'
+    ]
+  );
+
+  const wideArea = { x: 0, y: 0, width: 2560, height: 1080 };
+  const manualCover = { x: 640, y: 180, width: 1280, height: 720 };
+  const manualHost = { x: 2082, y: 18, width: 460, height: 760 };
+  assert.deepEqual(
+    plain(coordinatedWindowLayoutForState(wideArea, manualCover, manualHost, 'cover', 16 / 9)),
+    { cover: manualCover, host: manualHost },
+    'non-overlapping manual bounds must not snap back to a preset layout'
+  );
+
+  const overlapCover = { x: 500, y: 200, width: 800, height: 450 };
+  const overlapHost = { x: 900, y: 250, width: 460, height: 760 };
+  const corrected = plain(coordinatedWindowLayoutForState(
+    { x: 0, y: 0, width: 1920, height: 1080 },
+    overlapCover,
+    overlapHost,
+    'cover',
+    16 / 9
+  ));
+  assert.deepEqual(corrected.cover, overlapCover, 'cover-driven correction must preserve the cover bounds');
+  assert.equal(corrected.host.x, overlapCover.x + overlapCover.width + 12);
+  assert.equal(rectsOverlap(corrected.cover, corrected.host), false);
+
+  const compact = plain(coordinatedWindowLayoutForState(
+    { x: 0, y: 0, width: 960, height: 540 },
+    { x: 120, y: 67, width: 720, height: 405 },
+    { x: 539, y: 18, width: 403, height: 475 },
+    'cover',
+    16 / 9
+  ));
+  assert.equal(rectsOverlap(compact.cover, compact.host), false);
+  assert.deepEqual(compact.cover, { x: 12, y: 100, width: 604, height: 340 });
+  assert.deepEqual(compact.host, { x: 628, y: 12, width: 320, height: 475 });
+});
+
+test('requests coordinated layout after manual drag ends when a host console is open', () => {
+  let scheduleCount = 0;
+  const { finishManualWindowDrag } = loadFunctions(
+    mainSource,
+    ['finishManualWindowDrag'],
+    {
+      manualWindowDrag: { lastPoint: { x: 1, y: 1 } },
+      scheduleCoordinatedWindowLayout: () => { scheduleCount += 1; }
+    }
+  );
+
+  finishManualWindowDrag();
+  assert.equal(scheduleCount, 1);
+});
+
 test('reveals reading navigation only from the bottom hotzone', () => {
   let hidden = false;
   const calls = [];

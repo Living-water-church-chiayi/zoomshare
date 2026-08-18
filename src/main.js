@@ -1625,6 +1625,286 @@ function hostWindowSizeForArea(area) {
   };
 }
 
+function insetWindowArea(area, margin) {
+  const safeMargin = Math.max(0, Math.floor(margin || 0));
+  return {
+    x: Math.round(area.x + safeMargin),
+    y: Math.round(area.y + safeMargin),
+    width: Math.max(1, Math.floor(area.width - safeMargin * 2)),
+    height: Math.max(1, Math.floor(area.height - safeMargin * 2))
+  };
+}
+
+function clampSizeToArea(size, area) {
+  return {
+    width: Math.max(1, Math.min(Math.floor(size.width), Math.floor(area.width))),
+    height: Math.max(1, Math.min(Math.floor(size.height), Math.floor(area.height)))
+  };
+}
+
+function centeredYInArea(area, height) {
+  return Math.round(area.y + Math.max(0, Math.floor((area.height - height) / 2)));
+}
+
+function rectsOverlap(first, second) {
+  return first.x < second.x + second.width &&
+    first.x + first.width > second.x &&
+    first.y < second.y + second.height &&
+    first.y + first.height > second.y;
+}
+
+function clampNumber(value, min, max) {
+  return Math.min(Math.max(Math.round(value), min), Math.max(min, max));
+}
+
+function rectInsideArea(rect, area) {
+  return rect.x >= area.x &&
+    rect.y >= area.y &&
+    rect.x + rect.width <= area.x + area.width &&
+    rect.y + rect.height <= area.y + area.height;
+}
+
+function clampBoundsToArea(bounds, area) {
+  const size = clampSizeToArea(bounds, area);
+  return {
+    x: clampNumber(bounds.x, area.x, area.x + area.width - size.width),
+    y: clampNumber(bounds.y, area.y, area.y + area.height - size.height),
+    width: size.width,
+    height: size.height
+  };
+}
+
+function movementDistance(first, second) {
+  const dx = first.x - second.x;
+  const dy = first.y - second.y;
+  return dx * dx + dy * dy;
+}
+
+function bestBoundsCandidate(candidates, originalBounds, fixedBounds, area) {
+  let best = null;
+  for (const candidate of candidates) {
+    if (!candidate || !rectInsideArea(candidate, area) || rectsOverlap(candidate, fixedBounds)) continue;
+    if (!best || movementDistance(candidate, originalBounds) < movementDistance(best, originalBounds)) best = candidate;
+  }
+  return best;
+}
+
+function movedBoundsAroundFixed(area, targetBounds, fixedBounds, gap) {
+  const size = clampSizeToArea(targetBounds, area);
+  const minX = area.x;
+  const maxX = area.x + area.width - size.width;
+  const minY = area.y;
+  const maxY = area.y + area.height - size.height;
+  return bestBoundsCandidate([
+    {
+      x: fixedBounds.x + fixedBounds.width + gap,
+      y: clampNumber(targetBounds.y, minY, maxY),
+      width: size.width,
+      height: size.height
+    },
+    {
+      x: fixedBounds.x - gap - size.width,
+      y: clampNumber(targetBounds.y, minY, maxY),
+      width: size.width,
+      height: size.height
+    },
+    {
+      x: clampNumber(targetBounds.x, minX, maxX),
+      y: fixedBounds.y + fixedBounds.height + gap,
+      width: size.width,
+      height: size.height
+    },
+    {
+      x: clampNumber(targetBounds.x, minX, maxX),
+      y: fixedBounds.y - gap - size.height,
+      width: size.width,
+      height: size.height
+    }
+  ], targetBounds, fixedBounds, area);
+}
+
+function resizedHostBoundsAroundFixed(area, targetBounds, fixedBounds, gap) {
+  const minWidth = Math.min(320, area.width);
+  const minHeight = Math.min(420, area.height);
+  const slots = [
+    {
+      x: fixedBounds.x + fixedBounds.width + gap,
+      y: area.y,
+      width: area.x + area.width - (fixedBounds.x + fixedBounds.width + gap),
+      height: area.height
+    },
+    {
+      x: area.x,
+      y: area.y,
+      width: fixedBounds.x - gap - area.x,
+      height: area.height
+    },
+    {
+      x: area.x,
+      y: fixedBounds.y + fixedBounds.height + gap,
+      width: area.width,
+      height: area.y + area.height - (fixedBounds.y + fixedBounds.height + gap)
+    },
+    {
+      x: area.x,
+      y: area.y,
+      width: area.width,
+      height: fixedBounds.y - gap - area.y
+    }
+  ];
+  const candidates = slots.map((slot) => {
+    if (slot.width < minWidth || slot.height < minHeight) return null;
+    const width = Math.min(targetBounds.width, Math.floor(slot.width));
+    const height = Math.min(targetBounds.height, Math.floor(slot.height));
+    return {
+      x: clampNumber(targetBounds.x, slot.x, slot.x + slot.width - width),
+      y: clampNumber(targetBounds.y, slot.y, slot.y + slot.height - height),
+      width,
+      height
+    };
+  });
+  return bestBoundsCandidate(candidates, targetBounds, fixedBounds, area);
+}
+
+function resizedCoverBoundsAroundFixed(area, targetBounds, fixedBounds, gap, coverAspect) {
+  const safeAspect = Number.isFinite(coverAspect) && coverAspect > 0 ? coverAspect : 16 / 9;
+  const slots = [
+    {
+      x: fixedBounds.x + fixedBounds.width + gap,
+      y: area.y,
+      width: area.x + area.width - (fixedBounds.x + fixedBounds.width + gap),
+      height: area.height
+    },
+    {
+      x: area.x,
+      y: area.y,
+      width: fixedBounds.x - gap - area.x,
+      height: area.height
+    },
+    {
+      x: area.x,
+      y: fixedBounds.y + fixedBounds.height + gap,
+      width: area.width,
+      height: area.y + area.height - (fixedBounds.y + fixedBounds.height + gap)
+    },
+    {
+      x: area.x,
+      y: area.y,
+      width: area.width,
+      height: fixedBounds.y - gap - area.y
+    }
+  ];
+  const candidates = slots.map((slot) => {
+    if (slot.width < 1 || slot.height < 1) return null;
+    const size = fitAspectSize(slot.width, slot.height, safeAspect, Math.min(targetBounds.width, slot.width));
+    return {
+      x: clampNumber(targetBounds.x, slot.x, slot.x + slot.width - size.width),
+      y: clampNumber(targetBounds.y, slot.y, slot.y + slot.height - size.height),
+      ...size
+    };
+  });
+  return bestBoundsCandidate(candidates, targetBounds, fixedBounds, area);
+}
+
+function mainWindowPreferredSizeForDualArea(area, innerArea, aspect) {
+  const safeAspect = Number.isFinite(aspect) && aspect > 0 ? aspect : 16 / 9;
+  if (safeAspect < 1) {
+    return fitAspectSize(
+      innerArea.width,
+      innerArea.height,
+      safeAspect,
+      Math.round(innerArea.height * safeAspect)
+    );
+  }
+  return clampSizeToArea(coverWindowSizeForArea(area), innerArea);
+}
+
+function dualWindowLayoutForArea(area, coverAspect = 16 / 9) {
+  const margin = 12;
+  const gap = 12;
+  const inner = insetWindowArea(area, margin);
+  let coverSize = mainWindowPreferredSizeForDualArea(area, inner, coverAspect);
+  let hostSize = clampSizeToArea(hostWindowSizeForArea(area), inner);
+
+  if (coverSize.width + gap + hostSize.width > inner.width) {
+    const hostFloorWidth = Math.max(1, Math.min(320, hostSize.width, inner.width - gap - 1));
+    const coverMaxWidth = Math.max(1, inner.width - gap - hostFloorWidth);
+    coverSize = fitAspectSize(coverMaxWidth, inner.height, coverAspect, coverMaxWidth);
+    hostSize = {
+      width: Math.max(1, Math.min(hostFloorWidth, inner.width - gap - coverSize.width)),
+      height: Math.min(hostSize.height, inner.height)
+    };
+  }
+
+  const pairWidth = coverSize.width + gap + hostSize.width;
+  const pairX = Math.round(inner.x + Math.max(0, Math.floor((inner.width - pairWidth) / 2)));
+
+  let cover = {
+    x: pairX,
+    y: centeredYInArea(inner, coverSize.height),
+    width: coverSize.width,
+    height: coverSize.height
+  };
+  let host = {
+    x: Math.round(pairX + coverSize.width + gap),
+    y: inner.y,
+    width: hostSize.width,
+    height: hostSize.height
+  };
+
+  if (rectsOverlap(cover, host)) {
+    const stackedCoverMaxHeight = Math.max(1, inner.height - gap - 1);
+    coverSize = fitAspectSize(inner.width, stackedCoverMaxHeight, coverAspect, inner.width);
+    hostSize = {
+      width: Math.min(hostSize.width, inner.width),
+      height: Math.max(1, Math.min(hostSize.height, inner.height - gap - coverSize.height))
+    };
+    cover = {
+      x: inner.x,
+      y: inner.y,
+      width: coverSize.width,
+      height: coverSize.height
+    };
+    host = {
+      x: Math.round(inner.x + inner.width - hostSize.width),
+      y: Math.round(inner.y + inner.height - hostSize.height),
+      width: hostSize.width,
+      height: hostSize.height
+    };
+  }
+
+  return { cover, host };
+}
+
+function coordinatedWindowLayoutForState(area, coverBounds, hostBounds, driver = 'cover', coverAspect = 16 / 9) {
+  const margin = 12;
+  const gap = 12;
+  const inner = insetWindowArea(area, margin);
+  const coverInside = rectInsideArea(coverBounds, area);
+  const hostInside = rectInsideArea(hostBounds, area);
+  if (coverInside && hostInside && !rectsOverlap(coverBounds, hostBounds)) {
+    return { cover: coverBounds, host: hostBounds };
+  }
+
+  let cover = clampBoundsToArea(coverBounds, inner);
+  let host = clampBoundsToArea(hostBounds, inner);
+  if (!rectsOverlap(cover, host)) return { cover, host };
+
+  const moveHost = driver !== 'host';
+  const fixed = moveHost ? cover : host;
+  const target = moveHost ? host : cover;
+  const moved = movedBoundsAroundFixed(inner, target, fixed, gap);
+  const resized = moved || (moveHost
+    ? resizedHostBoundsAroundFixed(inner, target, fixed, gap)
+    : resizedCoverBoundsAroundFixed(inner, target, fixed, gap, coverAspect));
+
+  if (resized) {
+    return moveHost ? { cover: fixed, host: resized } : { cover: resized, host: fixed };
+  }
+
+  return dualWindowLayoutForArea(area, coverAspect);
+}
+
 function centeredBounds(area, currentBounds, width, height) {
   const centerX = currentBounds.x + currentBounds.width / 2;
   const centerY = currentBounds.y + currentBounds.height / 2;
@@ -1651,6 +1931,7 @@ function setWindowMode(mode) {
     mainWindow.setAspectRatio(9 / 16);
     mainWindow.setBounds(centeredBounds(area, bounds, size.width, size.height), process.platform === 'darwin');
     mainWindow.setMinimumSize(Math.min(320, size.width), Math.min(560, size.height));
+    if (typeof applyCoordinatedWindowLayout === 'function') applyCoordinatedWindowLayout('cover');
     return;
   }
 
@@ -1662,6 +1943,7 @@ function setWindowMode(mode) {
   mainWindow.setAspectRatio(16 / 9);
   mainWindow.setBounds(centeredBounds(area, bounds, size.width, size.height), process.platform === 'darwin');
   mainWindow.setMinimumSize(Math.min(minimum.width, size.width), Math.min(minimum.height, size.height));
+  if (typeof applyCoordinatedWindowLayout === 'function') applyCoordinatedWindowLayout('cover');
 }
 
 function normalizeWindowDragPoint(value) {
@@ -1711,6 +1993,7 @@ function moveManualWindowDrag(point) {
 
 function finishManualWindowDrag() {
   manualWindowDrag = null;
+  if (typeof scheduleCoordinatedWindowLayout === 'function') scheduleCoordinatedWindowLayout('cover');
 }
 
 function registerIpc() {
@@ -1906,7 +2189,91 @@ let lastPointerPoint = null;
 let manualWindowDrag = null;
 let mainWindowAspectRatio = 16 / 9;
 let hostPresenceRefreshTimer = null;
+let coordinatedWindowLayoutTimer = null;
+let applyingCoordinatedWindowLayout = false;
 const HOST_PRESENCE_REFRESH_INTERVAL_MS = 60_000;
+const COORDINATED_WINDOW_LAYOUT_DEBOUNCE_MS = 120;
+
+function usableWindow(window) {
+  return window && !window.isDestroyed();
+}
+
+function sameBounds(first, second) {
+  return first && second &&
+    first.x === second.x &&
+    first.y === second.y &&
+    first.width === second.width &&
+    first.height === second.height;
+}
+
+function setBoundsIfChanged(window, bounds, animate) {
+  if (!usableWindow(window)) return;
+  const current = window.getBounds();
+  if (sameBounds(current, bounds)) return;
+  window.setBounds(bounds, animate);
+}
+
+function clearCoordinatedWindowLayoutTimer() {
+  if (coordinatedWindowLayoutTimer) clearTimeout(coordinatedWindowLayoutTimer);
+  coordinatedWindowLayoutTimer = null;
+}
+
+function applyCoordinatedWindowLayout(driver = 'cover') {
+  if (applyingCoordinatedWindowLayout || manualWindowDrag) return;
+  if (!usableWindow(mainWindow) || !usableWindow(hostWindow)) return;
+  const area = screen.getDisplayMatching(mainWindow.getBounds()).workArea;
+  const currentCover = mainWindow.getBounds();
+  const currentHost = hostWindow.getBounds();
+  const layout = coordinatedWindowLayoutForState(area, currentCover, currentHost, driver, mainWindowAspectRatio);
+  if (sameBounds(currentCover, layout.cover) && sameBounds(currentHost, layout.host)) return;
+  const animate = process.platform === 'darwin';
+  const mainMinimum = mainWindowAspectRatio < 1
+    ? { width: 320, height: 560 }
+    : coverWindowMinimumSize(area);
+  const hostMinimum = { width: 320, height: 420 };
+
+  applyingCoordinatedWindowLayout = true;
+  try {
+    mainWindow.setMinimumSize(1, 1);
+    hostWindow.setMinimumSize(1, 1);
+    mainWindow.setAspectRatio(0);
+    try {
+      setBoundsIfChanged(mainWindow, layout.cover, animate);
+    } finally {
+      mainWindow.setAspectRatio(mainWindowAspectRatio);
+    }
+    setBoundsIfChanged(hostWindow, layout.host, animate);
+    mainWindow.setMinimumSize(
+      Math.min(mainMinimum.width, layout.cover.width),
+      Math.min(mainMinimum.height, layout.cover.height)
+    );
+    hostWindow.setMinimumSize(
+      Math.min(hostMinimum.width, layout.host.width),
+      Math.min(hostMinimum.height, layout.host.height)
+    );
+  } finally {
+    applyingCoordinatedWindowLayout = false;
+  }
+}
+
+function scheduleCoordinatedWindowLayout(driver = 'cover') {
+  if (applyingCoordinatedWindowLayout || manualWindowDrag) return;
+  if (!usableWindow(mainWindow) || !usableWindow(hostWindow)) return;
+  clearCoordinatedWindowLayoutTimer();
+  coordinatedWindowLayoutTimer = setTimeout(() => {
+    coordinatedWindowLayoutTimer = null;
+    applyCoordinatedWindowLayout(driver);
+  }, COORDINATED_WINDOW_LAYOUT_DEBOUNCE_MS);
+  if (typeof coordinatedWindowLayoutTimer.unref === 'function') coordinatedWindowLayoutTimer.unref();
+}
+
+function attachCoordinatedWindowLayoutEvents(window, driver) {
+  const schedule = () => scheduleCoordinatedWindowLayout(driver);
+  window.on('move', schedule);
+  window.on('resize', schedule);
+  window.on('moved', schedule);
+  window.on('resized', schedule);
+}
 
 function pointInsideBounds(point, bounds) {
   return point.x >= bounds.x && point.x < bounds.x + bounds.width &&
@@ -2013,6 +2380,7 @@ async function createWindow() {
   mainWindowAspectRatio = 16 / 9;
   window.setAspectRatio(16 / 9);
   window.removeMenu();
+  attachCoordinatedWindowLayoutEvents(window, 'cover');
 
   const guardNavigation = (event, targetUrl) => {
     if (isTrustedRendererUrl(targetUrl)) return;
@@ -2042,6 +2410,7 @@ async function createWindow() {
 
   window.webContents.once('did-finish-load', () => { checkLatestVersion(); });
   window.on('closed', () => {
+    clearCoordinatedWindowLayoutTimer();
     stopMainWindowPointerMonitor();
     closeNativeAudio();
     if (mainWindow === window) mainWindow = null;
@@ -2076,6 +2445,7 @@ function openHostWindow() {
     hostWindow.focus();
     sendPresenceState();
     startHostPresenceRefresh();
+    applyCoordinatedWindowLayout('cover');
     return hostWindow;
   }
   const display = mainWindow && !mainWindow.isDestroyed()
@@ -2105,6 +2475,8 @@ function openHostWindow() {
   hostWindow = window;
   startHostPresenceRefresh();
   window.removeMenu();
+  attachCoordinatedWindowLayoutEvents(window, 'host');
+  applyCoordinatedWindowLayout('cover');
   window.webContents.on('will-navigate', (event, targetUrl) => {
     if (!isTrustedRendererUrl(targetUrl, HOST_ENTRY_PATH)) event.preventDefault();
   });
@@ -2112,6 +2484,7 @@ function openHostWindow() {
   window.loadFile(HOST_ENTRY_PATH).catch((error) => console.error('載入主持台失敗：', error));
   window.once('ready-to-show', () => {
     if (!window.isDestroyed()) {
+      applyCoordinatedWindowLayout('cover');
       window.show();
       sendPresenceState();
       readConfig().then(sendHostScriptureConfig).catch(() => {});
@@ -2120,6 +2493,7 @@ function openHostWindow() {
   window.on('closed', () => {
     if (hostWindow !== window) return;
     hostWindow = null;
+    clearCoordinatedWindowLayoutTimer();
     stopHostPresenceRefresh();
   });
   return window;
