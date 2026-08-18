@@ -1988,6 +1988,42 @@ test('keeps video quality variants in separate cache entries', () => {
   assert.equal(cacheKey(url, 'audio', 720), cacheKey(url, 'audio', 1080));
 });
 
+test('builds yt-dlp download args to avoid stale and forbidden YouTube formats', () => {
+  const { ytDlpDownloadArgs, isYtDlpForbiddenError, ytDlpForbiddenMessage } = loadFunctions(
+    mainSource,
+    ['ytDlpDownloadArgs', 'isYtDlpForbiddenError', 'ytDlpForbiddenMessage']
+  );
+  const videoArgs = ytDlpDownloadArgs('https://youtu.be/abc', 'video', 720, '/tmp/video.%(ext)s', '/tmp/bin');
+
+  assert.ok(videoArgs.includes('--no-cache-dir'));
+  assert.ok(videoArgs.includes('--check-formats'));
+  assert.ok(videoArgs.includes('--force-ipv4'));
+  assert.equal(videoArgs[videoArgs.indexOf('--extractor-args') + 1], 'youtube:player_client=web_embedded,default');
+  assert.ok(videoArgs.includes('--retry-sleep'));
+  assert.ok(videoArgs.includes('--ffmpeg-location'));
+  assert.equal(videoArgs[videoArgs.indexOf('-f') + 1], 'bestvideo[height<=720]+bestaudio/best[height<=720]/best');
+  assert.deepEqual(plain(videoArgs.slice(-2)), ['--', 'https://youtu.be/abc']);
+
+  const audioArgs = ytDlpDownloadArgs('https://youtu.be/abc', 'audio', 1080, '/tmp/audio.%(ext)s', '');
+  assert.ok(audioArgs.includes('--no-cache-dir'));
+  assert.ok(audioArgs.includes('--check-formats'));
+  assert.ok(audioArgs.includes('--force-ipv4'));
+  assert.equal(audioArgs[audioArgs.indexOf('--extractor-args') + 1], 'youtube:player_client=web_embedded,default');
+  assert.equal(audioArgs.includes('--ffmpeg-location'), false);
+  assert.deepEqual(plain(audioArgs.slice(-2)), ['--', 'https://youtu.be/abc']);
+
+  assert.equal(isYtDlpForbiddenError(new Error('unable to download video data: HTTP Error 403: Forbidden')), true);
+  assert.equal(isYtDlpForbiddenError(new Error('network timeout')), false);
+  assert.match(
+    ytDlpForbiddenMessage(new Error('HTTP Error 403: Forbidden'), { updated: false, current: '2026.07.04' }).message,
+    /yt-dlp 已是最新版本/
+  );
+  assert.match(
+    ytDlpForbiddenMessage(new Error('HTTP Error 403: Forbidden'), { updated: true, to: '2026.08.18' }).message,
+    /已自動更新 yt-dlp 至 2026\.08\.18/
+  );
+});
+
 test('builds the announcement from the renderer implementation and current config', () => {
   const cfg = {
     dateAuto: true,

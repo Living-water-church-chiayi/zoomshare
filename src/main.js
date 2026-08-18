@@ -1025,6 +1025,60 @@ const inflight = new Map(); // cacheKey -> Promise<path>
 const visualOnlyInflight = new Map(); // 原始影片路徑 -> Promise<無音軌影片路徑>
 const audioOnlyInflight = new Map(); // 原始影片路徑 -> Promise<AAC 音軌路徑>
 
+function ytDlpDownloadArgs(url, kind, quality, outputTemplate, ffmpegDir) {
+  const retry = [
+    '--retries', '20',
+    '--fragment-retries', '20',
+    '--extractor-retries', '3',
+    '--retry-sleep', 'fragment:exp=1:20'
+  ];
+  const common = [
+    '--no-cache-dir',
+    '--no-playlist',
+    '--newline',
+    '--check-formats',
+    '--force-ipv4',
+    '--extractor-args', 'youtube:player_client=web_embedded,default',
+    ...retry
+  ];
+  if (kind === 'video') {
+    const maxHeight = quality || 1080;
+    const ffmpegArgs = ffmpegDir ? ['--ffmpeg-location', ffmpegDir] : [];
+    return [
+      '-f', `bestvideo[height<=${maxHeight}]+bestaudio/best[height<=${maxHeight}]/best`,
+      '--merge-output-format', 'mp4',
+      ...common,
+      ...ffmpegArgs,
+      '-o', outputTemplate,
+      '--', url
+    ];
+  }
+  return ['-f', 'bestaudio[ext=m4a]/bestaudio/best', ...common, '-o', outputTemplate, '--', url];
+}
+
+function isYtDlpForbiddenError(error) {
+  const message = String(error && error.message ? error.message : error || '');
+  return /\bHTTP Error 403\b|\b403:\s*Forbidden\b|\b403 Forbidden\b/i.test(message);
+}
+
+function ytDlpForbiddenMessage(error, updateResult, retriedAfterUpdate = false) {
+  const base = String(error && error.message ? error.message : error || 'YouTube 回傳 403 Forbidden');
+  let detail = 'yt-dlp 已是最新版本，仍收到 YouTube 403。';
+  if (updateResult && updateResult.updated) {
+    detail = `已自動更新 yt-dlp 至 ${updateResult.to} 後重試，仍收到 YouTube 403。`;
+  } else if (updateResult && updateResult.error) {
+    detail = `嘗試自動更新 yt-dlp 失敗：${updateResult.error}。`;
+  } else if (retriedAfterUpdate) {
+    detail = '已重新嘗試下載，仍收到 YouTube 403。';
+  }
+  return new Error(`${base}\n${detail}請稍後再試，或先降低敬拜影片畫質。`);
+}
+
+async function waitForPendingYtDlpUpdate() {
+  const pending = ytDlpUpdatePromise;
+  return pending ? pending.catch(() => null) : null;
+}
+
 function cleanIncompleteFilesForKey(key) {
   const prefix = key + '.';
   try {
@@ -1049,15 +1103,9 @@ function downloadMedia(url, kind, quality) {
   return new Promise((resolve, reject) => {
     const key = cacheKey(url, kind, quality);
     const tmpl = path.join(CACHE_DIR(), `${key}.%(ext)s`);
-    // 多次重試可降低 YouTube 暫時性 403 對長影片下載的影響。
-    const retry = ['--retries', '20', '--fragment-retries', '20', '--extractor-retries', '3'];
     const ffmpegName = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
-    const ffmpegArgs = fs.existsSync(path.join(bundledBinDir(), ffmpegName)) ? ['--ffmpeg-location', bundledBinDir()] : [];
-    const args = kind === 'video'
-      ? ['-f', `bestvideo[height<=${quality || 1080}]+bestaudio/best`,
-         '--merge-output-format', 'mp4', '--no-playlist', '--newline', ...retry,
-         ...ffmpegArgs, '-o', tmpl, url]
-      : ['-f', 'bestaudio[ext=m4a]/bestaudio', '--no-playlist', '--newline', ...retry, '-o', tmpl, url];
+    const ffmpegDir = fs.existsSync(path.join(bundledBinDir(), ffmpegName)) ? bundledBinDir() : '';
+    const args = ytDlpDownloadArgs(url, kind, quality, tmpl, ffmpegDir);
 
     const child = spawn(resolveYtDlpPath(), args, { windowsHide: true, env: spawnEnv() });
     let stderr = '';
@@ -1100,6 +1148,24 @@ function downloadMedia(url, kind, quality) {
   });
 }
 
+async function downloadMediaWithRecovery(url, kind, quality) {
+  try {
+    return await downloadMedia(url, kind, quality);
+  } catch (error) {
+    if (!isYtDlpForbiddenError(error)) throw error;
+    sendProgress(kind, 0, 'update');
+    const updateResult = await autoUpdateYtDlp();
+    if (!updateResult || !updateResult.updated) throw ytDlpForbiddenMessage(error, updateResult);
+    sendProgress(kind, 0, 'retry');
+    try {
+      return await downloadMedia(url, kind, quality);
+    } catch (retryError) {
+      if (isYtDlpForbiddenError(retryError)) throw ytDlpForbiddenMessage(retryError, updateResult, true);
+      throw retryError;
+    }
+  }
+}
+
 async function ensureMedia(url, kind, quality) {
   ({ url, kind, quality } = normalizeMediaRequest(url, kind, quality));
   await fsp.mkdir(CACHE_DIR(), { recursive: true });
@@ -1111,7 +1177,10 @@ async function ensureMedia(url, kind, quality) {
     return out;
   }
   cleanIncompleteFilesForKey(key);
-  const p = downloadMedia(url, kind, quality).finally(() => inflight.delete(key));
+  const p = (async () => {
+    await waitForPendingYtDlpUpdate();
+    return downloadMediaWithRecovery(url, kind, quality);
+  })().finally(() => inflight.delete(key));
   inflight.set(key, p);
   return p;
 }
