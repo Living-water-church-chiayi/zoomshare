@@ -99,6 +99,13 @@ async function run() {
     })()`);
   }
 
+  function expectedHostScale(measurement) {
+    return Math.min(
+      1,
+      Math.max(0.76, Math.min(measurement.viewportWidth / 460, measurement.viewportHeight / 760))
+    );
+  }
+
   const initial = await measureConsole();
   assert.equal(initial.setupHidden, true);
   assert.equal(initial.consoleVisible, true);
@@ -111,7 +118,7 @@ async function run() {
   assert.equal(initial.peakOnline, '本次會議最高 4 人在線');
   assert.equal(initial.assignmentColumns, 2);
   assert.equal(initial.eligibleColumns, 3);
-  assert.equal(initial.hostScale, 1);
+  assert.ok(Math.abs(initial.hostScale - expectedHostScale(initial)) < 0.01, 'baseline host scale must follow the actual viewport size');
   assert.ok(initial.bodyScrollWidth <= initial.bodyClientWidth, 'host console overflows horizontally');
 
   window.setContentSize(340, 460);
