@@ -1034,6 +1034,7 @@ function mediaProgressLabel(kind, percent, phase, action = '下載') {
     download: `${action}中`,
     update: '更新下載工具中',
     retry: '重新嘗試中',
+    fallback720: '改用 720p 下載中',
     merge: '合併檔案中'
   };
   return `${label}${phaseLabels[phase] || `${action}中`}...`;

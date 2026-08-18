@@ -1988,7 +1988,7 @@ test('keeps video quality variants in separate cache entries', () => {
   assert.equal(cacheKey(url, 'audio', 720), cacheKey(url, 'audio', 1080));
 });
 
-test('builds yt-dlp download args to avoid stale and forbidden YouTube formats', () => {
+test('builds yt-dlp download args with YouTube client fallback and bounded sockets', () => {
   const { ytDlpDownloadArgs, isYtDlpForbiddenError, ytDlpForbiddenMessage, ytDlpProgressPhase } = loadFunctions(
     mainSource,
     ['ytDlpDownloadArgs', 'isYtDlpForbiddenError', 'ytDlpForbiddenMessage', 'ytDlpProgressPhase']
@@ -1996,7 +1996,8 @@ test('builds yt-dlp download args to avoid stale and forbidden YouTube formats',
   const videoArgs = ytDlpDownloadArgs('https://youtu.be/abc', 'video', 720, '/tmp/video.%(ext)s', '/tmp/bin');
 
   assert.ok(videoArgs.includes('--no-cache-dir'));
-  assert.ok(videoArgs.includes('--check-formats'));
+  assert.equal(videoArgs.includes('--check-formats'), false);
+  assert.equal(videoArgs[videoArgs.indexOf('--socket-timeout') + 1], '20');
   assert.ok(videoArgs.includes('--force-ipv4'));
   assert.equal(videoArgs[videoArgs.indexOf('--extractor-args') + 1], 'youtube:player_client=web_embedded,default');
   assert.ok(videoArgs.includes('--retry-sleep'));
@@ -2006,7 +2007,8 @@ test('builds yt-dlp download args to avoid stale and forbidden YouTube formats',
 
   const audioArgs = ytDlpDownloadArgs('https://youtu.be/abc', 'audio', 1080, '/tmp/audio.%(ext)s', '');
   assert.ok(audioArgs.includes('--no-cache-dir'));
-  assert.ok(audioArgs.includes('--check-formats'));
+  assert.equal(audioArgs.includes('--check-formats'), false);
+  assert.equal(audioArgs[audioArgs.indexOf('--socket-timeout') + 1], '20');
   assert.ok(audioArgs.includes('--force-ipv4'));
   assert.equal(audioArgs[audioArgs.indexOf('--extractor-args') + 1], 'youtube:player_client=web_embedded,default');
   assert.equal(audioArgs.includes('--ffmpeg-location'), false);
@@ -2036,8 +2038,36 @@ test('formats media progress phases before yt-dlp reports percentages', () => {
   assert.equal(mediaProgressLabel('video', 0, 'extract', '載入'), '敬拜影片解析連結中...');
   assert.equal(mediaProgressLabel('video', 0, 'check'), '敬拜影片檢查格式中...');
   assert.equal(mediaProgressLabel('audio', 0, 'update'), '背景音樂更新下載工具中...');
+  assert.equal(mediaProgressLabel('video', 0, 'fallback720'), '敬拜影片改用 720p 下載中...');
   assert.equal(mediaProgressLabel('video', 49.6, 'download', '載入'), '敬拜影片載入中 50%');
   assert.equal(mediaProgressLabel('video', 99, 'merge'), '敬拜影片合併檔案中...');
+});
+
+test('falls back from high-resolution worship video downloads to 720p', async () => {
+  const calls = [];
+  const functions = loadFunctions(
+    mainSource,
+    ['isYtDlpForbiddenError', 'ytDlpForbiddenMessage', 'downloadMediaWithRecovery'],
+    {
+      VIDEO_FALLBACK_QUALITY: 720,
+      downloadMedia: async (url, kind, quality, downloadQuality = quality) => {
+        calls.push({ url, kind, quality, downloadQuality });
+        if (downloadQuality === 1080) throw new Error('unable to download video data: HTTP Error 403: Forbidden');
+        return `/cache/${kind}-q${quality}-downloaded-q${downloadQuality}.mp4`;
+      },
+      sendProgress() {},
+      autoUpdateYtDlp: async () => ({ updated: false, current: '2026.07.04' })
+    }
+  );
+
+  assert.equal(
+    await functions.downloadMediaWithRecovery('https://youtu.be/abc', 'video', 1080),
+    '/cache/video-q1080-downloaded-q720.mp4'
+  );
+  assert.deepEqual(plain(calls), [
+    { url: 'https://youtu.be/abc', kind: 'video', quality: 1080, downloadQuality: 1080 },
+    { url: 'https://youtu.be/abc', kind: 'video', quality: 1080, downloadQuality: 720 }
+  ]);
 });
 
 test('builds the announcement from the renderer implementation and current config', () => {

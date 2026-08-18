@@ -47,6 +47,7 @@ const HTTP_MAX_TEXT_BYTES = 8 * 1024 * 1024;
 const HTTP_MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024;
 const YOUTUBE_OEMBED_TIMEOUT_MS = 5_000;
 const YOUTUBE_METADATA_TIMEOUT_MS = 15_000;
+const VIDEO_FALLBACK_QUALITY = 720;
 
 const DEFAULT_CONFIG = {
   title1: '靈修班即將開始',
@@ -1036,7 +1037,7 @@ function ytDlpDownloadArgs(url, kind, quality, outputTemplate, ffmpegDir) {
     '--no-cache-dir',
     '--no-playlist',
     '--newline',
-    '--check-formats',
+    '--socket-timeout', '20',
     '--force-ipv4',
     '--extractor-args', 'youtube:player_client=web_embedded,default',
     ...retry
@@ -1110,15 +1111,16 @@ function ytDlpProgressPhase(output) {
   return '';
 }
 
-function downloadMedia(url, kind, quality) {
+function downloadMedia(url, kind, quality, downloadQuality = quality) {
   return new Promise((resolve, reject) => {
     const key = cacheKey(url, kind, quality);
     const tmpl = path.join(CACHE_DIR(), `${key}.%(ext)s`);
     const ffmpegName = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
     const ffmpegDir = fs.existsSync(path.join(bundledBinDir(), ffmpegName)) ? bundledBinDir() : '';
-    const args = ytDlpDownloadArgs(url, kind, quality, tmpl, ffmpegDir);
+    const args = ytDlpDownloadArgs(url, kind, downloadQuality, tmpl, ffmpegDir);
 
-    sendProgress(kind, 0, 'prepare');
+    const usingFallbackQuality = kind === 'video' && downloadQuality !== quality;
+    sendProgress(kind, 0, usingFallbackQuality ? 'fallback720' : 'prepare');
     const child = spawn(resolveYtDlpPath(), args, { windowsHide: true, env: spawnEnv() });
     let stderr = '';
     let destCount = 0;
@@ -1165,13 +1167,22 @@ async function downloadMediaWithRecovery(url, kind, quality) {
   try {
     return await downloadMedia(url, kind, quality);
   } catch (error) {
+    if (kind === 'video' && Number(quality) > VIDEO_FALLBACK_QUALITY) {
+      try {
+        return await downloadMedia(url, kind, quality, VIDEO_FALLBACK_QUALITY);
+      } catch (fallbackError) {
+        if (!isYtDlpForbiddenError(error) && !isYtDlpForbiddenError(fallbackError)) throw fallbackError;
+        error = fallbackError;
+      }
+    }
     if (!isYtDlpForbiddenError(error)) throw error;
     sendProgress(kind, 0, 'update');
     const updateResult = await autoUpdateYtDlp();
     if (!updateResult || !updateResult.updated) throw ytDlpForbiddenMessage(error, updateResult);
     sendProgress(kind, 0, 'retry');
     try {
-      return await downloadMedia(url, kind, quality);
+      const retryQuality = kind === 'video' && Number(quality) > VIDEO_FALLBACK_QUALITY ? VIDEO_FALLBACK_QUALITY : quality;
+      return await downloadMedia(url, kind, quality, retryQuality);
     } catch (retryError) {
       if (isYtDlpForbiddenError(retryError)) throw ytDlpForbiddenMessage(retryError, updateResult, true);
       throw retryError;
