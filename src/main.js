@@ -1099,6 +1099,17 @@ function sendProgress(kind, percent, phase) {
     mainWindow.webContents.send('media:progress', { kind, percent, phase });
 }
 
+function ytDlpProgressPhase(output) {
+  const text = String(output || '');
+  if (/\[Merger\]|\[ExtractAudio\]/.test(text)) return 'merge';
+  if (/\[download\]\s+Destination:|\[info\].*Downloading\s+\d+\s+format\(s\)/.test(text)) return 'download';
+  if (/\[info\]\s+Testing format|Checking format/i.test(text)) return 'check';
+  if (/\[youtube\].*(Extracting URL|Downloading webpage|Downloading .*client config|Downloading player|player API JSON|Solving JS challenges)/i.test(text)) {
+    return 'extract';
+  }
+  return '';
+}
+
 function downloadMedia(url, kind, quality) {
   return new Promise((resolve, reject) => {
     const key = cacheKey(url, kind, quality);
@@ -1107,12 +1118,15 @@ function downloadMedia(url, kind, quality) {
     const ffmpegDir = fs.existsSync(path.join(bundledBinDir(), ffmpegName)) ? bundledBinDir() : '';
     const args = ytDlpDownloadArgs(url, kind, quality, tmpl, ffmpegDir);
 
+    sendProgress(kind, 0, 'prepare');
     const child = spawn(resolveYtDlpPath(), args, { windowsHide: true, env: spawnEnv() });
     let stderr = '';
     let destCount = 0;
     let settled = false;
     const onLine = (buf) => {
       const text = String(buf).replace(/\x1B\[[0-9;]*[A-Za-z]/g, ''); // 移除 ANSI 色碼。
+      const phase = ytDlpProgressPhase(text);
+      if (phase) sendProgress(kind, phase === 'merge' ? 99 : 0, phase);
       const dests = text.match(/\[download\]\s+Destination:/g);
       if (dests) destCount += dests.length;
       const pcts = text.match(/\[download\]\s+([\d.]+)%/g);
@@ -1124,10 +1138,9 @@ function downloadMedia(url, kind, quality) {
             const phase = Math.min(Math.max(destCount, 1), 2);
             pct = (phase - 1) * 50 + pct / 2;
           }
-          if (!isNaN(pct)) sendProgress(kind, pct);
+          if (!isNaN(pct)) sendProgress(kind, pct, 'download');
         }
       }
-      if (/\[Merger\]|\[ExtractAudio\]/.test(text)) sendProgress(kind, 99);
     };
     child.stdout.on('data', onLine);
     child.stderr.on('data', (d) => { stderr = (stderr + String(d)).slice(-64 * 1024); onLine(d); });

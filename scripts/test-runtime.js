@@ -1989,9 +1989,9 @@ test('keeps video quality variants in separate cache entries', () => {
 });
 
 test('builds yt-dlp download args to avoid stale and forbidden YouTube formats', () => {
-  const { ytDlpDownloadArgs, isYtDlpForbiddenError, ytDlpForbiddenMessage } = loadFunctions(
+  const { ytDlpDownloadArgs, isYtDlpForbiddenError, ytDlpForbiddenMessage, ytDlpProgressPhase } = loadFunctions(
     mainSource,
-    ['ytDlpDownloadArgs', 'isYtDlpForbiddenError', 'ytDlpForbiddenMessage']
+    ['ytDlpDownloadArgs', 'isYtDlpForbiddenError', 'ytDlpForbiddenMessage', 'ytDlpProgressPhase']
   );
   const videoArgs = ytDlpDownloadArgs('https://youtu.be/abc', 'video', 720, '/tmp/video.%(ext)s', '/tmp/bin');
 
@@ -2022,6 +2022,22 @@ test('builds yt-dlp download args to avoid stale and forbidden YouTube formats',
     ytDlpForbiddenMessage(new Error('HTTP Error 403: Forbidden'), { updated: true, to: '2026.08.18' }).message,
     /已自動更新 yt-dlp 至 2026\.08\.18/
   );
+  assert.equal(ytDlpProgressPhase('[youtube] abc: Downloading webpage'), 'extract');
+  assert.equal(ytDlpProgressPhase('[youtube] [jsc:deno] Solving JS challenges using deno'), 'extract');
+  assert.equal(ytDlpProgressPhase('[info] Testing format 399'), 'check');
+  assert.equal(ytDlpProgressPhase('[info] abc: Downloading 1 format(s): 399+251'), 'download');
+  assert.equal(ytDlpProgressPhase('[Merger] Merging formats into "test.mp4"'), 'merge');
+});
+
+test('formats media progress phases before yt-dlp reports percentages', () => {
+  const { mediaProgressLabel } = loadFunctions(rendererSource, ['mediaProgressLabel']);
+
+  assert.equal(mediaProgressLabel('video', 0, 'prepare'), '敬拜影片準備中...');
+  assert.equal(mediaProgressLabel('video', 0, 'extract', '載入'), '敬拜影片解析連結中...');
+  assert.equal(mediaProgressLabel('video', 0, 'check'), '敬拜影片檢查格式中...');
+  assert.equal(mediaProgressLabel('audio', 0, 'update'), '背景音樂更新下載工具中...');
+  assert.equal(mediaProgressLabel('video', 49.6, 'download', '載入'), '敬拜影片載入中 50%');
+  assert.equal(mediaProgressLabel('video', 99, 'merge'), '敬拜影片合併檔案中...');
 });
 
 test('builds the announcement from the renderer implementation and current config', () => {

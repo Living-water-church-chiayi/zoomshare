@@ -1022,6 +1022,23 @@ function onSettingsChanged() {
 function showBadge(text) { const b = $('dlBadge'); b.textContent = text; b.classList.remove('hidden'); }
 function hideBadge() { $('dlBadge').classList.add('hidden'); }
 
+function mediaProgressLabel(kind, percent, phase, action = '下載') {
+  const label = kind === 'video' ? '敬拜影片' : '背景音樂';
+  const value = Number(percent);
+  if (phase === 'merge' && (!Number.isFinite(value) || value < 100)) return `${label}合併檔案中...`;
+  if (Number.isFinite(value) && value > 0) return `${label}${action}中 ${Math.round(value)}%`;
+  const phaseLabels = {
+    prepare: '準備中',
+    extract: '解析連結中',
+    check: '檢查格式中',
+    download: `${action}中`,
+    update: '更新下載工具中',
+    retry: '重新嘗試中',
+    merge: '合併檔案中'
+  };
+  return `${label}${phaseLabels[phase] || `${action}中`}...`;
+}
+
 // 在背景預先下載媒體，減少正式播放時的等待。
 async function prefetch(kind) {
   const label = kind === 'video' ? '敬拜影片' : '背景音樂';
@@ -1029,7 +1046,7 @@ async function prefetch(kind) {
   if (!url) return;
   const s = await window.api.mediaStatus(url, kind, cfg.videoQuality);
   if (s.cached) return;
-  showBadge(label + '下載中...');
+  showBadge(mediaProgressLabel(kind, 0, 'prepare'));
   const r = await window.api.ensureMedia(url, kind, cfg.videoQuality);
   hideBadge();
   if (!r.ok) {
@@ -3622,13 +3639,11 @@ async function init() {
   });
 
   // 媒體下載進度。
-  window.api.onMediaProgress(({ kind, percent }) => {
-    const label = kind === 'video' ? '敬拜影片' : '背景音樂';
-    const txt = `${label}下載中 ${percent.toFixed(0)}%`;
-    showBadge(txt);
+  window.api.onMediaProgress(({ kind, percent, phase }) => {
+    showBadge(mediaProgressLabel(kind, percent, phase));
     if (kind === 'video' && !$('worshipLayer').classList.contains('hidden'))
-      $('worshipLoading').textContent = `敬拜影片載入中 ${percent.toFixed(0)}%`;
-    if (percent >= 100) setTimeout(hideBadge, 800);
+      $('worshipLoading').textContent = mediaProgressLabel(kind, percent, phase, '載入');
+    if (Number(percent) >= 100) setTimeout(hideBadge, 800);
   });
 
   setupDragDrop();
