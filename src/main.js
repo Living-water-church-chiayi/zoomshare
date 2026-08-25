@@ -542,9 +542,25 @@ const BIBLE_GATEWAY_BOOKS = {
   希伯來書: 'Hebrews', 雅各書: 'James', 彼得前書: '1 Peter', 彼得後書: '2 Peter',
   約翰一書: '1 John', 約翰二書: '2 John', 約翰三書: '3 John', 猶大書: 'Jude', 啟示錄: 'Revelation'
 };
-function todayChineseDate() {
-  const now = new Date();
-  return `${now.getMonth() + 1}月${now.getDate()}日`;
+function datePartsInAppTimeZone(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Taipei',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric'
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, Number.parseInt(part.value, 10)]));
+  return { year: values.year, month: values.month, day: values.day };
+}
+
+function appDateKey(date = new Date()) {
+  const { year, month, day } = datePartsInAppTimeZone(date);
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function todayChineseDate(date = new Date()) {
+  const { month, day } = datePartsInAppTimeZone(date);
+  return `${month}月${day}日`;
 }
 
 function parseUtmostHtml(html, source) {
@@ -599,8 +615,9 @@ function parseUtmostHtml(html, source) {
 async function fetchUtmostToday() {
   const base = 'https://traditional-utmost.org/';
   const stamp = Date.now();
+  const today = todayChineseDate();
   const urls = [
-    `${base}?today=${encodeURIComponent(todayChineseDate())}&t=${stamp}`,
+    `${base}?today=${encodeURIComponent(today)}&t=${stamp}`,
     `${base}?t=${stamp}`,
     base
   ];
@@ -609,11 +626,18 @@ async function fetchUtmostToday() {
   for (const url of urls) {
     try {
       const parsed = parseUtmostHtml(await httpGetText(url), base);
-      if (parsed.ok && parsed.date === todayChineseDate()) return parsed;
+      if (parsed.ok && parsed.date === today) return parsed;
       if (!best || (parsed.body || '').length > (best.body || '').length) best = parsed;
     } catch (error) {
       lastError = error;
     }
+  }
+  if (best && best.ok && best.date && best.date !== today) {
+    return {
+      ...best,
+      ok: false,
+      error: `竭誠獻上網站仍回傳 ${best.date}，尚未更新到 ${today}`
+    };
   }
   return best || {
     ok: false, date: '', title: '', reading: '', verse: '', body: '', source: base,
@@ -654,15 +678,16 @@ function sheetCsvUrl(url) {
   return `https://docs.google.com/spreadsheets/d/${m[1]}/export?format=csv&gid=${g ? g[1] : '0'}`;
 }
 // 讀取試算表並找出今天的列，回傳書卷與起訖章節。
-async function fetchScheduleToday(url) {
+async function fetchScheduleToday(url, now = new Date()) {
   const csvUrl = sheetCsvUrl(url);
   if (!csvUrl) return { ok: false, error: '無法解析試算表連結' };
   let text;
   try { text = await httpGetText(csvUrl); } catch (e) { return { ok: false, error: e.message }; }
-  const now = new Date();
-  const ty = now.getFullYear();
-  const tm = now.getMonth() + 1;
-  const td = now.getDate();
+  const today = datePartsInAppTimeZone(now);
+  const ty = today.year;
+  const tm = today.month;
+  const td = today.day;
+  const date = appDateKey(now);
   const mkRow = (c) => ({ book: c[1], startCh: cnToNum(c[2]), startV: cnToNum(c[3]), endCh: cnToNum(c[4]), endV: cnToNum(c[5]) });
   let exact = null;
   let loose = null;
@@ -685,7 +710,7 @@ async function fetchScheduleToday(url) {
     }
   }
   const row = exact || loose;
-  return row ? { ok: true, found: true, row } : { ok: true, found: false };
+  return row ? { ok: true, found: true, row, date } : { ok: true, found: false, date };
 }
 function sizeLimitTransform(maxBytes) {
   let total = 0;
@@ -2211,12 +2236,22 @@ function registerIpc() {
     try { return { ok: true, url: await openApprovedExternal(url) }; }
     catch (e) { return { ok: false, error: e.message }; }
   });
-  trustedHandle('schedule:today', async (url) => {
-    const managed = await presenceManager.scheduleToday().catch(() => null);
+  trustedHandle('schedule:today', async (url, options) => {
+    const forceRefresh = !!(options && options.forceRefresh === true);
+    let local = null;
+    let managed = null;
+    if (forceRefresh) await presenceManager.clearScheduleCache().catch(() => {});
+    try { local = await fetchScheduleToday(normalizeScheduleUrl(url)); }
+    catch (e) { local = { ok: false, error: e.message }; }
+    if (local && local.ok && local.found) return local;
+    try { managed = await presenceManager.scheduleToday({ forceRefresh }); }
+    catch {}
+    if (managed && managed.ok && managed.found) return managed;
+    if (local && local.ok) return local;
     if (managed && managed.ok) return managed;
-    try { return await fetchScheduleToday(normalizeScheduleUrl(url)); }
-    catch (e) { return { ok: false, error: e.message }; }
+    return local || { ok: false, error: '今日經文排程暫時讀取失敗' };
   });
+  trustedHandle('schedule:clear-expired', () => presenceManager.clearExpiredScheduleCache());
   trustedHandle('utmost:today', async () => {
     try { return await fetchUtmostToday(); }
     catch (e) { return { ok: false, error: e.message }; }

@@ -19,10 +19,14 @@ let flowPageScales = [];
 let flowPageIndex = 0;
 let flowLoading = false;
 let cachedUtmost = null;
+let cachedUtmostDateKey = '';
 let cachedBible = null;
 let cachedBibleKey = '';
 let scriptureRequest = null;
 let scriptureRequestToken = 0;
+let lastDailyRefreshDateKey = '';
+let lastDailyRefreshOkDateKey = '';
+let dailyRefreshInFlight = null;
 let flowNavigationToken = 0;
 let flowPageRenderToken = 0;
 let flowTransitioning = false;
@@ -133,14 +137,43 @@ function stopNativeMusic() {
   sendNativeAudio('music', 'stop');
 }
 
-function systemDateMD() {
-  const d = new Date();
-  return `${d.getMonth() + 1}/${d.getDate()}`;
+function appDateParts(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Taipei',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    hour12: false
+  }).formatToParts(now);
+  const values = Object.fromEntries(parts.map((part) => [part.type, Number.parseInt(part.value, 10)]));
+  return {
+    year: values.year,
+    month: values.month,
+    day: values.day,
+    hour: values.hour,
+    minute: values.minute
+  };
 }
 
-function systemDateChinese() {
-  const d = new Date();
-  return `${d.getMonth() + 1}月${d.getDate()}日`;
+function appDateKey(now = new Date()) {
+  const { year, month, day } = appDateParts(now);
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function appWeekday(year, month, day) {
+  return CN_WEEKDAYS[new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
+}
+
+function systemDateMD(now = new Date()) {
+  const { month, day } = appDateParts(now);
+  return `${month}/${day}`;
+}
+
+function systemDateChinese(now = new Date()) {
+  const { month, day } = appDateParts(now);
+  return `${month}月${day}日`;
 }
 
 // 把 Zoom 會議網頁連結轉成 zoommtg://，直接交給 Zoom App。
@@ -338,11 +371,11 @@ function applyScheduleRow(row) {
   window.api.setConfig(cfg);
   return true;
 }
-async function applySchedule(manual) {
+async function applySchedule(manual, forceRefresh = false) {
   if (!cfg.scheduleUrl) { if (manual) toast('請先設定排程網址'); return false; }
   const st = $('scheduleStatus');
   if (st) st.textContent = '讀取今日排程中...';
-  const r = await window.api.scheduleToday(cfg.scheduleUrl);
+  const r = await window.api.scheduleToday(cfg.scheduleUrl, { forceRefresh });
   if (!r.ok) { const m = '讀取失敗：' + (r.error || ''); if (st) st.textContent = m; if (manual) toast(m, 4000); return false; }
   if (!r.found) { const m = '找不到 ' + systemDateMD() + ' 的排程'; if (st) st.textContent = m; if (manual) toast(m, 3500); return false; }
   if (applyScheduleRow(r.row)) {
@@ -373,17 +406,19 @@ function parseZoomUrl(url) {
 }
 
 function todayCNDate(now = new Date()) {
-  let d = now;
+  let date = appDateParts(now);
   if (cfg && cfg.dateAuto === false) {
     const manual = String(cfg.dateManual || '').match(/^(\d{1,2})\/(\d{1,2})$/);
     if (manual) {
-      const candidate = new Date(now.getFullYear(), Number(manual[1]) - 1, Number(manual[2]));
-      if (candidate.getMonth() === Number(manual[1]) - 1 && candidate.getDate() === Number(manual[2])) {
-        d = candidate;
+      const month = Number(manual[1]);
+      const day = Number(manual[2]);
+      const candidate = new Date(Date.UTC(date.year, month - 1, day));
+      if (candidate.getUTCMonth() === month - 1 && candidate.getUTCDate() === day) {
+        date = { ...date, month, day };
       }
     }
   }
-  return (d.getMonth() + 1) + '月' + d.getDate() + '日' + CN_WEEKDAYS[d.getDay()];
+  return date.month + '月' + date.day + '日' + appWeekday(date.year, date.month, date.day);
 }
 
 function chineseChapterNumber(value) {
@@ -670,15 +705,15 @@ async function copyAnnounce() {
 // ---------- 設定資料 ----------
 function parseManualDate(value) {
   const m = String(value || '').match(/^(\d{1,2})\/(\d{1,2})$/);
-  const now = new Date();
+  const now = appDateParts();
   return {
-    month: clampNum(m ? m[1] : now.getMonth() + 1, 1, 12),
-    day: clampNum(m ? m[2] : now.getDate(), 1, 31)
+    month: clampNum(m ? m[1] : now.month, 1, 12),
+    day: clampNum(m ? m[2] : now.day, 1, 31)
   };
 }
 
 function daysInMonth(month) {
-  return new Date(new Date().getFullYear(), month, 0).getDate();
+  return new Date(Date.UTC(appDateParts().year, month, 0)).getUTCDate();
 }
 
 function fillDateSelects() {
@@ -688,7 +723,7 @@ function fillDateSelects() {
 }
 
 function syncDateDayOptions(day) {
-  const month = +$('dateMonth').value || (new Date().getMonth() + 1);
+  const month = +$('dateMonth').value || appDateParts().month;
   fillNumberSelect($('dateDay'), daysInMonth(month), clampNum(day, 1, daysInMonth(month)));
 }
 
@@ -2082,6 +2117,11 @@ function invalidateScriptureData() {
   scriptureRequestToken++;
 }
 
+function invalidateUtmostData() {
+  cachedUtmost = null;
+  cachedUtmostDateKey = '';
+}
+
 async function ensureScriptureData() {
   const ref = currentRefPayload();
   const key = scriptureRefKey(ref);
@@ -2112,44 +2152,65 @@ async function ensureScriptureData() {
 }
 
 async function ensureUtmostData() {
-  if (cachedUtmost) return cachedUtmost;
+  const dateKey = appDateKey();
+  if (cachedUtmost && cachedUtmostDateKey === dateKey) return cachedUtmost;
+  invalidateUtmostData();
   let result;
   try { result = await window.api.utmostToday(); }
   catch (e) { result = { ok: false, error: e.message }; }
   cachedUtmost = result && result.ok ? result : {
     ok: false,
-    date: systemDateMD(),
+    date: systemDateChinese(),
     title: '竭誠獻上',
     verse: '',
     body: '目前無法抓取竭誠獻上，請稍後再試。\n\n' + ((result && result.error) || '')
   };
+  cachedUtmostDateKey = dateKey;
   return cachedUtmost;
 }
 
-async function refreshDailyReadingData() {
-  invalidateScriptureData();
-  cachedUtmost = null;
-  let scheduleOk = true;
-  if (cfg.scheduleEnabled && cfg.scheduleUrl) scheduleOk = await applySchedule(false);
-  const results = await Promise.allSettled([ensureScriptureData(), ensureUtmostData()]);
-  return scheduleOk && results.every((result) => result.status === 'fulfilled' && result.value && result.value.ok);
+async function refreshDailyReadingData(options = {}) {
+  const forceRefresh = options && options.forceRefresh === true;
+  if (dailyRefreshInFlight) {
+    if (!forceRefresh) return dailyRefreshInFlight;
+    await dailyRefreshInFlight.catch(() => {});
+  }
+  dailyRefreshInFlight = (async () => {
+    const dateKey = appDateKey();
+    invalidateScriptureData();
+    invalidateUtmostData();
+    let scheduleOk = true;
+    if (cfg.scheduleEnabled && cfg.scheduleUrl) scheduleOk = await applySchedule(false, forceRefresh);
+    const results = await Promise.allSettled([ensureScriptureData(), ensureUtmostData()]);
+    const ok = scheduleOk && results.every((result) => result.status === 'fulfilled' && result.value && result.value.ok);
+    lastDailyRefreshDateKey = dateKey;
+    if (ok) lastDailyRefreshOkDateKey = dateKey;
+    return ok;
+  })();
+  try { return await dailyRefreshInFlight; }
+  finally { dailyRefreshInFlight = null; }
+}
+
+function needsDailyReadingRefresh(now = new Date()) {
+  const dateKey = appDateKey(now);
+  if (dateKey !== lastDailyRefreshDateKey) return true;
+  const parts = appDateParts(now);
+  return parts.hour >= 8 && lastDailyRefreshOkDateKey !== dateKey;
+}
+
+function refreshDailyReadingDataIfNeeded() {
+  if (!cfg || !needsDailyReadingRefresh()) return Promise.resolve(false);
+  return refreshDailyReadingData();
 }
 
 function scheduleDailyReadingRefresh() {
-  const scheduleNext = () => {
-    const now = new Date();
-    const next = new Date(now);
-    next.setHours(8, 0, 0, 0);
-    if (next <= now) next.setDate(next.getDate() + 1);
-    setTimeout(async () => {
-      try {
-        await refreshDailyReadingData();
-      } finally {
-        scheduleNext();
-      }
-    }, next.getTime() - now.getTime());
-  };
-  scheduleNext();
+  setInterval(() => refreshDailyReadingDataIfNeeded().catch(() => {}), 60000);
+}
+
+async function handleDailyReadingLifecycleWake() {
+  if (cfg && cfg.dateAuto) $('dateText').textContent = systemDateMD();
+  try { await window.api.clearExpiredScheduleCache(); } catch {}
+  refreshDailyReadingDataIfNeeded().catch(() => {});
 }
 
 async function showScriptureFlow(navigationToken, options) {
@@ -3587,7 +3648,7 @@ async function init() {
     prepareWorshipTitleDraft($('inWorshipTitle'), $('inWorshipUrl').value);
   });
   $('btnScheduleNow').addEventListener('click', async () => {
-    const ok = await refreshDailyReadingData();
+    const ok = await refreshDailyReadingData({ forceRefresh: true });
     toast(ok ? '經文與竭誠獻上已更新' : '更新失敗，請稍後再試', ok ? 2600 : 3600);
   });
   $('btnZoom').addEventListener('click', () => {
@@ -3680,8 +3741,11 @@ async function init() {
   window.addEventListener('keydown', handleFlowArrowNavigation);
   window.addEventListener('keydown', handleEscapeNavigation);
   window.addEventListener('focus', handleWorshipPlaybackLifecycleWake);
+  window.addEventListener('focus', handleDailyReadingLifecycleWake);
   window.addEventListener('pageshow', handleWorshipPlaybackLifecycleWake);
+  window.addEventListener('pageshow', handleDailyReadingLifecycleWake);
   document.addEventListener('visibilitychange', handleWorshipPlaybackLifecycleWake);
+  document.addEventListener('visibilitychange', handleDailyReadingLifecycleWake);
 
   // 空白鍵切換目前可見媒體的播放狀態。
   window.addEventListener('keydown', handleSpacePlaybackToggle);

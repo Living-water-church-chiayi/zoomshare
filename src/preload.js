@@ -36,7 +36,8 @@ contextBridge.exposeInMainWorld('api', {
 
   openExternal: (url) => ipcRenderer.invoke('open:external', url),
   openHostConsole: () => ipcRenderer.invoke('host:open'),
-  scheduleToday: (url) => ipcRenderer.invoke('schedule:today', url),
+  scheduleToday: (url, options) => ipcRenderer.invoke('schedule:today', url, options),
+  clearExpiredScheduleCache: () => ipcRenderer.invoke('schedule:clear-expired'),
   utmostToday: () => ipcRenderer.invoke('utmost:today'),
   biblePassage: (ref) => ipcRenderer.invoke('bible:passage', ref),
   setWindowMode: (mode) => ipcRenderer.invoke('win:mode', mode),

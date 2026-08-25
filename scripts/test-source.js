@@ -334,6 +334,13 @@ console.log('OK preload API coverage');
 assert.match(main, /new BrowserWindow\(\{[\s\S]*?title: '靈修班主持台'/, 'host console must use a separate BrowserWindow');
 assert.match(main, /trustedHandle\('presence:pair'/, 'presence pairing IPC is missing');
 assert.match(main, /presenceManager\.scheduleToday/, 'private backend schedule must be preferred');
+assert.match(main, /schedule:clear-expired/, 'expired private schedule cache cannot be cleared');
+assert.match(preload, /scheduleToday: \(url, options\)/, 'schedule refresh options are not exposed to the renderer');
+assert.match(preload, /clearExpiredScheduleCache/, 'schedule cache cleanup is not exposed to the renderer');
+assert.match(renderer, /refreshDailyReadingData\(\{ forceRefresh: true \}\)/, 'manual schedule refresh must bypass cache');
+assert.match(main, /if \(forceRefresh\) await presenceManager\.clearScheduleCache/, 'manual schedule refresh must discard the presence cache first');
+assert.match(renderer, /if \(dailyRefreshInFlight\)[\s\S]*?if \(!forceRefresh\) return dailyRefreshInFlight;[\s\S]*?await dailyRefreshInFlight/, 'manual schedule refresh must wait for and replace an automatic request');
+assert.match(renderer, /handleDailyReadingLifecycleWake[\s\S]*?clearExpiredScheduleCache/, 'window focus must clear an expired schedule cache');
 assert.match(preload, /openHostConsole/, 'main renderer cannot open the private host console');
 console.log('OK private host console wiring');
 

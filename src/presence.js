@@ -9,6 +9,38 @@ const WebSocket = require('ws');
 
 const EMPTY_SNAPSHOT = Object.freeze({ status: 'idle', meetingNumber: '', meetingUuid: '', peakParticipants: 0, participants: [] });
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+const SCHEDULE_CACHE_TTL_MS = 5 * 60 * 1000;
+const APP_TIME_ZONE = 'Asia/Taipei';
+
+function appDateKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: APP_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function createScheduleCacheEntry(value, now = new Date()) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return {
+    ...JSON.parse(JSON.stringify(value)),
+    date: appDateKey(now),
+    cachedAt: now.toISOString()
+  };
+}
+
+function validScheduleCache(value, now = new Date()) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (String(value.date || '') !== appDateKey(now)) return null;
+  const cachedAt = Date.parse(String(value.cachedAt || ''));
+  if (!Number.isFinite(cachedAt)) return null;
+  const age = now.getTime() - cachedAt;
+  if (age < -60_000 || age > SCHEDULE_CACHE_TTL_MS) return null;
+  return JSON.parse(JSON.stringify(value));
+}
 
 function normalizeServiceUrl(value, allowLocalHttp = false) {
   let parsed;
@@ -143,6 +175,7 @@ class PresenceManager extends EventEmitter {
     this.connectedOnce = false;
     this.bootstrapRefreshPromise = null;
     this.bootstrapGeneration = 0;
+    this.scheduleExpiryTimer = null;
     this.stopped = true;
     this.state = {
       configured: false,
@@ -163,6 +196,51 @@ class PresenceManager extends EventEmitter {
 
   devicePath() { return path.join(app.getPath('userData'), 'presence-device.json'); }
   cachePath() { return path.join(app.getPath('userData'), 'presence-cache.json'); }
+
+  cachePayload() {
+    return {
+      roster: this.state.roster,
+      rosterErrors: this.state.rosterErrors,
+      schedule: this.state.schedule,
+      utmostSharing: this.state.utmostSharing,
+      assignmentStats: this.state.assignmentStats,
+      fetchedAt: this.state.fetchedAt
+    };
+  }
+
+  persistCache() {
+    return writePrivateJson(this.cachePath(), this.cachePayload());
+  }
+
+  armScheduleExpiry(schedule = this.state.schedule, now = new Date()) {
+    clearTimeout(this.scheduleExpiryTimer);
+    this.scheduleExpiryTimer = null;
+    const valid = validScheduleCache(schedule, now);
+    if (!valid) return;
+    const remaining = SCHEDULE_CACHE_TTL_MS - (now.getTime() - Date.parse(valid.cachedAt));
+    this.scheduleExpiryTimer = setTimeout(() => {
+      this.clearScheduleCache().catch(() => {});
+    }, Math.max(1, remaining + 50));
+    if (typeof this.scheduleExpiryTimer.unref === 'function') this.scheduleExpiryTimer.unref();
+  }
+
+  async clearScheduleCache() {
+    clearTimeout(this.scheduleExpiryTimer);
+    this.scheduleExpiryTimer = null;
+    if (!this.state.schedule) return false;
+    this.publish({ schedule: null });
+    await this.persistCache().catch(() => {});
+    return true;
+  }
+
+  async clearExpiredScheduleCache(now = new Date()) {
+    if (!this.state.schedule) return false;
+    if (validScheduleCache(this.state.schedule, now)) {
+      this.armScheduleExpiry(this.state.schedule, now);
+      return false;
+    }
+    return this.clearScheduleCache();
+  }
 
   publicState() {
     return JSON.parse(JSON.stringify(this.state));
@@ -192,15 +270,18 @@ class PresenceManager extends EventEmitter {
   async loadCache() {
     try {
       const cache = JSON.parse(await fsp.readFile(this.cachePath(), 'utf8'));
+      const schedule = validScheduleCache(cache.schedule);
       this.publish({
         roster: validRoster(cache.roster),
         rosterErrors: Array.isArray(cache.rosterErrors) ? cache.rosterErrors.map(String).slice(0, 100) : [],
-        schedule: cache.schedule && typeof cache.schedule === 'object' ? cache.schedule : null,
+        schedule,
         utmostSharing: validUtmostSharing(cache.utmostSharing),
         assignmentStats: validAssignmentStats(cache.assignmentStats),
         fetchedAt: String(cache.fetchedAt || ''),
         stale: true
       });
+      this.armScheduleExpiry(schedule);
+      if (cache.schedule && !schedule) await this.persistCache().catch(() => {});
     } catch {}
   }
 
@@ -219,6 +300,8 @@ class PresenceManager extends EventEmitter {
     this.connectedOnce = false;
     this.bootstrapGeneration += 1;
     this.bootstrapRefreshPromise = null;
+    clearTimeout(this.scheduleExpiryTimer);
+    this.scheduleExpiryTimer = null;
     if (this.socket) {
       try { this.socket.close(1000, 'app closing'); } catch {}
       this.socket = null;
@@ -281,7 +364,7 @@ class PresenceManager extends EventEmitter {
 
   applyBootstrap(data) {
     const roster = validRoster(data.roster);
-    const schedule = data.schedule && typeof data.schedule === 'object' ? data.schedule : null;
+    const schedule = createScheduleCacheEntry(data.schedule);
     const rosterErrors = Array.isArray(data.rosterErrors) ? data.rosterErrors.map(String).slice(0, 100) : [];
     const utmostSharing = validUtmostSharing(data.utmostSharing);
     const assignmentStats = validAssignmentStats(data.assignmentStats);
@@ -297,7 +380,8 @@ class PresenceManager extends EventEmitter {
       fetchedAt,
       error: data.error ? String(data.error) : ''
     });
-    writePrivateJson(this.cachePath(), { roster, rosterErrors, schedule, utmostSharing, assignmentStats, fetchedAt }).catch(() => {});
+    this.armScheduleExpiry(schedule);
+    this.persistCache().catch(() => {});
   }
 
   async saveAssignments({ date, scripture, utmost }) {
@@ -315,15 +399,7 @@ class PresenceManager extends EventEmitter {
     if (!response.ok || !data.ok) throw new Error(data.error || `更新閱讀安排失敗（HTTP ${response.status}）`);
     const assignmentStats = validAssignmentStats(data.assignmentStats);
     this.publish({ assignmentStats, error: '' });
-    const cache = {
-      roster: this.state.roster,
-      rosterErrors: this.state.rosterErrors,
-      schedule: this.state.schedule,
-      utmostSharing: this.state.utmostSharing,
-      assignmentStats,
-      fetchedAt: this.state.fetchedAt
-    };
-    writePrivateJson(this.cachePath(), cache).catch(() => {});
+    this.persistCache().catch(() => {});
     return this.publicState();
   }
 
@@ -363,10 +439,20 @@ class PresenceManager extends EventEmitter {
     return tracked;
   }
 
-  async scheduleToday() {
-    if (this.device) await this.refreshBootstrap().catch(() => {});
-    const schedule = this.state.schedule;
-    return schedule && typeof schedule === 'object' ? JSON.parse(JSON.stringify(schedule)) : null;
+  async scheduleToday({ forceRefresh = false } = {}) {
+    await this.clearExpiredScheduleCache();
+    if (forceRefresh) await this.clearScheduleCache();
+    if (this.device) {
+      if (forceRefresh && this.bootstrapRefreshPromise) await this.bootstrapRefreshPromise.catch(() => {});
+      let refreshed = false;
+      try {
+        await this.refreshBootstrap();
+        refreshed = true;
+      } catch {}
+      if (forceRefresh && !refreshed) return null;
+    }
+    await this.clearExpiredScheduleCache();
+    return validScheduleCache(this.state.schedule);
   }
 
   websocketUrl() {
@@ -418,8 +504,12 @@ class PresenceManager extends EventEmitter {
 }
 
 module.exports = {
+  SCHEDULE_CACHE_TTL_MS,
   PresenceManager,
+  appDateKey,
+  createScheduleCacheEntry,
   normalizeServiceUrl,
+  validScheduleCache,
   validRoster,
   validSnapshot,
   validUtmostSharing,

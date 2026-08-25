@@ -86,6 +86,7 @@ function loadFunctions(source, names, globals = {}) {
   const context = vm.createContext({
     URL,
     Date,
+    Intl,
     Number,
     String,
     parseInt,
@@ -2070,6 +2071,49 @@ test('falls back from high-resolution worship video downloads to 720p', async ()
   ]);
 });
 
+test('uses Taipei date for cover labels and announcements', () => {
+  const cfg = { dateAuto: true };
+  const functions = loadFunctions(
+    rendererSource,
+    ['appDateParts', 'appDateKey', 'appWeekday', 'systemDateMD', 'systemDateChinese', 'todayCNDate'],
+    {
+      cfg,
+      CN_WEEKDAYS: ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
+    }
+  );
+  const taipeiMorningWhilePacificYesterday = new Date('2026-08-25T01:00:00.000Z');
+
+  assert.equal(functions.appDateKey(taipeiMorningWhilePacificYesterday), '2026-08-25');
+  assert.equal(functions.systemDateMD(taipeiMorningWhilePacificYesterday), '8/25');
+  assert.equal(functions.systemDateChinese(taipeiMorningWhilePacificYesterday), '8月25日');
+  assert.equal(functions.todayCNDate(taipeiMorningWhilePacificYesterday), '8月25日星期二');
+});
+
+test('looks up Scripture schedule rows by Taipei date', async () => {
+  const functions = loadFunctions(
+    mainSource,
+    ['cnToNum', 'parseCsvLine', 'datePartsInAppTimeZone', 'appDateKey', 'sheetCsvUrl', 'fetchScheduleToday'],
+    {
+      httpGetText: async () => [
+        '08/24,希伯來書,十二,1,十二,29',
+        '08/25,希伯來書,十三,1,十三,25'
+      ].join('\n')
+    }
+  );
+
+  const result = await functions.fetchScheduleToday(
+    'https://docs.google.com/spreadsheets/d/exampleSheetId/edit?gid=0',
+    new Date('2026-08-25T01:00:00.000Z')
+  );
+
+  assert.deepEqual(plain(result), {
+    ok: true,
+    found: true,
+    row: { book: '希伯來書', startCh: 13, startV: 1, endCh: 13, endV: 25 },
+    date: '2026-08-25'
+  });
+});
+
 test('builds the announcement from the renderer implementation and current config', () => {
   const cfg = {
     dateAuto: true,
@@ -2091,6 +2135,8 @@ test('builds the announcement from the renderer implementation and current confi
     rendererSource,
     [
       'parseZoomUrl',
+      'appDateParts',
+      'appWeekday',
       'todayCNDate',
       'chineseChapterNumber',
       'formatScriptureAnnouncementRef',
@@ -2110,7 +2156,7 @@ test('builds the announcement from the renderer implementation and current confi
       ZOOM_PASSCODE_HINT: '我愛耶穌耶穌愛我'
     }
   );
-  const announcement = functions.buildAnnounceText(new Date(2026, 6, 17, 9, 0, 0));
+  const announcement = functions.buildAnnounceText(new Date('2026-07-17T01:00:00.000Z'));
 
   assert.equal(announcement, [
     '親愛的活水家人們，早安，',
@@ -2149,14 +2195,14 @@ test('formats manual announcement dates and Chinese scripture chapter numbers', 
   };
   const functions = loadFunctions(
     rendererSource,
-    ['todayCNDate', 'chineseChapterNumber', 'formatScriptureAnnouncementRef'],
+    ['appDateParts', 'appWeekday', 'todayCNDate', 'chineseChapterNumber', 'formatScriptureAnnouncementRef'],
     {
       cfg,
       CN_WEEKDAYS: ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
     }
   );
 
-  assert.equal(functions.todayCNDate(new Date(2026, 0, 1)), '7月18日星期六');
+  assert.equal(functions.todayCNDate(new Date('2026-01-01T01:00:00.000Z')), '7月18日星期六');
   assert.equal(functions.chineseChapterNumber(10), '十');
   assert.equal(functions.chineseChapterNumber(105), '一百零五');
   assert.equal(functions.chineseChapterNumber(119), '一百一十九');

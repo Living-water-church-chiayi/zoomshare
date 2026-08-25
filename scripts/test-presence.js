@@ -6,8 +6,24 @@ const path = require('path');
 const test = require('node:test');
 const { buildRosterMatcher, deriveRosterPresence, matchRosterMemberIds, normalizeDisplayName } = require('../src/presence-shared');
 const { smartSegmentSizes, scriptureSegments, utmostParagraphSegments } = require('../src/assignment-shared');
+const {
+  SCHEDULE_CACHE_TTL_MS,
+  createScheduleCacheEntry,
+  validScheduleCache
+} = require('../src/presence');
 
 const root = path.join(__dirname, '..');
+
+test('expires presence schedule cache after five minutes or a Taipei date change', () => {
+  const now = new Date('2026-08-25T01:00:00.000Z');
+  const entry = createScheduleCacheEntry({ ok: true, found: false }, now);
+
+  assert.equal(entry.date, '2026-08-25');
+  assert.equal(validScheduleCache(entry, new Date(now.getTime() + SCHEDULE_CACHE_TTL_MS - 1)).found, false);
+  assert.equal(validScheduleCache(entry, new Date(now.getTime() + SCHEDULE_CACHE_TTL_MS + 1)), null);
+  assert.equal(validScheduleCache(entry, new Date('2026-08-26T01:00:00.000Z')), null);
+  assert.equal(validScheduleCache({ ok: true, found: false }, now), null);
+});
 
 test('intelligently divides scripture into readable 3-to-6 verse sections', () => {
   assert.deepEqual(smartSegmentSizes(12), [6, 6]);
