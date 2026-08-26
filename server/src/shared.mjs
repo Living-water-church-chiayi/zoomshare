@@ -165,6 +165,7 @@ export function parseUtmostSharingRows(rows, now = new Date(), timeZone = 'Asia/
 
 export function parseScheduleRows(rows, now = new Date(), timeZone = 'Asia/Taipei') {
   const today = datePartsInTimeZone(now, timeZone);
+  const date = isoDate(today.year, today.month, today.day);
   let exact = null;
   let loose = null;
   for (const row of Array.isArray(rows) ? rows : []) {
@@ -190,7 +191,7 @@ export function parseScheduleRows(rows, now = new Date(), timeZone = 'Asia/Taipe
     else if (year === null && !loose) loose = candidate;
   }
   const row = exact || loose;
-  return row ? { ok: true, found: true, row } : { ok: true, found: false };
+  return row ? { ok: true, found: true, date, row } : { ok: true, found: false, date };
 }
 
 export function eventToMutation(payload, expectedAccountId, expectedMeetingNumber) {

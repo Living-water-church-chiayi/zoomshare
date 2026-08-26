@@ -7,6 +7,9 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 
 const projectRoot = path.join(__dirname, '..');
 app.commandLine.appendSwitch('disable-gpu');
+const today = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit'
+}).format(new Date());
 
 const roster = [
   { memberId: 'reader', name: '王小明', aliases: ['Amy 王'], canReadScripture: true, canReadUtmost: true, enabled: true, order: 1 },
@@ -24,9 +27,9 @@ let state = {
   roster,
   rosterErrors: [],
   schedule: { ok: true, found: true, row: { book: 'Test', startCh: 1, startV: 9, endCh: 1, endV: 21 } },
-  utmostSharing: { found: true, date: '2026-07-20', sharer: '今日分享者', next: null, error: '' },
+  utmostSharing: { found: true, date: today, sharer: '今日分享者', next: null, error: '' },
   assignmentStats: {
-    date: '2026-07-20', weekStart: '2026-07-20', yesterday: '2026-07-19', memberStats: {},
+    date: today, weekStart: today, yesterday: '', memberStats: {},
     currentAssignment: { scripture: [], utmost: [] }
   },
   snapshot: {
@@ -43,15 +46,18 @@ let state = {
   }
 };
 let rosterSheetOpenCount = 0;
+let refreshCount = 0;
+let scriptureCurrentCount = 0;
+let utmostTodayCount = 0;
 
 async function run() {
   ipcMain.handle('presence:state', () => state);
-  ipcMain.handle('presence:refresh', () => state);
+  ipcMain.handle('presence:refresh', () => { refreshCount += 1; return state; });
   ipcMain.handle('presence:unpair', () => state);
   ipcMain.handle('presence:pair', () => state);
   ipcMain.handle('presence:assignments', () => state);
-  ipcMain.handle('host:utmost-today', () => ({ ok: true, body: '第一段\n\n第二段\n\n第三段\n\n第四段' }));
-  ipcMain.handle('host:scripture-current', () => ({ book: '提摩太前書', startCh: 6, startV: 9, endCh: 6, endV: 21 }));
+  ipcMain.handle('host:utmost-today', () => { utmostTodayCount += 1; return { ok: true, body: '第一段\n\n第二段\n\n第三段\n\n第四段' }; });
+  ipcMain.handle('host:scripture-current', () => { scriptureCurrentCount += 1; return { book: '提摩太前書', startCh: 6, startV: 9, endCh: 6, endV: 21 }; });
   ipcMain.handle('host:open-roster-sheet', () => { rosterSheetOpenCount += 1; return { ok: true }; });
   ipcMain.handle('host:close', () => ({ ok: true }));
 
@@ -120,6 +126,41 @@ async function run() {
   assert.equal(initial.eligibleColumns, 3);
   assert.ok(Math.abs(initial.hostScale - expectedHostScale(initial)) < 0.01, 'baseline host scale must follow the actual viewport size');
   assert.ok(initial.bodyScrollWidth <= initial.bodyClientWidth, 'host console overflows horizontally');
+
+  const refreshBaseline = { refreshCount, scriptureCurrentCount, utmostTodayCount };
+  await window.webContents.executeJavaScript(`document.getElementById('refreshButton').click()`);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(refreshCount, refreshBaseline.refreshCount + 1);
+  assert.equal(scriptureCurrentCount, refreshBaseline.scriptureCurrentCount + 1);
+  assert.equal(utmostTodayCount, refreshBaseline.utmostTodayCount + 1);
+
+  state = {
+    ...state,
+    stale: true,
+    error: 'Unauthorized',
+    utmostSharing: {
+      found: false, date: '2026-08-25', sharer: '',
+      next: { date: '2026-08-25', sharer: '不應顯示' }, error: ''
+    }
+  };
+  window.webContents.send('presence:state', state);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const staleDailyData = await window.webContents.executeJavaScript(`(() => ({
+    sharing: document.getElementById('todaySharingName').textContent,
+    next: document.getElementById('todaySharingNext').textContent,
+    notice: document.getElementById('notice').textContent
+  }))()`);
+  assert.equal(staleDailyData.sharing, '排班資料尚未更新');
+  assert.doesNotMatch(staleDailyData.next, /下一次|不應顯示/);
+  assert.doesNotMatch(staleDailyData.notice, /Unauthorized/i);
+  state = {
+    ...state,
+    stale: false,
+    error: '',
+    utmostSharing: { found: true, date: today, sharer: '今日分享者', next: null, error: '' }
+  };
+  window.webContents.send('presence:state', state);
+  await new Promise((resolve) => setTimeout(resolve, 100));
 
   window.setContentSize(340, 460);
   await new Promise((resolve) => setTimeout(resolve, 150));

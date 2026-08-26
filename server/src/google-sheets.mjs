@@ -74,7 +74,12 @@ export function parseCsv(text) {
 
 async function loadUtmostSharing(env, now) {
   const value = String(env.UTMOST_ASSIGNMENT_CSV_URL || '').trim();
-  if (!value) return { found: false, date: '', sharer: '', next: null, error: '尚未設定竭誠獻上排班表' };
+  if (!value) {
+    return {
+      ...parseUtmostSharingRows([], now, env.APP_TIME_ZONE || 'Asia/Taipei'),
+      error: '尚未設定竭誠獻上排班表'
+    };
+  }
   let url;
   try { url = new URL(value); } catch { throw new Error('竭誠獻上排班表網址格式錯誤'); }
   if (url.protocol !== 'https:' || url.hostname !== 'docs.google.com' || !/^\/spreadsheets\/d\/[a-zA-Z0-9_-]+\/export$/.test(url.pathname)) {
@@ -83,6 +88,29 @@ async function loadUtmostSharing(env, now) {
   const response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(15_000) });
   if (!response.ok) throw new Error(`讀取竭誠獻上排班表失敗：HTTP ${response.status}`);
   return parseUtmostSharingRows(parseCsv(await readTextLimited(response)), now, env.APP_TIME_ZONE || 'Asia/Taipei');
+}
+
+async function loadPublicSchedule(env, now) {
+  const sheetId = String(env.GOOGLE_SHEET_ID || '').trim();
+  if (!/^[a-zA-Z0-9_-]+$/.test(sheetId)) throw new Error('Google 試算表 ID 格式不正確');
+  const url = new URL(`https://docs.google.com/spreadsheets/d/${sheetId}/export`);
+  url.searchParams.set('format', 'csv');
+  url.searchParams.set('gid', '0');
+  const response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(15_000) });
+  if (!response.ok) throw new Error(`讀取今日經文排班失敗：HTTP ${response.status}`);
+  return parseScheduleRows(parseCsv(await readTextLimited(response)), now, env.APP_TIME_ZONE || 'Asia/Taipei');
+}
+
+export async function loadDailyBootstrap(env, now = new Date()) {
+  const schedule = await loadPublicSchedule(env, now);
+  const utmostSharing = await loadUtmostSharing(env, now).catch((error) => ({
+    found: false,
+    date: schedule.date || '',
+    sharer: '',
+    next: null,
+    error: error.message
+  }));
+  return { schedule, utmostSharing, dailyFetchedAt: new Date().toISOString() };
 }
 
 function base64Url(bytes) {
@@ -179,17 +207,26 @@ async function serviceAccountRanges(env) {
 
 export async function loadSheetBootstrap(env, now = new Date()) {
   if (!env.GOOGLE_SHEET_ID) throw new Error('Google 試算表 ID 尚未設定');
-  const [ranges, utmostSharing] = await Promise.all([
+  const [rangesResult, dailyResult] = await Promise.allSettled([
     env.GOOGLE_APPS_SCRIPT_URL ? appsScriptRanges(env) : serviceAccountRanges(env),
-    loadUtmostSharing(env, now).catch((error) => ({
-      found: false,
-      date: '',
-      sharer: '',
-      next: null,
-      error: error.message
-    }))
+    loadDailyBootstrap(env, now)
   ]);
-  const schedule = parseScheduleRows((ranges[0] && ranges[0].values) || [], now, env.APP_TIME_ZONE || 'Asia/Taipei');
+  if (rangesResult.status === 'rejected') {
+    if (dailyResult.status === 'fulfilled' && rangesResult.reason && typeof rangesResult.reason === 'object') {
+      rangesResult.reason.dailyData = dailyResult.value;
+    }
+    throw rangesResult.reason;
+  }
+  const ranges = rangesResult.value;
+  const fallbackSchedule = parseScheduleRows((ranges[0] && ranges[0].values) || [], now, env.APP_TIME_ZONE || 'Asia/Taipei');
+  const dailyData = dailyResult.status === 'fulfilled' ? dailyResult.value : {
+    schedule: fallbackSchedule,
+    utmostSharing: {
+      found: false, date: fallbackSchedule.date || '', sharer: '', next: null,
+      error: dailyResult.reason && dailyResult.reason.message || '每日排班資料讀取失敗'
+    },
+    dailyFetchedAt: ''
+  };
   const { roster, errors } = parseRosterRows((ranges[1] && ranges[1].values) || []);
-  return { schedule, roster, rosterErrors: errors, utmostSharing, fetchedAt: new Date().toISOString(), stale: false };
+  return { ...dailyData, roster, rosterErrors: errors, fetchedAt: new Date().toISOString(), stale: false };
 }

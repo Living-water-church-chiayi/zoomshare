@@ -25,9 +25,12 @@ function appDateKey(date = new Date()) {
 
 function createScheduleCacheEntry(value, now = new Date()) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const today = appDateKey(now);
+  const sourceDate = String(value.date || '');
+  if (sourceDate !== today) return null;
   return {
     ...JSON.parse(JSON.stringify(value)),
-    date: appDateKey(now),
+    date: today,
     cachedAt: now.toISOString()
   };
 }

@@ -16,13 +16,15 @@ const root = path.join(__dirname, '..');
 
 test('expires presence schedule cache after five minutes or a Taipei date change', () => {
   const now = new Date('2026-08-25T01:00:00.000Z');
-  const entry = createScheduleCacheEntry({ ok: true, found: false }, now);
+  const entry = createScheduleCacheEntry({ ok: true, found: false, date: '2026-08-25' }, now);
 
   assert.equal(entry.date, '2026-08-25');
   assert.equal(validScheduleCache(entry, new Date(now.getTime() + SCHEDULE_CACHE_TTL_MS - 1)).found, false);
   assert.equal(validScheduleCache(entry, new Date(now.getTime() + SCHEDULE_CACHE_TTL_MS + 1)), null);
   assert.equal(validScheduleCache(entry, new Date('2026-08-26T01:00:00.000Z')), null);
   assert.equal(validScheduleCache({ ok: true, found: false }, now), null);
+  assert.equal(createScheduleCacheEntry({ ok: true, found: false }, now), null);
+  assert.equal(createScheduleCacheEntry({ ok: true, found: false, date: '2026-08-24' }, now), null);
 });
 
 test('intelligently divides scripture into readable 3-to-6 verse sections', () => {
@@ -274,7 +276,8 @@ test('keeps the host roster current without removing manual refresh', () => {
   assert.match(presence, /this\.bootstrapGeneration \+= 1;[\s\S]*?this\.bootstrapRefreshPromise = null;/);
   assert.match(presence, /generation !== this\.bootstrapGeneration \|\| device !== this\.device/);
   assert.match(presence, /const reconnected = this\.connectedOnce;[\s\S]*?if \(reconnected\) this\.refreshBootstrap\(\)/);
-  assert.match(host, /refreshButton'[\s\S]*?window\.hostApi\.refresh\(\)/);
+  assert.match(host, /refreshButton'[\s\S]*?refreshHostDailyData\(\)/);
+  assert.match(host, /function refreshHostDailyData\(\)[\s\S]*?window\.hostApi\.refresh\(\)/);
   assert.match(host, /function renderRoster\(roster\)/);
   assert.match(host, /openRosterSheetButton'[\s\S]*?window\.hostApi\.openRosterSheet\(\)/);
   assert.match(hostPreload, /openRosterSheet: \(\) => ipcRenderer\.invoke\('host:open-roster-sheet'\)/);

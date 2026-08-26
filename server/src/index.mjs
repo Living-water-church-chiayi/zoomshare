@@ -7,7 +7,7 @@ import {
   normalizeMeetingNumber,
   snapshotFromMeeting
 } from './shared.mjs';
-import { loadSheetBootstrap } from './google-sheets.mjs';
+import { loadDailyBootstrap, loadSheetBootstrap } from './google-sheets.mjs';
 
 const DIAGNOSTIC_EVENT_NAMES = new Set([
   'meeting.started',
@@ -351,8 +351,21 @@ export class MeetingPresence {
       await this.ctx.storage.put('bootstrapCache', sheetData);
     } catch (error) {
       const cached = await this.ctx.storage.get('bootstrapCache');
-      if (!cached) return json({ ok: false, error: error.message, snapshot: await this.snapshot() }, 503);
-      sheetData = { ...cached, stale: true, error: error.message };
+      let dailyData = error && error.dailyData;
+      if (!dailyData) dailyData = await loadDailyBootstrap(this.env).catch(() => null);
+      if (!cached && !dailyData) return json({ ok: false, error: error.message, snapshot: await this.snapshot() }, 503);
+      const baseline = cached || { roster: [], rosterErrors: [], fetchedAt: '' };
+      sheetData = {
+        ...baseline,
+        ...(dailyData || {}),
+        stale: true,
+        error: /^Unauthorized$/i.test(String(error.message || ''))
+          ? 'Google 服務名單授權失效'
+          : error.message
+      };
+      if (dailyData) {
+        await this.ctx.storage.put('bootstrapCache', { ...baseline, ...dailyData, stale: false, error: '' });
+      }
     }
     return json({
       ok: true,

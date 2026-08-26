@@ -49,6 +49,7 @@ test('parses exact-year and recurring schedule rows in Taipei time', () => {
   assert.deepEqual(result, {
     ok: true,
     found: true,
+    date: '2026-07-20',
     row: { book: '提摩太前書', startCh: 5, startV: 1, endCh: 5, endV: 25 }
   });
 });
@@ -249,6 +250,78 @@ test('summarizes shared reading history without storing participant names', asyn
   assert.equal(summary.memberStats['member-2'].utmostCount, 1);
   assert.deepEqual(summary.currentAssignment, { scripture: [], utmost: ['member-2'] });
   assert.doesNotMatch(JSON.stringify(values.get('assignmentHistory')), /displayName|participantName/);
+});
+
+test('merges current daily data into a stale bootstrap when the roster bridge is unauthorized', async () => {
+  const dateParts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(new Date());
+  const valuesByType = Object.fromEntries(dateParts.map((part) => [part.type, part.value]));
+  const today = `${valuesByType.year}-${valuesByType.month}-${valuesByType.day}`;
+  const csvDate = `${Number(valuesByType.month)}/${Number(valuesByType.day)}`;
+  const values = new Map([
+    ['bootstrapCache', {
+      roster: [{
+        memberId: 'cached', name: '快取名單', aliases: [], canReadScripture: true,
+        canReadUtmost: true, enabled: true, order: 1
+      }],
+      rosterErrors: [],
+      schedule: { ok: true, found: false, date: '2026-08-25' },
+      utmostSharing: {
+        found: false, date: '2026-08-25', sharer: '',
+        next: { date: '2026-08-25', sharer: '舊資料' }
+      },
+      fetchedAt: '2026-08-25T00:00:00.000Z',
+      stale: false
+    }]
+  ]);
+  const storage = {
+    get: async (key) => values.get(key),
+    put: async (key, value) => {
+      if (typeof key === 'object' && value === undefined) {
+        for (const [entryKey, entryValue] of Object.entries(key)) values.set(entryKey, entryValue);
+      } else values.set(key, value);
+    }
+  };
+  const env = {
+    INSTALL_KEY: 'this-is-a-long-install-key',
+    GOOGLE_SHEET_ID: 'sheet-id',
+    GOOGLE_APPS_SCRIPT_URL: 'https://script.google.com/macros/s/deployment-id/exec',
+    GOOGLE_APPS_SCRIPT_SECRET: 'a-very-long-bridge-secret-value',
+    APP_TIME_ZONE: 'Asia/Taipei'
+  };
+  const presence = new MeetingPresence({ storage }, env);
+  const pairResponse = await presence.pair(new Request('https://example.test/pair', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-client-ip': '192.0.2.10' },
+    body: JSON.stringify({ installKey: env.INSTALL_KEY, label: '測試主持台' })
+  }));
+  const { deviceToken } = await pairResponse.json();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).startsWith('https://docs.google.com/spreadsheets/d/sheet-id/export')) {
+      return new Response(`日期,書卷,開始章,開始節,結束章,結束節\n${csvDate},雅各書,1,1,1,18\n`);
+    }
+    return new Response(JSON.stringify({ ok: false, error: 'Unauthorized' }), {
+      headers: { 'content-type': 'application/json' }
+    });
+  };
+  try {
+    const response = await presence.bootstrap(new Request('https://example.test/bootstrap', {
+      headers: { authorization: `Bearer ${deviceToken}` }
+    }));
+    const data = await response.json();
+    assert.equal(data.ok, true);
+    assert.equal(data.stale, true);
+    assert.equal(data.error, 'Google 服務名單授權失效');
+    assert.equal(data.roster[0].name, '快取名單');
+    assert.equal(data.schedule.date, today);
+    assert.equal(data.schedule.row.book, '雅各書');
+    assert.equal(data.utmostSharing.date, today);
+    assert.notEqual(data.utmostSharing.next && data.utmostSharing.next.date, '2026-08-25');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('pairs seven hosts with independent device tokens', async () => {

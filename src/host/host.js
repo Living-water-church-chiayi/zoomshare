@@ -15,6 +15,8 @@ let currentScriptureConfig = null;
 let assignmentsHydrated = false;
 let previousOnlineMemberIds = new Set();
 let saveTimer = null;
+let currentHostDateKey = '';
+let hostRefreshPromise = null;
 const HOST_LAYOUT_WIDTH = 460;
 const HOST_LAYOUT_HEIGHT = 760;
 const HOST_DISPLAY_SCALE_MIN = 0.76;
@@ -52,6 +54,34 @@ function formatShortDate(value) {
   return match ? `${Number(match[1])} 月 ${Number(match[2])} 日` : String(value || '');
 }
 
+function taipeiDateKey(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(now);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function resetDailyAssignments() {
+  selected = { scripture: [], utmost: [] };
+  activeSlots = { scripture: 0, utmost: 0 };
+  assignmentsHydrated = false;
+  previousOnlineMemberIds = new Set();
+}
+
+function ensureCurrentHostDate() {
+  const today = taipeiDateKey();
+  if (currentHostDateKey && currentHostDateKey !== today) resetDailyAssignments();
+  currentHostDateKey = today;
+  return today;
+}
+
+function friendlySyncError(value) {
+  const message = String(value || '').trim();
+  if (/unauthorized/i.test(message)) return '雲端服務名單授權失效；今日排班仍會另外更新。';
+  return message;
+}
+
 function validScriptureConfig(value) {
   if (!value || typeof value !== 'object') return null;
   const config = {
@@ -74,6 +104,12 @@ function scriptureReference(value) {
 }
 
 function assignmentStats(memberId) {
+  if (!currentState || !currentState.assignmentStats || currentState.assignmentStats.date !== taipeiDateKey()) {
+    return {
+      scriptureCount: 0, utmostCount: 0, totalCount: 0,
+      readYesterday: false, yesterdayRoles: [], lastReadDate: ''
+    };
+  }
   const stats = currentState && currentState.assignmentStats && currentState.assignmentStats.memberStats;
   return stats && stats[String(memberId)] ? stats[String(memberId)] : {
     scriptureCount: 0,
@@ -87,7 +123,7 @@ function assignmentStats(memberId) {
 
 function todaySharerMemberIds() {
   const sharing = currentState && currentState.utmostSharing;
-  if (!sharing || !sharing.found || !sharing.sharer) return new Set();
+  if (!sharing || sharing.date !== taipeiDateKey() || !sharing.found || !sharing.sharer) return new Set();
   const matcher = buildRosterMatcher(currentState.roster || []);
   const memberIds = new Set();
   for (const memberId of matchRosterMemberIds(matcher, sharing.sharer)) memberIds.add(String(memberId));
@@ -115,6 +151,7 @@ function normalizeSelections() {
 
 function hydrateAssignments(state) {
   if (assignmentsHydrated || !state || !state.assignmentStats) return;
+  if (state.assignmentStats.date !== taipeiDateKey()) return;
   const saved = state.assignmentStats.currentAssignment || {};
   selected.scripture = Array.isArray(saved.scripture) ? saved.scripture.slice() : [];
   selected.utmost = Array.isArray(saved.utmost) ? saved.utmost.slice() : [];
@@ -123,13 +160,19 @@ function hydrateAssignments(state) {
 
 function renderTodaySharing(state) {
   const sharing = state.utmostSharing || {};
+  const today = taipeiDateKey();
+  if (sharing.date !== today) {
+    $('todaySharingName').textContent = '排班資料尚未更新';
+    $('todaySharingNext').textContent = sharing.date ? `目前資料：${formatShortDate(sharing.date)}` : '';
+    return;
+  }
   if (sharing.found && sharing.sharer) {
     $('todaySharingName').textContent = sharing.sharer;
     $('todaySharingNext').textContent = '';
     return;
   }
   $('todaySharingName').textContent = sharing.error ? '排班表暫時讀取失敗' : '今天沒有排定分享者';
-  $('todaySharingNext').textContent = sharing.next
+  $('todaySharingNext').textContent = sharing.next && sharing.next.date > today
     ? `下一次：${formatShortDate(sharing.next.date)}・${sharing.next.sharer}`
     : '';
 }
@@ -309,6 +352,7 @@ function selectedOnlineDepartures(derived) {
 }
 
 function renderState(state) {
+  ensureCurrentHostDate();
   currentState = state;
   setHidden($('setupView'), state.configured);
   setHidden($('consoleView'), !state.configured);
@@ -317,18 +361,14 @@ function renderState(state) {
   const snapshot = state.snapshot || { status: 'idle', meetingUuid: '', participants: [] };
   if (snapshot.status !== 'active') {
     currentMeetingUuid = '';
-    selected = { scripture: [], utmost: [] };
-    activeSlots = { scripture: 0, utmost: 0 };
-    assignmentsHydrated = false;
+    resetDailyAssignments();
   } else if (currentMeetingUuid && currentMeetingUuid !== snapshot.meetingUuid) {
-    selected = { scripture: [], utmost: [] };
-    activeSlots = { scripture: 0, utmost: 0 };
-    assignmentsHydrated = false;
+    resetDailyAssignments();
   }
   currentMeetingUuid = snapshot.status === 'active' ? snapshot.meetingUuid : '';
   if (snapshot.status === 'active') hydrateAssignments(state);
 
-  const scriptureSource = currentScriptureConfig || state.schedule;
+  const scriptureSource = state.schedule || currentScriptureConfig;
   currentScriptureSegments = scriptureSegments(scriptureSource, window.BIBLE);
   if (!currentScriptureSegments.length) currentScriptureSegments = [{ label: '今日經文範圍待確認', count: 0, active: true }];
   currentUtmostSegments = utmostParagraphSegments(utmostBody, 4);
@@ -336,7 +376,7 @@ function renderState(state) {
 
   const derived = deriveRosterPresence(snapshot, state.roster || []);
   const departed = selectedOnlineDepartures(derived);
-  showNotice(departed.length ? `${departed.join('、')} 已離線，安排仍保留。` : (state.error || ''));
+  showNotice(departed.length ? `${departed.join('、')} 已離線，安排仍保留。` : friendlySyncError(state.error));
 
   const presentation = connectionPresentation(state.connection);
   $('connectionBadge').textContent = presentation.text;
@@ -370,14 +410,8 @@ function renderState(state) {
 }
 
 function assignmentPayload() {
-  const date = currentState && currentState.assignmentStats && currentState.assignmentStats.date;
-  const dateParts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit'
-  }).formatToParts(new Date());
-  const values = Object.fromEntries(dateParts.map((part) => [part.type, part.value]));
-  const localDate = `${values.year}-${values.month}-${values.day}`;
   return {
-    date: date || localDate,
+    date: taipeiDateKey(),
     scripture: selected.scripture.filter(Boolean),
     utmost: selected.utmost.filter(Boolean)
   };
@@ -477,6 +511,26 @@ async function loadUtmostParagraphs() {
   if (currentState) renderState(currentState);
 }
 
+async function refreshHostDailyData() {
+  if (hostRefreshPromise) return hostRefreshPromise;
+  const request = (async () => {
+    ensureCurrentHostDate();
+    const [stateResult, scriptureResult] = await Promise.allSettled([
+      window.hostApi.refresh(),
+      window.hostApi.scriptureCurrent()
+    ]);
+    if (scriptureResult.status === 'fulfilled') currentScriptureConfig = validScriptureConfig(scriptureResult.value);
+    await loadUtmostParagraphs();
+    if (stateResult.status === 'fulfilled') renderState(stateResult.value);
+    else throw stateResult.reason;
+  })();
+  const tracked = request.finally(() => {
+    if (hostRefreshPromise === tracked) hostRefreshPromise = null;
+  });
+  hostRefreshPromise = tracked;
+  return hostRefreshPromise;
+}
+
 async function init() {
   document.body.classList.add(window.hostApi.platform === 'darwin' ? 'plat-mac' : 'plat-win');
   updateHostDisplayScale();
@@ -489,7 +543,7 @@ async function init() {
   $('utmostAssignments').addEventListener('click', activateAssignment);
   $('refreshButton').addEventListener('click', async () => {
     $('refreshButton').disabled = true;
-    try { renderState(await window.hostApi.refresh()); }
+    try { await refreshHostDailyData(); }
     catch (error) { showNotice(error.message || '更新失敗'); }
     finally { $('refreshButton').disabled = false; }
   });
@@ -516,6 +570,11 @@ async function init() {
   currentScriptureConfig = validScriptureConfig(scripture);
   renderState(state);
   loadUtmostParagraphs();
+  window.addEventListener('focus', () => refreshHostDailyData().catch(() => {}));
+  window.addEventListener('pageshow', () => refreshHostDailyData().catch(() => {}));
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') refreshHostDailyData().catch(() => {});
+  });
 }
 
 window.addEventListener('DOMContentLoaded', init);
