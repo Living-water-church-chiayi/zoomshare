@@ -8,6 +8,7 @@ let musicPlaying = false;
 let musicDesired = false;
 let musicRequestToken = 0;
 let musicFadeTimer = null;
+let worshipFadeTimer = null;
 let nativeMusicLoaded = false;
 let musicResumeOnCover = false;
 let flowReachedUtmost = false;
@@ -138,23 +139,7 @@ function stopNativeMusic() {
 }
 
 function appDateParts(now = new Date()) {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Taipei',
-    year: 'numeric',
-    month: 'numeric',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: 'numeric',
-    hour12: false
-  }).formatToParts(now);
-  const values = Object.fromEntries(parts.map((part) => [part.type, Number.parseInt(part.value, 10)]));
-  return {
-    year: values.year,
-    month: values.month,
-    day: values.day,
-    hour: values.hour,
-    minute: values.minute
-  };
+  return DevotionalDate.dateParts(now);
 }
 
 function appDateKey(now = new Date()) {
@@ -206,7 +191,7 @@ function applyCover(backgroundUrl) {
 
   const rl = $('readingLines');
   rl.innerHTML = '';
-  const lines = [formatRef()].concat(
+  const lines = [scriptureIsCurrent() ? formatRef() : '讀經進度待更新'].concat(
     (cfg.readingExtra || '').split('\n').map((s) => s.trim()).filter(Boolean)
   );
   lines.forEach((line) => {
@@ -235,7 +220,7 @@ function applyFillMode() {
 
 // ---------- 本日經文下拉選單 ----------
 function bookByName(name) {
-  return window.BIBLE.find((b) => b.n === name) || window.BIBLE[0];
+  return window.AssignmentShared.findBibleBook(name, window.BIBLE) || window.BIBLE[0];
 }
 function clampNum(v, lo, hi) { v = parseInt(v, 10) || lo; return Math.min(hi, Math.max(lo, v)); }
 function fillNumberSelect(sel, n, val, min = 1) {
@@ -346,6 +331,7 @@ function onScriptureChange(which) {
   cfg.scriptureStartV = +$('bkStartV').value;
   cfg.scriptureEndCh = +$('bkEndCh').value;
   cfg.scriptureEndV = +$('bkEndV').value;
+  cfg.scriptureDateKey = appDateKey();
   invalidateScriptureData();
   updateRefPreview();
   applyCover(null);
@@ -354,8 +340,8 @@ function onScriptureChange(which) {
 }
 
 // 套用 Google 試算表中今天的經文範圍。
-function applyScheduleRow(row) {
-  const bk = window.BIBLE.find((b) => b.n === String(row.book || '').trim());
+function applyScheduleRow(row, dateKey = appDateKey()) {
+  const bk = window.AssignmentShared.findBibleBook(row.book, window.BIBLE);
   if (!bk) return false;
   const nCh = bk.v.length;
   const sc = clampNum(row.startCh, 1, nCh);
@@ -363,6 +349,7 @@ function applyScheduleRow(row) {
   const ec = clampNum(row.endCh, sc, nCh);
   const ev = clampNum(row.endV, ec === sc ? sv : 1, bk.v[ec - 1]);
   cfg.scriptureBook = bk.n;
+  cfg.scriptureDateKey = dateKey;
   cfg.scriptureStartCh = sc; cfg.scriptureStartV = sv;
   cfg.scriptureEndCh = ec; cfg.scriptureEndV = ev;
   fillScriptureControls();
@@ -376,9 +363,10 @@ async function applySchedule(manual, forceRefresh = false) {
   const st = $('scheduleStatus');
   if (st) st.textContent = '讀取今日排程中...';
   const r = await window.api.scheduleToday(cfg.scheduleUrl, { forceRefresh });
+  if (r.date && r.date !== appDateKey()) return false;
   if (!r.ok) { const m = '讀取失敗：' + (r.error || ''); if (st) st.textContent = m; if (manual) toast(m, 4000); return false; }
   if (!r.found) { const m = '找不到 ' + systemDateMD() + ' 的排程'; if (st) st.textContent = m; if (manual) toast(m, 3500); return false; }
-  if (applyScheduleRow(r.row)) {
+  if (applyScheduleRow(r.row, r.date)) {
     const m = '已更新 ' + systemDateMD() + '：' + formatRef();
     if (st) st.textContent = m;
     if (manual) toast(m, 3000);
@@ -691,6 +679,11 @@ async function copyAnnounce() {
   // debounced config write finishes. The announcement then mirrors playback.
   const settingsPanel = $('settingsPanel');
   if (settingsPanel && !settingsPanel.classList.contains('hidden')) collectSettings();
+  await refreshDailyReadingDataIfNeeded();
+  if (!scriptureIsCurrent()) {
+    toast('靈修日期的經文尚未取得，請先更新進度再複製公告', 4000);
+    return;
+  }
   const worship = await ensureCurrentWorshipAnnouncementTitle(true);
   if (worship.url && !worship.title) {
     focusWorshipTitleEditor(worship.url);
@@ -1156,11 +1149,15 @@ function fadeOutMusic(done) {
   musicRequestToken++;
   const a = $('bgAudio');
   const start = USE_NATIVE_MAC_AUDIO ? cfg.musicVolume : a.volume;
-  let v = start;
-  if (musicFadeTimer) clearInterval(musicFadeTimer);
+  const startedAt = Date.now();
+  if (musicFadeTimer) return;
+  setMusicSwitchState(false);
   musicFadeTimer = setInterval(() => {
-    v -= start / 12;
-    if (v <= 0) {
+    const progress = Math.min(1, (Date.now() - startedAt) / 1000);
+    const nextVolume = Math.max(0, start * (1 - progress));
+    if (USE_NATIVE_MAC_AUDIO) sendNativeAudio('music', 'volume', { volume: nextVolume });
+    else a.volume = nextVolume;
+    if (progress >= 1) {
       clearInterval(musicFadeTimer);
       musicFadeTimer = null;
       if (USE_NATIVE_MAC_AUDIO) stopNativeMusic();
@@ -1171,10 +1168,6 @@ function fadeOutMusic(done) {
       musicPlaying = false;
       setMusicSwitchState(false);
       if (done) done();
-    } else {
-      const nextVolume = Math.max(0, v);
-      if (USE_NATIVE_MAC_AUDIO) sendNativeAudio('music', 'volume', { volume: nextVolume });
-      else a.volume = nextVolume;
     }
   }, 40);
 }
@@ -1250,6 +1243,15 @@ function setMusicSwitchState(on) {
 
 function toggleMusic() {
   if (flowTransitioning || !isMainCover()) return;
+  if (musicFadeTimer) {
+    clearInterval(musicFadeTimer);
+    musicFadeTimer = null;
+    musicDesired = true;
+    if (USE_NATIVE_MAC_AUDIO) sendNativeAudio('music', 'volume', { volume: cfg.musicVolume });
+    else $('bgAudio').volume = cfg.musicVolume;
+    setMusicSwitchState(true);
+    return;
+  }
   if (musicDesired || musicPlaying) {
     musicResumeOnCover = false;
     musicDesired = false;
@@ -1267,38 +1269,9 @@ function toggleMusic() {
   }
 }
 
-// 空白鍵切換背景音樂播放狀態。
+// 與滑鼠使用相同的淡出與恢復流程。
 function toggleMusicPlayPause() {
-  if (flowTransitioning || !isMainCover()) return;
-  const a = $('bgAudio');
-  const hasLoadedSource = USE_NATIVE_MAC_AUDIO ? nativeMusicLoaded : Boolean(a.src);
-  if (!hasLoadedSource) { resolveAndPlayMusic(); return; }
-  const paused = USE_NATIVE_MAC_AUDIO ? !musicPlaying : a.paused;
-  if (paused) {
-    musicDesired = true;
-    setMusicSwitchState(true);
-    const resume = USE_NATIVE_MAC_AUDIO
-      ? nativeAudioCommand('music', 'play')
-      : a.play().then(() => ({ ok: true }));
-    resume.then((nativeResult) => {
-      if (!nativeResult.ok) throw new Error(nativeResult.error || 'macOS 原生音訊播放器無法啟動');
-      musicPlaying = true;
-    }).catch((e) => {
-      musicDesired = false;
-      musicPlaying = false;
-      setMusicSwitchState(false);
-      if (!USE_NATIVE_MAC_AUDIO) a.pause();
-      stopNativeMusic();
-      toast('播放失敗：' + e.message, 3000);
-    });
-  }
-  else {
-    musicDesired = false;
-    setMusicSwitchState(false);
-    if (USE_NATIVE_MAC_AUDIO) sendNativeAudio('music', 'pause');
-    else a.pause();
-    musicPlaying = false;
-  }
+  toggleMusic();
 }
 
 // ---------- 閱讀流程 ----------
@@ -2110,6 +2083,10 @@ function scriptureRefKey(ref = currentRefPayload()) {
   return [ref.book, ref.startCh, ref.startV, ref.endCh, ref.endV].join(':');
 }
 
+function scriptureIsCurrent() {
+  return !cfg.scheduleEnabled || cfg.scriptureDateKey === appDateKey();
+}
+
 function invalidateScriptureData() {
   cachedBible = null;
   cachedBibleKey = '';
@@ -2123,6 +2100,9 @@ function invalidateUtmostData() {
 }
 
 async function ensureScriptureData() {
+  if (!scriptureIsCurrent()) {
+    return { ok: false, title: `${systemDateMD()} 經文待更新`, body: '尚未取得這一天的讀經進度，請確認排程後更新。' };
+  }
   const ref = currentRefPayload();
   const key = scriptureRefKey(ref);
   if (cachedBible && cachedBibleKey === key) return cachedBible;
@@ -2153,11 +2133,12 @@ async function ensureScriptureData() {
 
 async function ensureUtmostData() {
   const dateKey = appDateKey();
-  if (cachedUtmost && cachedUtmostDateKey === dateKey) return cachedUtmost;
+  if (cachedUtmost && cachedUtmost.ok && cachedUtmostDateKey === dateKey) return cachedUtmost;
   invalidateUtmostData();
   let result;
   try { result = await window.api.utmostToday(); }
   catch (e) { result = { ok: false, error: e.message }; }
+  if (dateKey !== appDateKey()) return ensureUtmostData();
   cachedUtmost = result && result.ok ? result : {
     ok: false,
     date: systemDateChinese(),
@@ -2177,14 +2158,23 @@ async function refreshDailyReadingData(options = {}) {
   }
   dailyRefreshInFlight = (async () => {
     const dateKey = appDateKey();
+    const refreshVisibleReading = forceRefresh || lastDailyRefreshOkDateKey !== dateKey;
+    applyCover(null);
     invalidateScriptureData();
     invalidateUtmostData();
     let scheduleOk = true;
-    if (cfg.scheduleEnabled && cfg.scheduleUrl) scheduleOk = await applySchedule(false, forceRefresh);
+    if (cfg.scheduleEnabled && cfg.scheduleUrl) {
+      try { scheduleOk = await applySchedule(false, forceRefresh); }
+      catch { scheduleOk = false; }
+    }
     const results = await Promise.allSettled([ensureScriptureData(), ensureUtmostData()]);
     const ok = scheduleOk && results.every((result) => result.status === 'fulfilled' && result.value && result.value.ok);
     lastDailyRefreshDateKey = dateKey;
     if (ok) lastDailyRefreshOkDateKey = dateKey;
+    if (refreshVisibleReading && dateKey === appDateKey() && !flowLoading && !flowTransitioning) {
+      if (flowStep === 'scripture') await showScriptureFlow(flowNavigationToken);
+      else if (flowStep === 'utmost') await showUtmostFlow(flowNavigationToken);
+    }
     return ok;
   })();
   try { return await dailyRefreshInFlight; }
@@ -2194,8 +2184,7 @@ async function refreshDailyReadingData(options = {}) {
 function needsDailyReadingRefresh(now = new Date()) {
   const dateKey = appDateKey(now);
   if (dateKey !== lastDailyRefreshDateKey) return true;
-  const parts = appDateParts(now);
-  return parts.hour >= 8 && lastDailyRefreshOkDateKey !== dateKey;
+  return lastDailyRefreshOkDateKey !== dateKey;
 }
 
 function refreshDailyReadingDataIfNeeded() {
@@ -2204,11 +2193,18 @@ function refreshDailyReadingDataIfNeeded() {
 }
 
 function scheduleDailyReadingRefresh() {
-  setInterval(() => refreshDailyReadingDataIfNeeded().catch(() => {}), 60000);
+  // Align with the minute boundary so an already-open app changes at 17:30.
+  setTimeout(() => {
+    handleDailyReadingLifecycleWake();
+    scheduleDailyReadingRefresh();
+  }, 60000 - (Date.now() % 60000));
 }
 
 async function handleDailyReadingLifecycleWake() {
-  if (cfg && cfg.dateAuto) $('dateText').textContent = systemDateMD();
+  if (cfg && cfg.dateAuto) {
+    $('dateText').textContent = systemDateMD();
+    if (!scriptureIsCurrent()) applyCover(null);
+  }
   try { await window.api.clearExpiredScheduleCache(); } catch {}
   refreshDailyReadingDataIfNeeded().catch(() => {});
 }
@@ -2221,9 +2217,10 @@ async function showScriptureFlow(navigationToken, options) {
   try {
     const data = await ensureScriptureData();
     if (navigationToken !== flowNavigationToken) return false;
+    const title = data.ok ? formatScriptureBookTitle() : data.title;
     setFlowContent({
       eyebrow: '',
-      title: formatScriptureBookTitle(),
+      title,
       meta: '',
       pages: [textPage('')]
     });
@@ -2234,7 +2231,7 @@ async function showScriptureFlow(navigationToken, options) {
     flowLoading = false;
     setFlowContent({
       eyebrow: '',
-      title: formatScriptureBookTitle(),
+      title,
       meta: '',
       pages,
       revealFooter: options.revealFooter
@@ -2495,6 +2492,7 @@ async function startWorship() {
 
 // 明確 load 後播放；首次失敗會重試一次，再提示使用者手動播放。
 function playWorshipVideo(src, audioSrc, retried, requestToken = worshipRequestToken) {
+  cancelWorshipFade();
   const video = $('worshipVideo');
   currentWorshipAudioSrc = normalizeMediaUrl(audioSrc);
   if (worshipPlayRetryTimer) clearTimeout(worshipPlayRetryTimer);
@@ -2555,7 +2553,51 @@ async function loadNativeWorshipAudio(position = 0, autoplay = true) {
   }
 }
 
+function cancelWorshipFade() {
+  if (worshipFadeTimer) clearInterval(worshipFadeTimer);
+  worshipFadeTimer = null;
+  $('worshipVideo').volume = 1;
+}
+
+function fadeOutWorship(video) {
+  if (worshipFadeTimer) return;
+  setWorshipPlaybackDesired(false);
+  setWorshipPlayState(false);
+  const start = USE_NATIVE_MAC_AUDIO ? 1 : video.volume;
+  const startedAt = Date.now();
+  worshipFadeTimer = setInterval(() => {
+    const progress = Math.min(1, (Date.now() - startedAt) / 1000);
+    const volume = Math.max(0, start * (1 - progress));
+    if (USE_NATIVE_MAC_AUDIO) sendNativeAudio('worship', 'volume', { volume });
+    else video.volume = volume;
+    if (progress >= 1) {
+      clearInterval(worshipFadeTimer);
+      worshipFadeTimer = null;
+      video.pause();
+      stopNativeWorshipAudio();
+      video.volume = 1;
+    }
+  }, 40);
+}
+
+async function toggleWorshipPlayback() {
+  const video = $('worshipVideo');
+  if (!video.paused && !worshipFadeTimer) {
+    fadeOutWorship(video);
+    return;
+  }
+  try {
+    await resumeWorshipPlayback(video);
+    $('worshipLoading').classList.add('hidden');
+  } catch (error) {
+    $('worshipLoading').textContent = '播放失敗，請稍後再試';
+    $('worshipLoading').classList.remove('hidden');
+    toast('影片播放失敗：' + error.message, 3200);
+  }
+}
+
 async function resumeWorshipPlayback(video) {
+  cancelWorshipFade();
   setWorshipPlaybackDesired(true);
   try {
     await video.play();
@@ -2570,6 +2612,7 @@ async function resumeWorshipPlayback(video) {
 }
 
 function stopWorshipPlayback() {
+  cancelWorshipFade();
   worshipRequestToken++;
   setWorshipPlaybackDesired(false);
   resetWorshipSeekState();
@@ -2750,21 +2793,9 @@ function handleSpacePlaybackToggle(event) {
   if (worshipActive && tag === 'INPUT' && !isWorshipSeekTarget(event.target)) return false;
 
   event.preventDefault();
-  if (worshipActive) {
-    const v = $('worshipVideo');
-    if (v.paused) {
-      resumeWorshipPlayback(v).catch((error) => {
-        $('worshipLoading').textContent = '播放失敗，請稍後再試';
-        $('worshipLoading').classList.remove('hidden');
-        toast('影片播放失敗：' + error.message, 3200);
-      });
-    } else {
-      setWorshipPlaybackDesired(false);
-      v.pause();
-    }
-  } else {
-    toggleMusicPlayPause();
-  }
+  if (event.repeat) return true;
+  if (worshipActive) toggleWorshipPlayback();
+  else toggleMusicPlayPause();
   return true;
 }
 
@@ -3046,6 +3077,11 @@ function worshipSeekPosition(video, seek) {
 
 function beginWorshipSeek(video) {
   if (!worshipActive || !video) return false;
+  if (worshipFadeTimer) {
+    video.pause();
+    stopNativeWorshipAudio();
+    cancelWorshipFade();
+  }
   worshipSeeking = true;
   worshipSeekResumeAfterCommit = worshipSeekResumeAfterCommit || !video.paused;
   return true;
@@ -3224,21 +3260,7 @@ function setupWorshipControls() {
       finishSeek();
     }
   });
-  $('wPlay').addEventListener('click', async () => {
-    if (!v.paused) {
-      setWorshipPlaybackDesired(false);
-      v.pause();
-      return;
-    }
-    try {
-      await resumeWorshipPlayback(v);
-      $('worshipLoading').classList.add('hidden');
-    } catch (e) {
-      $('worshipLoading').textContent = '播放失敗，請稍後再試';
-      $('worshipLoading').classList.remove('hidden');
-      toast('影片播放失敗：' + e.message, 3200);
-    }
-  });
+  $('wPlay').addEventListener('click', () => toggleWorshipPlayback());
   back.addEventListener('click', () => backToCover());
   $('wReturn').addEventListener('click', () => backToCover({ nextAfterWorship: true }));
   const holdWorshipChrome = () => {
@@ -3759,7 +3781,7 @@ async function init() {
   else prefetch('audio');
   setTimeout(() => prefetch('video'), 8000);
 
-  // 啟動後更新一次每日內容，之後每天上午八點再更新。
+  // 啟動後更新每日內容，每日 17:30 自動切到隔天，失敗時每分鐘重試。
   setTimeout(() => refreshDailyReadingData().catch(() => {}), 1500);
   scheduleDailyReadingRefresh();
 

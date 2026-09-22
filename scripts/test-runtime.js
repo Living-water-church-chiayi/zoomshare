@@ -91,6 +91,7 @@ function loadFunctions(source, names, globals = {}) {
     String,
     parseInt,
     encodeURIComponent,
+    DevotionalDate: require('../src/devotional-date'),
     ...globals
   });
   const declarations = names.map((name) => extractFunction(source, name)).join('\n');
@@ -1222,6 +1223,7 @@ test('previews Mac worship audio near the dragged seek position without queueing
         return timers.length;
       },
       USE_NATIVE_MAC_AUDIO: true,
+      worshipFadeTimer: null,
       WORSHIP_SEEK_PREVIEW_MS: 120,
       currentWorshipAudioSrc: 'file:///cache/worship.m4a',
       worshipActive: true,
@@ -1346,6 +1348,7 @@ test('resumes Mac worship playback by reloading native audio instead of restarti
     rendererSource,
     ['loadNativeWorshipAudio', 'resumeWorshipPlayback'],
     {
+      cancelWorshipFade: () => {},
       nativeAudioCommand: async (channel, action, payload) => {
         calls.push(`${channel}:${action}:${payload ? payload.position ?? '' : ''}`);
         return { ok: true };
@@ -1381,6 +1384,7 @@ test('pauses worship video when the Mac audio helper cannot resume', async () =>
     rendererSource,
     ['loadNativeWorshipAudio', 'resumeWorshipPlayback'],
     {
+      cancelWorshipFade: () => {},
       nativeAudioCommand: async () => ({ ok: false, error: 'CoreAudio failed' }),
       markWorshipNativeAudioLoaded: () => {},
       setWorshipPlaybackDesired: (value) => desired.push(value),
@@ -2022,6 +2026,10 @@ test('builds yt-dlp download args with YouTube client fallback and bounded socke
     /yt-dlp 已是最新版本/
   );
   assert.match(
+    ytDlpForbiddenMessage(new Error('HTTP Error 403: Forbidden'), { updated: false, current: '2026.07.04' }).message,
+    /不是 macOS 軟體更新檔下載失敗/
+  );
+  assert.match(
     ytDlpForbiddenMessage(new Error('HTTP Error 403: Forbidden'), { updated: true, to: '2026.08.18' }).message,
     /已自動更新 yt-dlp 至 2026\.08\.18/
   );
@@ -2089,6 +2097,83 @@ test('uses Taipei date for cover labels and announcements', () => {
   assert.equal(functions.todayCNDate(taipeiMorningWhilePacificYesterday), '8月25日星期二');
 });
 
+test('keeps cover, announcement, host and refresh decisions on the next day from 17:30', () => {
+  const functions = loadFunctions(rendererSource,
+    ['appDateParts', 'appDateKey', 'appWeekday', 'systemDateMD', 'systemDateChinese', 'todayCNDate', 'needsDailyReadingRefresh'], {
+      cfg: { dateAuto: true }, CN_WEEKDAYS: ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'],
+      lastDailyRefreshDateKey: '2026-09-22', lastDailyRefreshOkDateKey: '2026-09-22'
+    });
+  const before = new Date('2026-09-22T09:29:59Z');
+  const after = new Date('2026-09-22T09:30:00Z');
+  assert.equal(functions.needsDailyReadingRefresh(before), false);
+  assert.equal(functions.needsDailyReadingRefresh(after), true);
+  assert.equal(functions.systemDateMD(after), '9/23');
+  assert.equal(functions.systemDateChinese(after), '9月23日');
+  assert.equal(functions.todayCNDate(after), '9月23日星期三');
+  const { taipeiDateKey } = loadFunctions(fs.readFileSync(path.join(projectRoot, 'src/host/host.js'), 'utf8'), ['taipeiDateKey']);
+  assert.equal(taipeiDateKey(after), functions.appDateKey(after));
+  const prepared = loadFunctions(rendererSource, ['appDateParts', 'appDateKey', 'needsDailyReadingRefresh'], {
+    lastDailyRefreshDateKey: '2026-09-23', lastDailyRefreshOkDateKey: '2026-09-23'
+  });
+  assert.equal(prepared.needsDailyReadingRefresh(new Date('2026-09-22T16:00:00Z')), false);
+});
+
+test('targets tomorrow scripture after 17:30 and reports a missing next-day schedule', async () => {
+  const functions = loadFunctions(mainSource,
+    ['cnToNum', 'parseCsvLine', 'datePartsInAppTimeZone', 'appDateKey', 'sheetCsvUrl', 'fetchScheduleToday'], {
+      httpGetText: async () => '09/22,約翰壹書,一,1,二,6\n09/23,約翰壹書,二,7,二,29'
+    });
+  const url = 'https://docs.google.com/spreadsheets/d/example/edit';
+  const before = await functions.fetchScheduleToday(url, new Date('2026-09-22T09:29:59Z'));
+  const after = await functions.fetchScheduleToday(url, new Date('2026-09-22T09:30:00Z'));
+  assert.equal(before.row.startV, 1);
+  assert.equal(after.row.startV, 7);
+  assert.equal(after.date, '2026-09-23');
+  assert.equal((await functions.fetchScheduleToday(url, new Date('2026-09-23T09:30:00Z'))).found, false);
+});
+
+test('fetches the dated Utmost archive for preparation and rejects a homepage from another day', async () => {
+  const urls = [];
+  let correct = true;
+  const functions = loadFunctions(mainSource, ['datePartsInAppTimeZone', 'todayChineseDate', 'fetchUtmostToday'], {
+    httpGetText: async (url) => { urls.push(url); return 'html'; },
+    parseUtmostHtml: () => ({ ok: true, date: correct ? '9月23日' : '9月22日', body: 'body' })
+  });
+  const now = new Date('2026-09-22T09:30:00Z');
+  assert.equal((await functions.fetchUtmostToday(now)).ok, true);
+  assert.equal(urls.length, 1);
+  assert.match(urls[0], /\/2020\/09\/23\/\?calendar-redirect=true/);
+  correct = false;
+  assert.equal((await functions.fetchUtmostToday(now)).ok, false);
+});
+
+test('does not load an old scripture reference when the devotional date has changed', async () => {
+  const cfg = { scheduleEnabled: true, scriptureDateKey: '2026-09-22' };
+  const functions = loadFunctions(rendererSource, ['scriptureIsCurrent', 'ensureScriptureData'], {
+    cfg, appDateKey: () => '2026-09-23', systemDateMD: () => '9/23',
+    window: { api: { biblePassage: () => assert.fail('old scripture was fetched') } }
+  });
+  assert.equal(functions.scriptureIsCurrent(), false);
+  assert.equal((await functions.ensureScriptureData()).ok, false);
+  cfg.scriptureDateKey = '2026-09-23';
+  assert.equal(functions.scriptureIsCurrent(), true);
+});
+
+test('aligns automatic date checks with 17:30 rather than app launch time', () => {
+  const timers = [];
+  let refreshes = 0;
+  const { scheduleDailyReadingRefresh } = loadFunctions(rendererSource, ['scheduleDailyReadingRefresh'], {
+    Date: { now: () => new Date('2026-09-22T09:29:45.123Z').getTime() },
+    setTimeout: (callback, delay) => timers.push({ callback, delay }),
+    handleDailyReadingLifecycleWake: () => { refreshes++; }
+  });
+  scheduleDailyReadingRefresh();
+  assert.equal(timers[0].delay, 14877);
+  timers[0].callback();
+  assert.equal(refreshes, 1);
+  assert.equal(timers.length, 2);
+});
+
 test('looks up Scripture schedule rows by Taipei date', async () => {
   const functions = loadFunctions(
     mainSource,
@@ -2112,6 +2197,44 @@ test('looks up Scripture schedule rows by Taipei date', async () => {
     row: { book: '希伯來書', startCh: 13, startV: 1, endCh: 13, endV: 25 },
     date: '2026-08-25'
   });
+});
+
+test('applies the September 22 financial-numeral book name and splits all 16 verses', async () => {
+  const bibleContext = vm.createContext({ window: {} });
+  vm.runInContext(fs.readFileSync(path.join(projectRoot, 'src/renderer/bible.js'), 'utf8'), bibleContext);
+  const bible = bibleContext.window.BIBLE;
+  const assignment = require('../src/assignment-shared');
+  const { fetchScheduleToday } = loadFunctions(mainSource,
+    ['cnToNum', 'parseCsvLine', 'datePartsInAppTimeZone', 'appDateKey', 'sheetCsvUrl', 'fetchScheduleToday'],
+    { httpGetText: async () => '09/22,約翰壹書,一,1,二,6\r\n09/23,約翰壹書,二,7,二,29' });
+  const schedule = await fetchScheduleToday('https://docs.google.com/spreadsheets/d/example/edit',
+    new Date('2026-09-22T00:30:00Z'));
+  const cfg = { scriptureBook: '彼得前書', scriptureStartCh: 4, scriptureStartV: 1, scriptureEndCh: 4, scriptureEndV: 19 };
+  let saved;
+  const { applyScheduleRow, bookByName } = loadFunctions(rendererSource,
+    ['applyScheduleRow', 'clampNum', 'bookByName'], {
+      cfg,
+      window: { BIBLE: bible, AssignmentShared: assignment, api: { setConfig: (value) => { saved = { ...value }; } } },
+      fillScriptureControls: () => {}, applyCover: () => {}, invalidateScriptureData: () => {}
+    });
+  assert.equal(applyScheduleRow(schedule.row, schedule.date), true);
+  assert.deepEqual(saved, { scriptureBook: '約翰一書', scriptureDateKey: '2026-09-22', scriptureStartCh: 1, scriptureStartV: 1, scriptureEndCh: 2, scriptureEndV: 6 });
+  assert.equal(bookByName('約翰壹書').n, '約翰一書');
+  for (const [alias, canonical] of [['約翰壹書', '約翰一書'], ['約翰貳書', '約翰二書'], ['約翰參書', '約翰三書']]) {
+    assert.equal(assignment.findBibleBook(` ${alias} `, bible).n, canonical);
+    assert.equal(assignment.findBibleBook(canonical, bible).n, canonical);
+  }
+  assert.equal(applyScheduleRow({ ...schedule.row, book: '未知書卷' }, schedule.date), false);
+  const segments = assignment.scriptureSegments(schedule, bible);
+  assert.deepEqual(segments.map(({ label, count }) => ({ label, count })), [
+    { label: '1:1–5', count: 5 }, { label: '1:6–10', count: 5 }, { label: '2:1–6', count: 6 }
+  ]);
+  assert.deepEqual(segments, assignment.scriptureSegments({ ...schedule.row, book: saved.scriptureBook }, bible));
+  const hostSource = fs.readFileSync(path.join(projectRoot, 'src/host/host.js'), 'utf8');
+  const { scriptureSegmentSummary } = loadFunctions(hostSource, ['scriptureSegmentSummary']);
+  assert.equal(scriptureSegmentSummary(segments), '3 人較合適');
+  assert.equal(scriptureSegmentSummary([{ count: 4 }]), '1 人較合適');
+  assert.doesNotMatch(scriptureSegmentSummary([{ count: 0 }]), /1 人較合適/);
 });
 
 test('builds the announcement from the renderer implementation and current config', () => {
@@ -2973,6 +3096,7 @@ test('does not reveal Utmost footer when keyboard advances from the final Script
 });
 
 test('space toggles worship playback even when the seek bar keeps focus', () => {
+  let toggles = 0;
   let paused = false;
   let prevented = false;
   const video = {
@@ -2992,7 +3116,7 @@ test('space toggles worship playback even when the seek bar keeps focus', () => 
       flowStep: 'worship',
       worshipActive: true,
       setWorshipPlaybackDesired: () => {},
-      resumeWorshipPlayback: async () => {},
+      toggleWorshipPlayback: () => { toggles++; },
       toggleMusicPlayPause: () => assert.fail('worship space should not toggle cover music'),
       toast: () => {}
     }
@@ -3005,7 +3129,9 @@ test('space toggles worship playback even when the seek bar keeps focus', () => 
 
   assert.equal(handleSpacePlaybackToggle(event), true);
   assert.equal(prevented, true);
-  assert.equal(paused, true);
+  assert.equal(toggles, 1);
+  handleSpacePlaybackToggle({ ...event, repeat: true });
+  assert.equal(toggles, 1, 'holding Space must not toggle playback repeatedly');
 });
 
 test('treats one inertial wheel gesture as at most one reading-page action', () => {
@@ -3350,6 +3476,7 @@ test('blocks manual music controls until the cover window transition is settled'
     musicDesired: false,
     musicPlaying: false,
     musicRequestToken: 0,
+    musicFadeTimer: null,
     setMusicSwitchState: () => {},
     resolveAndPlayMusic: () => { playRequests++; },
     fadeOutMusic: () => assert.fail('inactive music should not fade')
@@ -3460,6 +3587,7 @@ test('keeps macOS background music out of the renderer audio element', async () 
 
 test('stops and releases native music when the macOS fade completes', () => {
   let tick = null;
+  let now = 0;
   const nativeActions = [];
   const audio = {
     volume: 1,
@@ -3470,6 +3598,7 @@ test('stops and releases native music when the macOS fade completes', () => {
     rendererSource,
     ['stopNativeMusic', 'fadeOutMusic'],
     {
+      Date: { now: () => now },
       $: () => audio,
       cfg: { musicVolume: 0.6 },
       USE_NATIVE_MAC_AUDIO: true,
@@ -3486,7 +3615,9 @@ test('stops and releases native music when the macOS fade completes', () => {
   );
 
   fadeOutMusic();
-  for (let i = 0; i < 20 && !nativeActions.includes('stop'); i++) tick();
+  now = 999; tick();
+  assert.equal(nativeActions.includes('stop'), false);
+  now = 1000; tick();
   assert.equal(nativeActions.at(-1), 'stop');
   assert.equal(nativeActions.includes('pause'), false, 'fade completion must release rather than pause the native output queue');
   assert.equal(audio.pauseCalls, 0);
@@ -3494,6 +3625,7 @@ test('stops and releases native music when the macOS fade completes', () => {
 
 test('keeps the Windows DOM audio source reusable after a fade', () => {
   let tick = null;
+  let now = 0;
   const nativeActions = [];
   const audio = {
     src: 'file:///D:/cache/music.mp3',
@@ -3505,6 +3637,7 @@ test('keeps the Windows DOM audio source reusable after a fade', () => {
     rendererSource,
     ['stopNativeMusic', 'fadeOutMusic'],
     {
+      Date: { now: () => now },
       $: () => audio,
       cfg: { musicVolume: 0.6 },
       USE_NATIVE_MAC_AUDIO: false,
@@ -3521,7 +3654,10 @@ test('keeps the Windows DOM audio source reusable after a fade', () => {
   );
 
   fadeOutMusic();
-  for (let i = 0; i < 20 && audio.pauseCalls === 0; i++) tick();
+  now = 500; tick();
+  assert.equal(audio.volume, 0.3);
+  assert.equal(audio.pauseCalls, 0);
+  now = 1000; tick();
   assert.equal(audio.pauseCalls, 1);
   assert.equal(audio.src, 'file:///D:/cache/music.mp3');
   assert.equal(audio.volume, 0.6);
@@ -3661,6 +3797,118 @@ test('keeps the post-Utmost silence latch when navigating back before the cover'
   assert.equal(await goFlowStep('cover'), true);
   assert.equal(playRequests, 1, 'a later flow that never reaches Utmost keeps the previous resume behavior');
 });
+
+for (const native of [false, true]) {
+  for (const input of ['click', 'space']) {
+    test(`${native ? 'Mac' : 'Windows'} music ${input} fades for one second and can cancel a pending fade`, () => {
+      let now = 0;
+      let tick;
+      let cleared = 0;
+      let volume = 0.6;
+      let stops = 0;
+      const audio = { volume, pause() { stops++; } };
+      const controls = loadFunctions(rendererSource,
+        ['toggleMusic', 'toggleMusicPlayPause', 'handleSpacePlaybackToggle', 'fadeOutMusic'], {
+          $: (id) => id === 'bgAudio' ? audio : { classList: { contains: () => true } },
+          Date: { now: () => now },
+          cfg: { musicVolume: 0.6, musicUrl: 'file:///music.mp3' },
+          USE_NATIVE_MAC_AUDIO: native,
+          flowStep: 'cover', flowTransitioning: false, worshipActive: false,
+          musicDesired: true, musicPlaying: true, musicFadeTimer: null,
+          musicRequestToken: 0, musicResumeOnCover: false,
+          isMainCover: () => true,
+          setMusicSwitchState() {},
+          setInterval(callback) { tick = callback; return 1; },
+          clearInterval() { cleared++; },
+          sendNativeAudio(_channel, _action, payload) { volume = payload.volume; },
+          stopNativeMusic() { stops++; },
+          resolveAndPlayMusic() { assert.fail('a pending fade should resume without restarting'); }
+        });
+      const toggle = () => input === 'click' ? controls.toggleMusic() : controls.handleSpacePlaybackToggle({
+        code: 'Space', target: { tagName: 'BODY' }, preventDefault() {}
+      });
+      toggle();
+      now = 500; tick();
+      assert.equal(native ? volume : audio.volume, 0.3);
+      assert.equal(stops, 0);
+      toggle();
+      assert.equal(cleared, 1);
+      assert.equal(native ? volume : audio.volume, 0.6);
+      toggle();
+      now = 1499; tick();
+      assert.equal(stops, 0);
+      now = 1500; tick();
+      assert.equal(stops, 1);
+    });
+
+    test(`${native ? 'Mac' : 'Windows'} worship ${input} fades, resumes and keeps a seek paused`, async () => {
+      let now = 0;
+      let tick;
+      let nativeVolume = 1;
+      let desired = true;
+      let cleared = 0;
+      const elements = {};
+      const element = () => ({
+        listeners: {},
+        addEventListener(type, handler) { this.listeners[type] = handler; },
+        classList: { contains: () => true, add() {}, remove() {} }
+      });
+      for (const id of ['worshipVideo', 'wSeek', 'wPlay', 'worshipControls', 'wBackTop', 'wReturn', 'worshipLoading', 'settingsPanel']) {
+        elements[id] = element();
+      }
+      const video = Object.assign(elements.worshipVideo, {
+        volume: 1, paused: false, currentTime: 24,
+        pause() { this.paused = true; },
+        async play() { this.paused = false; }
+      });
+      const controls = loadFunctions(rendererSource, [
+        'setupWorshipControls', 'handleSpacePlaybackToggle', 'toggleWorshipPlayback',
+        'fadeOutWorship', 'cancelWorshipFade', 'resumeWorshipPlayback', 'beginWorshipSeek'
+      ], {
+        $: (id) => elements[id], Date: { now: () => now },
+        USE_NATIVE_MAC_AUDIO: native, worshipActive: true, flowStep: 'worship',
+        worshipFadeTimer: null, worshipSeeking: false, worshipSeekResumeAfterCommit: false,
+        setWorshipPlaybackDesired(value) { desired = value; },
+        setWorshipPlayState() {}, resetWorshipSeekState() {},
+        setInterval(callback) { tick = callback; return 1; },
+        clearInterval() { cleared++; },
+        stopNativeWorshipAudio() {},
+        sendNativeAudio(_channel, _action, payload) { nativeVolume = payload.volume; },
+        async loadNativeWorshipAudio(position) {
+          assert.equal(position, 24);
+          nativeVolume = 1;
+          return { ok: true };
+        },
+        toast(message) { assert.fail(message); }
+      });
+      controls.setupWorshipControls();
+      const toggle = () => input === 'click' ? elements.wPlay.listeners.click() : controls.handleSpacePlaybackToggle({
+        code: 'Space', target: { tagName: 'BODY' }, preventDefault() {}
+      });
+      await toggle();
+      assert.equal(desired, false, 'automatic recovery must not undo a requested pause');
+      now = 500; tick();
+      assert.equal(native ? nativeVolume : video.volume, 0.5);
+      assert.equal(video.paused, false);
+      await toggle();
+      await new Promise(setImmediate);
+      assert.equal(cleared, 1);
+      assert.equal(desired, true);
+      assert.equal(native ? nativeVolume : video.volume, 1);
+      await toggle();
+      now = 1499; tick();
+      assert.equal(video.paused, false);
+      now = 1500; tick();
+      assert.equal(video.paused, true);
+      await toggle();
+      await new Promise(setImmediate);
+      await toggle();
+      controls.beginWorshipSeek(video);
+      assert.equal(video.paused, true, 'seeking during a requested pause must not resume playback');
+      assert.equal(cleared, 3, 'seeking must cancel the pending fade timer');
+    });
+  }
+}
 
 async function runTests() {
   let passed = 0;

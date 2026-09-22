@@ -13,6 +13,34 @@ const {
 } = require('../src/presence');
 
 const root = path.join(__dirname, '..');
+const devotionalDate = require('../src/devotional-date');
+
+test('switches the devotional date at 17:30 and keeps it through midnight and calendar boundaries', () => {
+  for (const [instant, expected] of [
+    ['2026-09-22T09:29:59.999Z', '2026-09-22'],
+    ['2026-09-22T09:30:00.000Z', '2026-09-23'],
+    ['2026-09-22T15:59:59.999Z', '2026-09-23'],
+    ['2026-09-22T16:00:00.000Z', '2026-09-23'],
+    ['2026-09-23T00:30:00.000Z', '2026-09-23'],
+    ['2026-09-30T09:30:00.000Z', '2026-10-01'],
+    ['2026-12-31T09:30:00.000Z', '2027-01-01'],
+    ['2028-02-28T09:30:00.000Z', '2028-02-29'],
+    ['2028-02-29T09:30:00.000Z', '2028-03-01']
+  ]) assert.equal(devotionalDate.dateKey(new Date(instant)), expected, instant);
+  assert.equal(devotionalDate.dateParts(new Date('2026-09-22T16:00:00Z')).hour, 0);
+});
+
+test('expires current-day schedule at 17:30 even when its five-minute TTL has not elapsed', () => {
+  const before = new Date('2026-09-22T09:29:00Z');
+  const boundary = new Date('2026-09-22T09:30:00Z');
+  const current = createScheduleCacheEntry({ date: '2026-09-22', ok: true, found: true }, before);
+  assert.ok(validScheduleCache(current, before));
+  assert.equal(validScheduleCache(current, boundary), null);
+  assert.equal(createScheduleCacheEntry({ date: '2026-09-22' }, boundary), null);
+  assert.ok(createScheduleCacheEntry({ date: '2026-09-23' }, boundary));
+  const late = createScheduleCacheEntry({ date: '2026-09-23' }, new Date('2026-09-22T15:59:00Z'));
+  assert.ok(validScheduleCache(late, new Date('2026-09-22T16:01:00Z')));
+});
 
 test('expires presence schedule cache after five minutes or a Taipei date change', () => {
   const now = new Date('2026-08-25T01:00:00.000Z');
@@ -153,6 +181,60 @@ test('does not warn when different members only share surname plus first given-n
   assert.deepEqual(matchRosterMemberIds(matcher, '嘉義活水-李淑玲'), ['24']);
   assert.deepEqual(matchRosterMemberIds(matcher, '李淑貞'), ['34']);
   assert.deepEqual(matchRosterMemberIds(matcher, '施怡君'), ['35']);
+});
+
+test('does not identify an unlisted 詹秀琴 as 秀珠 through their surname prefix', () => {
+  const roster = [{
+    memberId: '8', name: '秀珠阿姨', aliases: ['詹秀珠', '活水-詹秀珠'],
+    canReadScripture: true, canReadUtmost: true, enabled: true, order: 8
+  }];
+  const matcher = buildRosterMatcher(roster);
+  assert.equal(matcher.matchByHanToken.has('詹秀'), false);
+  for (const displayName of ['詹秀琴', '活水-詹秀琴', '嘉義活水詹秀琴', '秀琴 的 A56', '詹秀']) {
+    const derived = deriveRosterPresence({ status: 'active', participants: [{ sessionId: 'q', displayName }] }, roster);
+    assert.deepEqual(derived.participants[0].memberIds, [], displayName);
+    assert.deepEqual(derived.onlineMembers, [], displayName);
+    assert.deepEqual(derived.scriptureCandidates, [], displayName);
+    assert.deepEqual(derived.utmostCandidates, [], displayName);
+  }
+  for (const displayName of ['詹秀珠', '活水-詹秀珠', '嘉義活水詹秀珠', '秀珠 的 iPhone']) {
+    assert.deepEqual(matchRosterMemberIds(matcher, displayName), ['8'], displayName);
+  }
+  const both = deriveRosterPresence({ status: 'active', participants: [
+    { sessionId: 'z', displayName: '詹秀珠' }, { sessionId: 'q', displayName: '詹秀琴' }
+  ] }, roster);
+  assert.deepEqual(both.participants.map((participant) => participant.memberIds), [['8'], []]);
+  // After 秀珠 leaves, 秀琴 must not keep her marked online.
+  assert.deepEqual(deriveRosterPresence({ status: 'active', participants: [both.participants[1]] }, roster).onlineMembers, []);
+});
+
+test('keeps surname-prefix lookalikes separate when both people are registered', () => {
+  const matcher = buildRosterMatcher([
+    { memberId: 'z', name: '秀珠阿姨', aliases: ['詹秀珠'], enabled: true },
+    { memberId: 'q', name: '秀琴阿姨', aliases: ['詹秀琴'], enabled: true }
+  ]);
+  assert.deepEqual(matchRosterMemberIds(matcher, '活水-詹秀珠'), ['z']);
+  assert.deepEqual(matchRosterMemberIds(matcher, '活水-詹秀琴'), ['q']);
+  assert.deepEqual(matchRosterMemberIds(matcher, '秀琴 的 A56'), ['q']);
+  assert.deepEqual(matcher.errors, []);
+});
+
+test('requires a supplied surname to agree with 淑貞 registered aliases', () => {
+  const roster = [
+    { memberId: '24', name: '淑玲阿姨', aliases: ['嘉義活水-李淑玲'], enabled: true },
+    { memberId: '34', name: '淑貞阿姨', aliases: ['李淑貞'], enabled: true, canReadScripture: true }
+  ];
+  const matcher = buildRosterMatcher(roster);
+  for (const name of ['陳淑貞', '活水-陳淑貞', '林淑貞的iPhone', '詹淑貞', '李淑珍']) {
+    assert.deepEqual(matchRosterMemberIds(matcher, name), [], name);
+  }
+  for (const name of ['李淑貞', '活水-李淑貞', '嘉義活水李淑貞', '淑貞 的 iPhone', '老師淑貞']) {
+    assert.deepEqual(matchRosterMemberIds(matcher, name), ['34'], name);
+  }
+  assert.deepEqual(matchRosterMemberIds(matcher, '嘉義活水-李淑玲'), ['24']);
+  assert.deepEqual(deriveRosterPresence({ status: 'active', participants: [
+    { sessionId: 'other', displayName: '陳淑貞' }
+  ] }, roster).scriptureCandidates, []);
 });
 
 test('allows an explicit shared Zoom account name to mark multiple roster members online', () => {

@@ -325,7 +325,7 @@ export class MeetingPresence {
     let body;
     try { body = await request.json(); } catch { return json({ ok: false, error: '安排資料格式錯誤' }, 400); }
     const today = isoDateAt(new Date(), this.env.APP_TIME_ZONE || 'Asia/Taipei');
-    if (String(body.date || '') !== today) return json({ ok: false, error: '只能更新今天的閱讀安排' }, 400);
+    if (String(body.date || '') !== today) return json({ ok: false, error: '只能更新目前靈修日期的閱讀安排（每日 17:30 切換至隔天）' }, 400);
     const history = await this.ctx.storage.get('assignmentHistory') || {};
     const scripture = validMemberIds(body.scripture, 20);
     const utmost = validMemberIds(body.utmost, 4);

@@ -12,6 +12,7 @@ const sourceFiles = [
   'package-lock.json',
   'electron-builder.yml',
   'build/entitlements.mac.plist',
+  'build/installer.nsh',
   'README.md',
   '.github/workflows/ci.yml',
   '.github/workflows/build-mac.yml',
@@ -32,6 +33,7 @@ const sourceFiles = [
   'src/presence.js',
   'src/presence-shared.js',
   'src/assignment-shared.js',
+  'src/devotional-date.js',
   'src/host/host-preload.js',
   'src/host/host.js',
   'src/host/index.html',
@@ -416,6 +418,7 @@ const packageJson = JSON.parse(read('package.json'));
 const packageLock = JSON.parse(read('package-lock.json'));
 const ciWorkflow = read('.github/workflows/ci.yml');
 const builderConfig = read('electron-builder.yml');
+const windowsInstallerInclude = read('build/installer.nsh');
 const setupMac = read('scripts/setup-mac.sh');
 assert.match(setupMac, /native\/macos\/main\.swift/, 'macOS helper setup must compile the reviewed native source');
 assert.equal(packageJson.version, packageLock.version, 'package and lockfile versions must match');
@@ -431,6 +434,14 @@ assert.match(
   /^\s*artifactName:\s*lingxiu-cover-setup-\$\{version\}\.\$\{ext\}\s*$/m,
   'Windows installer filename must match the ASCII path written to latest.yml'
 );
+assert.match(builderConfig, /^\s*include:\s*build\/installer\.nsh\s*$/m, 'Windows NSIS build must load the custom shortcut restore hook');
+assert.match(builderConfig, /^\s*createDesktopShortcut:\s*always\s*$/m, 'Windows manual reinstalls must recreate the desktop shortcut');
+assert.match(
+  windowsInstallerInclude,
+  /!macro customInstall[\s\S]*CreateShortCut "\$newDesktopLink" "\$appExe"[\s\S]*WinShell::SetLnkAUMI "\$newDesktopLink" "\$\{APP_ID\}"/,
+  'Windows installer must restore a missing desktop shortcut after auto-update'
+);
+assert.doesNotMatch(windowsInstallerInclude, /\$\{isUpdated\}/, 'shortcut restore hook must also run during silent updates');
 assert.match(
   setupMac,
   /\[\[ "\$ffmpeg_version_line" != ffmpeg\\ version\\ \* \]\]/,

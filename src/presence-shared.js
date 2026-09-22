@@ -63,7 +63,7 @@
     return origins;
   }
 
-  function isLikelySurnamePrefixDuplicate(token, memberIds, tokenOrigins) {
+  function isLikelySurnamePrefix(token, memberIds, tokenOrigins) {
     const characters = Array.from(token);
     if (characters.length !== 2 || !COMMON_SINGLE_CHINESE_SURNAMES.has(characters[0])) return false;
     for (const memberId of memberIds) {
@@ -84,6 +84,31 @@
       if (!right.has(item)) return false;
     }
     return true;
+  }
+
+  function surnamesBeforeToken(value, token) {
+    const surnames = [];
+    for (const run of normalizeDisplayName(value).match(/[\p{Script=Han}]+/gu) || []) {
+      const characters = Array.from(run);
+      for (let index = 0; index < characters.length - 1; index += 1) {
+        if (characters[index] + characters[index + 1] !== token) continue;
+        const prefix = characters.slice(0, index).join('');
+        const preceding = characters[index - 1];
+        const followsTitle = HONORIFIC_SUFFIXES.some((title) => prefix.endsWith(title));
+        surnames.push(!followsTitle && COMMON_SINGLE_CHINESE_SURNAMES.has(preceding) ? preceding : '');
+      }
+    }
+    return surnames;
+  }
+
+  function nameTokenMatchesMember(member, token, displayName) {
+    if (!member) return false;
+    const labels = [member.name, ...(Array.isArray(member.aliases) ? member.aliases : [])];
+    const registeredSurnames = new Set(labels.flatMap((label) => surnamesBeforeToken(label, token)).filter(Boolean));
+    if (!registeredSurnames.size) return true;
+    // Short given names remain supported. A supplied surname must agree with
+    // a registered name/alias: 陳淑貞 cannot stand in for 李淑貞.
+    return surnamesBeforeToken(displayName, token).some((surname) => !surname || registeredSurnames.has(surname));
   }
 
   function sharedAccountDisplayName(value) {
@@ -154,10 +179,15 @@
     }
     const matchByHanToken = new Map();
     for (const [token, memberIds] of tokenClaims) {
-      if (memberIds.size === 1) matchByHanToken.set(token, [...memberIds][0]);
+      // A surname plus the first given-name character cannot identify a person,
+      // even when the other person (e.g. 詹秀琴 vs 詹秀珠) is absent from the roster.
+      const surnamePrefix = isLikelySurnamePrefix(token, memberIds, tokenClaimOrigins.get(token) || new Map());
+      if (memberIds.size === 1) {
+        if (!surnamePrefix) matchByHanToken.set(token, [...memberIds][0]);
+      }
       else if (
         !sameStringSet(suppressedSharedTokenClaims.get(token), memberIds) &&
-        !isLikelySurnamePrefixDuplicate(token, memberIds, tokenClaimOrigins.get(token) || new Map())
+        !surnamePrefix
       ) {
         errors.push(duplicateMessage('姓名片段重複', token, memberIds));
       }
@@ -176,7 +206,9 @@
 
     const memberIds = new Set();
     for (const [token, memberId] of matcher.matchByHanToken) {
-      if (normalizedName.includes(token)) memberIds.add(memberId);
+      if (normalizedName.includes(token) && nameTokenMatchesMember(matcher.membersById.get(memberId), token, normalizedName)) {
+        memberIds.add(memberId);
+      }
       if (memberIds.size > 1) return [];
     }
     return memberIds.size === 1 ? [...memberIds] : [];

@@ -5,6 +5,13 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.AssignmentShared = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, () => {
+  function findBibleBook(name, bible) {
+    const aliases = { 約翰壹書: '約翰一書', 約翰貳書: '約翰二書', 約翰參書: '約翰三書' };
+    const normalized = String(name || '').normalize('NFKC').replace(/\s+/g, '');
+    const canonical = aliases[normalized] || normalized;
+    return (Array.isArray(bible) ? bible : []).find((book) => book && book.n === canonical) || null;
+  }
+
   function smartSegmentSizes(totalVerses) {
     const total = Math.max(0, Math.floor(Number(totalVerses) || 0));
     if (!total) return [];
@@ -38,7 +45,7 @@
     const endCh = Number(row.endCh);
     const endV = Number(row.endV);
     if (![startCh, startV, endCh, endV].every(Number.isInteger) || startCh < 1 || startV < 1 || endCh < startCh) return [];
-    const book = (Array.isArray(bible) ? bible : []).find((item) => String(item && item.n) === String(row.book || ''));
+    const book = findBibleBook(row.book, bible);
     if (!book && startCh === endCh && endV >= startV) {
       return Array.from({ length: endV - startV + 1 }, (_value, index) => ({ chapter: startCh, verse: startV + index }));
     }
@@ -105,5 +112,5 @@
     return segments;
   }
 
-  return { smartSegmentSizes, scriptureVerseUnits, scriptureSegments, utmostParagraphSegments };
+  return { findBibleBook, smartSegmentSizes, scriptureVerseUnits, scriptureSegments, utmostParagraphSegments };
 });

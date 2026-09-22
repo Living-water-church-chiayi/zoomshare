@@ -55,11 +55,7 @@ function formatShortDate(value) {
 }
 
 function taipeiDateKey(now = new Date()) {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit'
-  }).formatToParts(now);
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
+  return DevotionalDate.dateKey(now);
 }
 
 function resetDailyAssignments() {
@@ -71,7 +67,11 @@ function resetDailyAssignments() {
 
 function ensureCurrentHostDate() {
   const today = taipeiDateKey();
-  if (currentHostDateKey && currentHostDateKey !== today) resetDailyAssignments();
+  if (currentHostDateKey && currentHostDateKey !== today) {
+    clearTimeout(saveTimer);
+    resetDailyAssignments();
+    utmostBody = '';
+  }
   currentHostDateKey = today;
   return today;
 }
@@ -85,6 +85,8 @@ function friendlySyncError(value) {
 function validScriptureConfig(value) {
   if (!value || typeof value !== 'object') return null;
   const config = {
+    date: String(value.date || ''),
+    scheduleEnabled: value.scheduleEnabled !== false,
     book: String(value.book || '').trim(),
     startCh: Number(value.startCh),
     startV: Number(value.startV),
@@ -101,6 +103,12 @@ function scriptureReference(value) {
   if (!row || !row.book) return '';
   const end = Number(row.startCh) === Number(row.endCh) ? String(row.endV) : `${row.endCh}:${row.endV}`;
   return `${row.book} ${row.startCh}:${row.startV}–${end}`;
+}
+
+function scriptureSegmentSummary(segments) {
+  return segments.length && segments.every((segment) => segment.count > 0)
+    ? `${segments.length} 人較合適`
+    : '無法確認分段・請更新今日進度';
 }
 
 function assignmentStats(memberId) {
@@ -368,7 +376,11 @@ function renderState(state) {
   currentMeetingUuid = snapshot.status === 'active' ? snapshot.meetingUuid : '';
   if (snapshot.status === 'active') hydrateAssignments(state);
 
-  const scriptureSource = state.schedule || currentScriptureConfig;
+  const today = taipeiDateKey();
+  const scriptureSource = state.schedule && state.schedule.date === today && state.schedule.found
+    ? state.schedule
+    : (currentScriptureConfig && (!currentScriptureConfig.scheduleEnabled || currentScriptureConfig.date === today)
+      ? currentScriptureConfig : null);
   currentScriptureSegments = scriptureSegments(scriptureSource, window.BIBLE);
   if (!currentScriptureSegments.length) currentScriptureSegments = [{ label: '今日經文範圍待確認', count: 0, active: true }];
   currentUtmostSegments = utmostParagraphSegments(utmostBody, 4);
@@ -389,7 +401,7 @@ function renderState(state) {
   $('onlineCount').textContent = hasMeetingSummary ? `本次會議最高 ${peakParticipants} 人在線` : '0 人在線';
   $('allOnlineCount').textContent = String(derived.participants.length);
   const reference = scriptureReference(scriptureSource);
-  $('scriptureRangeSummary').textContent = `${reference ? `${reference}・` : ''}${currentScriptureSegments.length > 1 ? `${currentScriptureSegments.length} 人較合適` : '1 人較合適'}`;
+  $('scriptureRangeSummary').textContent = `${reference ? `${reference}・` : ''}${scriptureSegmentSummary(currentScriptureSegments)}`;
   const paragraphCount = currentUtmostSegments.reduce((sum, item) => sum + Number(item.count || 0), 0);
   $('utmostParagraphSummary').textContent = paragraphCount ? `共 ${paragraphCount} 段・最多 4 人` : '保留 4 個名額';
 
@@ -419,9 +431,11 @@ function assignmentPayload() {
 
 function queueSaveAssignments() {
   clearTimeout(saveTimer);
+  const payload = assignmentPayload();
   saveTimer = setTimeout(async () => {
+    if (payload.date !== taipeiDateKey()) return;
     try {
-      const state = await window.hostApi.saveAssignments(assignmentPayload());
+      const state = await window.hostApi.saveAssignments(payload);
       renderState(state);
     } catch (error) {
       showNotice(error.message || '無法記錄閱讀安排');
@@ -501,12 +515,14 @@ function activateAssignment(event) {
 }
 
 async function loadUtmostParagraphs() {
+  const dateKey = taipeiDateKey();
   try {
     const result = await window.hostApi.utmostToday();
+    if (dateKey !== taipeiDateKey()) return;
     if (result && result.ok) utmostBody = String(result.body || '');
-    else $('utmostParagraphSummary').textContent = '內容尚未取得・保留 4 個名額';
+    else utmostBody = '';
   } catch {
-    $('utmostParagraphSummary').textContent = '內容尚未取得・保留 4 個名額';
+    utmostBody = '';
   }
   if (currentState) renderState(currentState);
 }
@@ -570,6 +586,12 @@ async function init() {
   currentScriptureConfig = validScriptureConfig(scripture);
   renderState(state);
   loadUtmostParagraphs();
+  setInterval(() => {
+    if (currentHostDateKey !== taipeiDateKey()) {
+      if (currentState) renderState(currentState);
+      refreshHostDailyData().catch(() => {});
+    }
+  }, 1000);
   window.addEventListener('focus', () => refreshHostDailyData().catch(() => {}));
   window.addEventListener('pageshow', () => refreshHostDailyData().catch(() => {}));
   document.addEventListener('visibilitychange', () => {

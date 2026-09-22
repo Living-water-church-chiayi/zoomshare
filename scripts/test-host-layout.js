@@ -7,9 +7,7 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 
 const projectRoot = path.join(__dirname, '..');
 app.commandLine.appendSwitch('disable-gpu');
-const today = new Intl.DateTimeFormat('en-CA', {
-  timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit'
-}).format(new Date());
+const today = require('../src/devotional-date').dateKey();
 
 const roster = [
   { memberId: 'reader', name: '王小明', aliases: ['Amy 王'], canReadScripture: true, canReadUtmost: true, enabled: true, order: 1 },
@@ -26,7 +24,7 @@ let state = {
   fetchedAt: new Date().toISOString(),
   roster,
   rosterErrors: [],
-  schedule: { ok: true, found: true, row: { book: 'Test', startCh: 1, startV: 9, endCh: 1, endV: 21 } },
+  schedule: { ok: true, found: true, date: today, row: { book: '約翰壹書', startCh: 1, startV: 1, endCh: 2, endV: 6 } },
   utmostSharing: { found: true, date: today, sharer: '今日分享者', next: null, error: '' },
   assignmentStats: {
     date: today, weekStart: today, yesterday: '', memberStats: {},
@@ -186,7 +184,7 @@ async function run() {
     details: document.querySelector('#scriptureEligibleList .candidate-button small').textContent
   }))()`);
   assert.equal(inlineCandidates.modalRemoved, true);
-  assert.match(inlineCandidates.target, /9–13/);
+  assert.match(inlineCandidates.target, /1:1–5/);
   assert.equal(inlineCandidates.candidateCount, 1);
   assert.doesNotMatch(inlineCandidates.details, /昨天沒有讀/);
   assert.match(inlineCandidates.details, /本週/);

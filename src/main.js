@@ -14,6 +14,7 @@ const { promisify } = require('util');
 const execFileP = promisify(execFile);
 const { autoUpdater } = require('electron-updater');
 const { PresenceManager } = require('./presence');
+const DevotionalDate = require('./devotional-date');
 
 const presenceManager = new PresenceManager();
 const APP_ICON_PATH = path.join(__dirname, 'renderer', 'images', 'app-icon.png');
@@ -543,14 +544,8 @@ const BIBLE_GATEWAY_BOOKS = {
   約翰一書: '1 John', 約翰二書: '2 John', 約翰三書: '3 John', 猶大書: 'Jude', 啟示錄: 'Revelation'
 };
 function datePartsInAppTimeZone(date = new Date()) {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Taipei',
-    year: 'numeric',
-    month: 'numeric',
-    day: 'numeric'
-  }).formatToParts(date);
-  const values = Object.fromEntries(parts.map((part) => [part.type, Number.parseInt(part.value, 10)]));
-  return { year: values.year, month: values.month, day: values.day };
+  const { year, month, day } = DevotionalDate.dateParts(date);
+  return { year, month, day };
 }
 
 function appDateKey(date = new Date()) {
@@ -612,11 +607,14 @@ function parseUtmostHtml(html, source) {
   return { ok: !!cleanBody, date, title, reading, verse, body: cleanBody, source, error: cleanBody ? '' : '今天的竭誠獻上內容還沒有抓到' };
 }
 
-async function fetchUtmostToday() {
+async function fetchUtmostToday(now = new Date()) {
   const base = 'https://traditional-utmost.org/';
   const stamp = Date.now();
-  const today = todayChineseDate();
+  const today = todayChineseDate(now);
+  const { month, day } = datePartsInAppTimeZone(now);
   const urls = [
+    // The site's recurring devotional calendar uses its 2020 archive, including February 29.
+    `${base}2020/${String(month).padStart(2, '0')}/${String(day).padStart(2, '0')}/?calendar-redirect=true&post-type=post`,
     `${base}?today=${encodeURIComponent(today)}&t=${stamp}`,
     `${base}?t=${stamp}`,
     base
@@ -639,7 +637,7 @@ async function fetchUtmostToday() {
       error: `竭誠獻上網站仍回傳 ${best.date}，尚未更新到 ${today}`
     };
   }
-  return best || {
+  return {
     ok: false, date: '', title: '', reading: '', verse: '', body: '', source: base,
     error: lastError ? `讀取竭誠獻上失敗：${lastError.message}` : '今天的竭誠獻上內容還沒有抓到'
   };
@@ -1089,13 +1087,13 @@ function isYtDlpForbiddenError(error) {
 
 function ytDlpForbiddenMessage(error, updateResult, retriedAfterUpdate = false) {
   const base = String(error && error.message ? error.message : error || 'YouTube 回傳 403 Forbidden');
-  let detail = 'yt-dlp 已是最新版本，仍收到 YouTube 403。';
+  let detail = '這是 YouTube 拒絕媒體下載請求（HTTP 403），不是 macOS 軟體更新檔下載失敗。yt-dlp 已是最新版本。';
   if (updateResult && updateResult.updated) {
-    detail = `已自動更新 yt-dlp 至 ${updateResult.to} 後重試，仍收到 YouTube 403。`;
+    detail = `這是 YouTube 拒絕媒體下載請求（HTTP 403），不是 macOS 軟體更新檔下載失敗。已自動更新 yt-dlp 至 ${updateResult.to} 後重試，仍被 YouTube 拒絕。`;
   } else if (updateResult && updateResult.error) {
-    detail = `嘗試自動更新 yt-dlp 失敗：${updateResult.error}。`;
+    detail = `這是 YouTube 拒絕媒體下載請求（HTTP 403），不是 macOS 軟體更新檔下載失敗。嘗試自動更新 yt-dlp 失敗：${updateResult.error}。`;
   } else if (retriedAfterUpdate) {
-    detail = '已重新嘗試下載，仍收到 YouTube 403。';
+    detail = '這是 YouTube 拒絕媒體下載請求（HTTP 403），不是 macOS 軟體更新檔下載失敗。已重新嘗試下載，仍被 YouTube 拒絕。';
   }
   return new Error(`${base}\n${detail}請稍後再試，或先降低敬拜影片畫質。`);
 }
@@ -1441,6 +1439,7 @@ function sanitizeConfig(input) {
     title3: boundedString(value.title3, DEFAULT_CONFIG.title3, 200),
     scriptureLabel: boundedString(value.scriptureLabel, DEFAULT_CONFIG.scriptureLabel, 100),
     scriptureBook: book,
+    scriptureDateKey: /^\d{4}-\d{2}-\d{2}$/.test(String(value.scriptureDateKey || '')) ? value.scriptureDateKey : '',
     scriptureStartCh: startCh,
     scriptureStartV: startV,
     scriptureEndCh: endCh,
@@ -2552,6 +2551,8 @@ function sendPresenceState(state = presenceManager.publicState()) {
 
 function scriptureConfigFrom(cfg) {
   return {
+    date: String(cfg && cfg.scriptureDateKey || ''),
+    scheduleEnabled: !cfg || cfg.scheduleEnabled !== false,
     book: String(cfg && cfg.scriptureBook || '').trim().slice(0, 40),
     startCh: Number(cfg && cfg.scriptureStartCh),
     startV: Number(cfg && cfg.scriptureStartV),

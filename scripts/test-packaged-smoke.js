@@ -150,6 +150,15 @@ async function run() {
     assert.equal(state.hasFlowContent, true, 'Packaged renderer is missing the reading content container');
     assert.equal(state.hasPageControls, true, 'Packaged renderer is missing reading navigation controls');
     assert.equal(state.platformClass, true, 'Packaged renderer initialization did not finish');
+    const preparationDates = await evaluate(page, `(() => ({
+      before: appDateKey(new Date('2026-09-22T09:29:59Z')),
+      after: appDateKey(new Date('2026-09-22T09:30:00Z')),
+      midnight: appDateKey(new Date('2026-09-22T16:00:00Z')),
+      label: systemDateMD(new Date('2026-09-22T09:30:00Z'))
+    }))()`);
+    assert.deepEqual(preparationDates, {
+      before: '2026-09-22', after: '2026-09-23', midnight: '2026-09-23', label: '9/23'
+    }, 'Packaged renderer must switch all daily dates at 17:30');
 
     await evaluate(page, `document.getElementById('btnHost').click()`);
     const hostPage = await waitForTarget(port, child, /host[\\/]index\.html(?:$|[?#])/);
@@ -170,6 +179,17 @@ async function run() {
     assert.match(hostState.title, /主持/, 'Packaged host console title is incorrect');
     assert.equal(hostState.setupVisible, true, 'Fresh packaged host console should show device pairing');
     assert.equal(hostState.hasPrivateLists, true, 'Packaged host console is missing candidate lists');
+    assert.equal(await evaluate(hostPage, `taipeiDateKey(new Date('2026-09-22T09:30:00Z'))`), '2026-09-23',
+      'Packaged host must use the same preparation date as the renderer');
+    const nameMatches = await evaluate(hostPage, `(() => {
+      const matcher = window.PresenceShared.buildRosterMatcher([
+        { memberId: 'z', name: '秀珠阿姨', aliases: ['詹秀珠', '活水-詹秀珠'], enabled: true },
+        { memberId: 's', name: '淑貞阿姨', aliases: ['李淑貞'], enabled: true }
+      ]);
+      return ['詹秀珠', '詹秀琴', '李淑貞', '陳淑貞'].map((name) =>
+        window.PresenceShared.matchRosterMemberIds(matcher, name));
+    })()`);
+    assert.deepEqual(nameMatches, [['z'], [], ['s'], []], 'Packaged host must reject surname-prefix and conflicting-surname matches');
     console.log(`Packaged Electron smoke passed: ${path.basename(executable)}`);
   } finally {
     stopProcessTree(child);

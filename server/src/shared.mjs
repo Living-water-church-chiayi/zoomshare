@@ -1,3 +1,5 @@
+import DevotionalDate from '../../src/devotional-date.js';
+
 const textEncoder = new TextEncoder();
 
 export function normalizeMeetingNumber(value) {
@@ -117,14 +119,8 @@ function chineseNumber(value) {
 }
 
 export function datePartsInTimeZone(date = new Date(), timeZone = 'Asia/Taipei') {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    year: 'numeric',
-    month: 'numeric',
-    day: 'numeric'
-  }).formatToParts(date);
-  const values = Object.fromEntries(parts.map((part) => [part.type, Number.parseInt(part.value, 10)]));
-  return { year: values.year, month: values.month, day: values.day };
+  const { year, month, day } = DevotionalDate.dateParts(date, timeZone);
+  return { year, month, day };
 }
 
 function isoDate(year, month, day) {

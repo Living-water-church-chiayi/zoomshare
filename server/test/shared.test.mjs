@@ -11,6 +11,7 @@ import {
   snapshotFromMeeting
 } from '../src/shared.mjs';
 import { MeetingPresence, verifiedZoomEvent } from '../src/index.mjs';
+import DevotionalDate from '../../src/devotional-date.js';
 
 test('normalizes names without fuzzy matching', () => {
   assert.equal(normalizePersonName('  Ａmy   王  '), 'amy 王');
@@ -52,6 +53,41 @@ test('parses exact-year and recurring schedule rows in Taipei time', () => {
     date: '2026-07-20',
     row: { book: '提摩太前書', startCh: 5, startV: 1, endCh: 5, endV: 25 }
   });
+});
+
+test('uses the next devotional day for both scripture and sharing after 17:30', () => {
+  const now = new Date('2026-09-22T09:30:00Z');
+  const schedule = parseScheduleRows([
+    ['9/22', '約翰壹書', '1', '1', '2', '6'],
+    ['9/23', '約翰壹書', '2', '7', '2', '29']
+  ], now);
+  assert.equal(schedule.date, '2026-09-23');
+  assert.equal(schedule.row.startV, 7);
+  const sharing = parseUtmostSharingRows([[null, '9月22日', '今天', null, '9月23日', '明天']], now);
+  assert.equal(sharing.date, schedule.date);
+  assert.equal(sharing.sharer, '明天');
+  assert.equal(parseScheduleRows([['9/22', '約翰壹書', '1', '1', '2', '6']], now).found, false);
+});
+
+test('saves evening preparation on tomorrow and retains it after midnight', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-09-22T09:30:00Z') });
+  const values = new Map();
+  const presence = new MeetingPresence({ storage: {
+    get: async (key) => values.get(key),
+    put: async (key, value) => { values.set(key, value); }
+  } }, {});
+  presence.authorizedDevice = async () => ({ deviceId: 'host' });
+  const request = (date) => new Request('https://example.com/v1/assignments', {
+    method: 'POST', body: JSON.stringify({ date, scripture: ['reader'], utmost: [] })
+  });
+  assert.equal((await presence.recordAssignments(request('2026-09-22'))).status, 400);
+  const response = await presence.recordAssignments(request('2026-09-23'));
+  assert.equal(response.status, 200);
+  assert.deepEqual(Object.keys(values.get('assignmentHistory')), ['2026-09-23']);
+  t.mock.timers.setTime(new Date('2026-09-22T16:00:00Z').getTime());
+  const summary = await presence.assignmentSummary('host');
+  assert.equal(summary.date, '2026-09-23');
+  assert.deepEqual(summary.currentAssignment.scripture, ['reader']);
 });
 
 test('finds today and the next Utmost sharing assignment in horizontal week columns', () => {
@@ -253,11 +289,8 @@ test('summarizes shared reading history without storing participant names', asyn
 });
 
 test('merges current daily data into a stale bootstrap when the roster bridge is unauthorized', async () => {
-  const dateParts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit'
-  }).formatToParts(new Date());
-  const valuesByType = Object.fromEntries(dateParts.map((part) => [part.type, part.value]));
-  const today = `${valuesByType.year}-${valuesByType.month}-${valuesByType.day}`;
+  const valuesByType = DevotionalDate.dateParts();
+  const today = DevotionalDate.dateKey();
   const csvDate = `${Number(valuesByType.month)}/${Number(valuesByType.day)}`;
   const values = new Map([
     ['bootstrapCache', {

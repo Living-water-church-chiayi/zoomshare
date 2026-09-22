@@ -6,6 +6,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const WebSocket = require('ws');
+const DevotionalDate = require('./devotional-date');
 
 const EMPTY_SNAPSHOT = Object.freeze({ status: 'idle', meetingNumber: '', meetingUuid: '', peakParticipants: 0, participants: [] });
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -13,14 +14,7 @@ const SCHEDULE_CACHE_TTL_MS = 5 * 60 * 1000;
 const APP_TIME_ZONE = 'Asia/Taipei';
 
 function appDateKey(date = new Date()) {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: APP_TIME_ZONE,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit'
-  }).formatToParts(date);
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
+  return DevotionalDate.dateKey(date, APP_TIME_ZONE);
 }
 
 function createScheduleCacheEntry(value, now = new Date()) {

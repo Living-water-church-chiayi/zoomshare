@@ -35,7 +35,10 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
-  createDesktopShortcut: true
+  include: build/installer.nsh
+  # Recreate the shortcut on manual reinstalls; the include below also restores
+  # a missing desktop shortcut after silent auto-updates.
+  createDesktopShortcut: always
 mac:
   icon: build/icon.icns
   # Playback-only app: keep native capture capabilities out of every signed

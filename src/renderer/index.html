@@ -194,7 +194,7 @@
       <fieldset>
         <legend>經文</legend>
         <input type="hidden" id="inScheduleUrl" />
-        <label class="inline"><input type="checkbox" id="scheduleEnabled" /> 開啟時依今天日期更新</label>
+        <label class="inline"><input type="checkbox" id="scheduleEnabled" /> 自動更新靈修進度（每日 17:30 預備隔天）</label>
         <button id="btnScheduleNow" class="full-btn">立即更新今日進度</button>
         <p id="scheduleStatus" class="hint"></p>
 
@@ -258,6 +258,7 @@
   <div id="toast" class="toast hidden"></div>
 
   <script src="bible.js"></script>
+  <script src="../devotional-date.js"></script>
   <script src="../assignment-shared.js"></script>
   <script src="app.js"></script>
 </body>
