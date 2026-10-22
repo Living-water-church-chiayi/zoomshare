@@ -9,6 +9,16 @@ let musicDesired = false;
 let musicRequestToken = 0;
 let musicFadeTimer = null;
 let worshipFadeTimer = null;
+let worshipEnvelopeTimer = null;
+let activeWorshipRange = null;
+let worshipPlaybackSettings = null;
+let worshipMetadataCancel = null;
+let worshipRangeFinished = false;
+let worshipRangePreview = false;
+let worshipMarkerDrag = null;
+let worshipRangeSaveTimer = null;
+let worshipEnvelopeVolume = 1;
+let lastNativeEnvelopeVolume = -1;
 let nativeMusicLoaded = false;
 let musicResumeOnCover = false;
 let flowReachedUtmost = false;
@@ -32,9 +42,12 @@ let flowNavigationToken = 0;
 let flowPageRenderToken = 0;
 let flowTransitioning = false;
 let flowFooterHideTimer = null;
+let flowFooterHovered = false;
 let settingsPointerStartedOutside = false;
 let utmostFinishConfirmUntil = 0;
 let utmostFinishConfirmTimer = null;
+let utmostFinishConfirmCount = 0;
+let utmostFinishConfirmSource = '';
 let flowWheelDelta = 0;
 let flowWheelGestureLocked = false;
 let flowWheelResetTimer = null;
@@ -500,74 +513,14 @@ function sameWorshipUrl(left, right) {
   return !!leftVideoId && leftVideoId === youtubeVideoId(rightUrl);
 }
 
-function worshipOptionAnnouncementTitle(option) {
-  if (!option) return '';
-  const explicit = option.dataset && option.dataset.announcementTitle;
-  return normalizeWorshipTitle(explicit || option.textContent || '');
-}
-
-function selectedCustomWorshipPresetIndex(url) {
-  if (!cfg.useWorshipPreset || typeof document === 'undefined') return -1;
-  const select = document.getElementById('worshipPreset');
-  if (!select) return -1;
-  const selected = select.selectedOptions && select.selectedOptions[0]
-    ? select.selectedOptions[0]
-    : Array.from(select.options || []).find((item) => item.selected);
-  const index = Number(selected && selected.dataset && selected.dataset.index);
-  const presets = Array.isArray(cfg.customWorshipPresets) ? cfg.customWorshipPresets : [];
-  return Number.isInteger(index) && index >= 0 && presets[index] && sameWorshipUrl(presets[index].url, url)
-    ? index : -1;
-}
-
 function currentWorshipAnnouncement() {
-  // Playback, prefetch and the announcement all use worshipUrl as the active source.
   const url = String(cfg.worshipUrl || '').trim();
-  if (!url) return { title: '', url: '' };
-
-  const isCurrentUrl = (candidate) => sameWorshipUrl(candidate, url);
-  let title = '';
-  let select = null;
-  if (typeof document !== 'undefined') select = document.getElementById('worshipPreset');
-
-  // In manual mode the scoped, user-editable announcement title is authoritative.
-  if (!cfg.useWorshipPreset && isCurrentUrl(cfg.worshipTitleUrl)) {
-    title = meaningfulWorshipTitle(cfg.worshipTitle);
-  }
-
-  // Preset mode must use the title of the option the user actually selected.
-  // This prevents a duplicate custom preset from lending today's video an old name.
-  if (cfg.useWorshipPreset && select) {
-    const selected = select.selectedOptions && select.selectedOptions[0]
-      ? select.selectedOptions[0]
-      : Array.from(select.options || []).find((item) => item.selected);
-    if (selected && isCurrentUrl(selected.value)) title = worshipOptionAnnouncementTitle(selected);
-    title = meaningfulWorshipTitle(title);
-  }
-
-  if (!title && select) {
-    const official = Array.from(select.options || []).find((item) =>
-      item.dataset && item.dataset.announcementTitle && isCurrentUrl(item.value));
-    if (official) title = worshipOptionAnnouncementTitle(official);
-  }
-
-  const presets = Array.isArray(cfg.customWorshipPresets) ? cfg.customWorshipPresets : [];
-  const selectedCustomIndex = selectedCustomWorshipPresetIndex(url);
-  const custom = selectedCustomIndex >= 0
-    ? presets[selectedCustomIndex]
-    : presets.find((item) => item && isCurrentUrl(item.url));
-  if (!title && custom) title = meaningfulWorshipTitle(custom.title);
-
-  if (!title && select) {
-    const matchingOption = Array.from(select.options || []).find((item) => isCurrentUrl(item.value));
-    if (matchingOption) title = worshipOptionAnnouncementTitle(matchingOption);
-  }
-  title = meaningfulWorshipTitle(title);
+  const title = sameWorshipUrl(cfg.worshipTitleUrl, url) ? meaningfulWorshipTitle(cfg.worshipTitle) : '';
   return { title, url };
 }
 
 const worshipTitleCache = new Map();
 const worshipTitleInflight = new Map();
-let customWorshipTitleRequestToken = 0;
 let manualWorshipTitleRequestToken = 0;
 
 function worshipTitleCacheKey(url) {
@@ -601,47 +554,27 @@ async function ensureCurrentWorshipAnnouncementTitle(showProgress = false) {
   if (!sameWorshipUrl(cfg.worshipUrl, requestedUrl)) return currentWorshipAnnouncement();
   if (!title) return currentWorshipAnnouncement();
 
-  const presets = customWorshipPresets();
-  const selectedCustomIndex = selectedCustomWorshipPresetIndex(requestedUrl);
-  const customIndex = selectedCustomIndex >= 0
-    ? selectedCustomIndex
-    : presets.findIndex((item) => item && sameWorshipUrl(item.url, requestedUrl));
-  const custom = customIndex >= 0 ? presets[customIndex] : null;
-  let resolvedTitle = title;
-  if (custom && !meaningfulWorshipTitle(custom.title)) {
-    resolvedTitle = updateCustomWorshipPresetTitle(customIndex, title, true);
-    if (!resolvedTitle) return currentWorshipAnnouncement();
+  const latest = currentWorshipAnnouncement();
+  if (latest.title) return latest;
+  const resolvedTitle = title;
+  const manualTitle = $('inWorshipTitle');
+  if (manualTitle && sameWorshipUrl($('inWorshipUrl').value, requestedUrl)) {
+    // Do not overwrite a title being edited while metadata was in flight.
+    if (meaningfulWorshipTitle(manualTitle.value)) return currentWorshipAnnouncement();
+    manualTitle.value = resolvedTitle;
+    manualTitle.dataset.url = requestedUrl;
   }
-  if (!cfg.useWorshipPreset) {
-    cfg.worshipTitle = resolvedTitle;
-    cfg.worshipTitleUrl = requestedUrl;
-    const manualTitle = $('inWorshipTitle');
-    if (manualTitle && sameWorshipUrl($('inWorshipUrl').value, requestedUrl)) {
-      manualTitle.value = resolvedTitle;
-      manualTitle.dataset.url = requestedUrl;
-    }
-  }
+  cfg.worshipTitle = resolvedTitle;
+  cfg.worshipTitleUrl = requestedUrl;
   await window.api.setConfig(cfg);
   if (!sameWorshipUrl(cfg.worshipUrl, requestedUrl)) return currentWorshipAnnouncement();
   worship = currentWorshipAnnouncement();
   return worship.title ? worship : { title: resolvedTitle, url: requestedUrl };
 }
 
-function focusWorshipTitleEditor(url) {
-  openSettings();
-  const customIndex = customWorshipPresets().findIndex((item) => item && sameWorshipUrl(item.url, url));
-  if (customIndex >= 0) {
-    const input = $('customWorshipList').querySelector(
-      `.custom-worship-item[data-index="${customIndex}"] .custom-worship-title-input`
-    );
-    if (input) { input.focus(); input.select(); return; }
-  }
-  if (cfg.useWorshipPreset) {
-    $('inCustomWorshipUrl').value = url;
-    $('inCustomWorshipTitle').focus();
-  } else {
-    $('inWorshipTitle').focus();
-  }
+function focusWorshipTitleEditor() {
+  openSettings('media');
+  $('inWorshipTitle').focus();
 }
 
 function buildAnnounceText(now = new Date()) {
@@ -720,85 +653,6 @@ function syncDateDayOptions(day) {
   fillNumberSelect($('dateDay'), daysInMonth(month), clampNum(day, 1, daysInMonth(month)));
 }
 
-function customWorshipPresets() {
-  if (!Array.isArray(cfg.customWorshipPresets)) cfg.customWorshipPresets = [];
-  return cfg.customWorshipPresets;
-}
-
-function renderCustomWorshipPresets() {
-  const group = $('customWorshipGroup');
-  const list = $('customWorshipList');
-  const presets = customWorshipPresets();
-  const selectedUrl = cfg.worshipPreset || ($('worshipPreset') && $('worshipPreset').value) || '';
-
-  if (group) group.innerHTML = '';
-  if (list) list.innerHTML = '';
-
-  presets.forEach((item, index) => {
-    if (!item || !item.url) return;
-    const title = item.title || `自訂敬拜影片 ${index + 1}`;
-    if (group) {
-      const option = document.createElement('option');
-      option.value = item.url;
-      option.textContent = title;
-      option.dataset.index = String(index);
-      group.appendChild(option);
-    }
-    if (list) {
-      const row = document.createElement('div');
-      row.className = 'custom-worship-item';
-      row.draggable = true;
-      row.dataset.index = String(index);
-      row.innerHTML = `
-        <span class="drag-handle" aria-hidden="true">⋮⋮</span>
-        <input type="text" class="custom-worship-title-input" maxlength="128" aria-label="公告歌名" draggable="false" />
-        <button type="button" class="custom-delete-btn" title="刪除" aria-label="刪除">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M6 7h12" />
-            <path d="M10 11v6" />
-            <path d="M14 11v6" />
-            <path d="M8 7l1 13h6l1-13" />
-            <path d="M10 7V4h4v3" />
-          </svg>
-        </button>
-      `;
-      row.querySelector('.custom-worship-title-input').value = title;
-      list.appendChild(row);
-    }
-  });
-  if ($('worshipPreset')) $('worshipPreset').value = selectedUrl;
-  if (group) group.hidden = !group.children.length;
-  if (list) list.hidden = !presets.length;
-}
-
-function customWorshipTitleEditor(index) {
-  const list = $('customWorshipList');
-  return list ? list.querySelector(
-    `.custom-worship-item[data-index="${index}"] .custom-worship-title-input`
-  ) : null;
-}
-
-function updateCustomWorshipPresetTitle(index, value, respectActiveEditor = false) {
-  const presets = customWorshipPresets();
-  const item = presets[index];
-  if (!item) return '';
-  const input = customWorshipTitleEditor(index);
-  const isActive = !!(input && typeof document !== 'undefined' && document.activeElement === input);
-  let title = meaningfulWorshipTitle(value);
-  if (respectActiveEditor && isActive) {
-    const draft = meaningfulWorshipTitle(input.value);
-    if (!draft) return '';
-    title = draft;
-  }
-  if (!title) return '';
-  item.title = title;
-  if (input && !(respectActiveEditor && isActive)) input.value = title;
-  const group = $('customWorshipGroup');
-  const option = group && group.querySelector(`option[data-index="${index}"]`);
-  if (option) option.textContent = title;
-  return title;
-}
-
 function normalizeCustomWorshipUrl(value) {
   const url = String(value || '').trim();
   if (!url) return '';
@@ -819,21 +673,6 @@ function prepareWorshipTitleDraft(titleInput, url) {
   if (resolvedUrl && !sameWorshipUrl(resolvedUrl, url)) {
     titleInput.value = '';
     delete titleInput.dataset.url;
-  }
-}
-
-async function prefillCustomWorshipTitle() {
-  const url = normalizeCustomWorshipUrl($('inCustomWorshipUrl').value);
-  const titleInput = $('inCustomWorshipTitle');
-  prepareWorshipTitleDraft(titleInput, url);
-  if (!url || meaningfulWorshipTitle(titleInput.value)) return;
-  const token = ++customWorshipTitleRequestToken;
-  const title = await lookupWorshipTitle(url);
-  if (token !== customWorshipTitleRequestToken) return;
-  if (!sameWorshipUrl($('inCustomWorshipUrl').value, url) || meaningfulWorshipTitle(titleInput.value)) return;
-  if (title) {
-    titleInput.value = title;
-    titleInput.dataset.url = url;
   }
 }
 
@@ -863,127 +702,48 @@ async function prefillManualWorshipTitle() {
   }
 }
 
-async function addCustomWorshipPreset() {
-  const input = $('inCustomWorshipUrl');
-  const url = normalizeCustomWorshipUrl(input.value);
-  if (!url) {
-    toast('請貼上有效的 YouTube 網址', 3000);
-    return;
-  }
-  let presets = customWorshipPresets();
-  let existing = presets.find((item) => item && sameWorshipUrl(item.url, url));
-  const hadExisting = !!existing;
-  const titleInput = $('inCustomWorshipTitle');
-  let title = meaningfulWorshipTitle(titleInput.value) || (existing && meaningfulWorshipTitle(existing.title));
-  const addButton = $('btnAddWorshipPreset');
-  if (!title) {
-    const lookupToken = ++customWorshipTitleRequestToken;
-    const originalText = addButton.textContent;
-    addButton.disabled = true;
-    addButton.textContent = '讀取中…';
-    try { title = await lookupWorshipTitle(url); }
-    finally {
-      addButton.disabled = false;
-      addButton.textContent = originalText;
-    }
-    if (lookupToken !== customWorshipTitleRequestToken || !sameWorshipUrl(input.value, url)) {
-      toast('連結已變更，請確認新的歌名後再加入', 3200);
-      return;
-    }
-    title = meaningfulWorshipTitle(titleInput.value) || title;
-    presets = customWorshipPresets();
-    const currentExisting = presets.find((item) => item && sameWorshipUrl(item.url, url));
-    if (hadExisting && !currentExisting) {
-      toast('常用清單已變更，這次沒有加入', 3200);
-      return;
-    }
-    existing = currentExisting;
-  }
-  if (!title) {
-    titleInput.focus();
-    toast('無法自動取得歌名，請填寫公告歌名後再加入', 4800);
-    return;
-  }
-  let selectedUrl = url;
-  if (!existing) {
-    presets.push({ title, url });
-  } else {
-    existing.title = title;
-    selectedUrl = existing.url;
-  }
-  renderCustomWorshipPresets();
-  $('useWorshipPreset').checked = true;
-  $('worshipPreset').value = selectedUrl;
-  input.value = '';
-  titleInput.value = '';
-  delete titleInput.dataset.url;
-  customWorshipTitleRequestToken++;
-  applyWorshipMode();
-  collectSettings();
-  await window.api.setConfig(cfg);
-  toast(existing ? '已更新並選取這部常用敬拜影片' : `已加入：${title}`, 3600);
+function fillWorshipTime(prefix, value) {
+  $(prefix + 'Minutes').value = value == null ? '' : Math.floor(value / 60);
+  $(prefix + 'Seconds').value = value == null ? '' : value % 60;
+  $(prefix + 'Minutes').setCustomValidity('');
+  $(prefix + 'Seconds').setCustomValidity('');
 }
 
-async function renameCustomWorshipPreset(index, value, input) {
-  const presets = customWorshipPresets();
-  const item = presets[index];
-  if (!item) return;
-  const title = meaningfulWorshipTitle(value);
-  if (!title) {
-    input.value = item.title || `自訂敬拜影片 ${index + 1}`;
-    toast('公告歌名不能留白', 2600);
-    return;
-  }
-  updateCustomWorshipPresetTitle(index, title);
-  await window.api.setConfig(cfg);
-  toast('已更新公告歌名', 2200);
+function resetWorshipRangeForUrl() {
+  const url = $('inWorshipUrl').value.trim();
+  if (url === String(cfg.worshipUrl || '').trim() || sameWorshipUrl(url, cfg.worshipUrl)) return;
+  fillWorshipTime('worshipStart', null);
+  fillWorshipTime('worshipEnd', null);
 }
 
-async function saveCustomWorshipOrder(fromIndex, toIndex) {
-  const presets = customWorshipPresets();
-  if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= presets.length || toIndex >= presets.length) return;
-  const [moved] = presets.splice(fromIndex, 1);
-  presets.splice(toIndex, 0, moved);
-  renderCustomWorshipPresets();
-  await window.api.setConfig(cfg);
-}
-
-async function deleteCustomWorshipPreset(index) {
-  const presets = customWorshipPresets();
-  const removed = presets[index];
-  if (!removed) return;
-  presets.splice(index, 1);
-  if (cfg.worshipPreset === removed.url) {
-    cfg.worshipPreset = '';
-    if ($('worshipPreset')) $('worshipPreset').value = '';
-    collectSettings();
-  }
-  renderCustomWorshipPresets();
-  await window.api.setConfig(cfg);
-  toast('已刪除常用敬拜影片', 2200);
+function readWorshipTime(prefix) {
+  const minutes = $(prefix + 'Minutes');
+  const seconds = $(prefix + 'Seconds');
+  minutes.setCustomValidity('');
+  seconds.setCustomValidity('');
+  if (!minutes.checkValidity() || !seconds.checkValidity()) return Number.NaN;
+  return window.WorshipShared.parseTimeParts(minutes.value, seconds.value);
 }
 
 function fillSettings() {
   cfg.fillMode = 'blur';
   $('dateAuto').checked = !!cfg.dateAuto;
+  $('manualDateFields').hidden = !!cfg.dateAuto;
   fillDateSelects();
   $('inReading').value = cfg.readingExtra || '';
   $('scheduleEnabled').checked = !!cfg.scheduleEnabled;
   $('inScheduleUrl').value = cfg.scheduleUrl || '';
   fillScriptureControls();
   $('inMusicUrl').value = cfg.musicUrl || '';
-  const manualUrl = cfg.useWorshipPreset && cfg.worshipTitleUrl
-    ? cfg.worshipTitleUrl : cfg.worshipUrl;
-  $('inWorshipUrl').value = manualUrl || '';
-  const manualTitle = sameWorshipUrl(cfg.worshipTitleUrl, manualUrl)
-    ? meaningfulWorshipTitle(cfg.worshipTitle) : '';
+  $('inWorshipUrl').value = cfg.worshipUrl || '';
+  const manualTitle = sameWorshipUrl(cfg.worshipTitleUrl, cfg.worshipUrl) ? meaningfulWorshipTitle(cfg.worshipTitle) : '';
   $('inWorshipTitle').value = manualTitle;
   if (manualTitle) $('inWorshipTitle').dataset.url = cfg.worshipTitleUrl;
   else delete $('inWorshipTitle').dataset.url;
-  renderCustomWorshipPresets();
-  $('worshipPreset').value = cfg.worshipPreset || '';
-  $('useWorshipPreset').checked = !!cfg.useWorshipPreset;
-  applyWorshipMode();
+  fillWorshipTime('worshipStart', cfg.worshipStartSeconds || null);
+  fillWorshipTime('worshipEnd', cfg.worshipEndSeconds);
+  $('worshipFadeIn').value = cfg.worshipFadeInSeconds ?? 1;
+  $('worshipFadeOut').value = cfg.worshipFadeOutSeconds ?? 1;
   $('musicVolume').value = cfg.musicVolume;
   $('autoPlayMusic').checked = !!cfg.autoPlayMusic;
   $('preventLeftArrowWorship').checked = cfg.preventLeftArrowWorship !== false;
@@ -991,6 +751,14 @@ function fillSettings() {
 }
 
 function collectSettings() {
+  const start = readWorshipTime('worshipStart') ?? 0;
+  const end = readWorshipTime('worshipEnd');
+  if (Number.isFinite(start) && Number.isFinite(end) && end <= start) {
+    $('worshipEndMinutes').setCustomValidity('結束時間必須晚於開始時間');
+  }
+  if (!Number.isFinite(start) || end !== null && (!Number.isFinite(end) || end <= start)) return false;
+  if (!$('worshipFadeIn').checkValidity() || !$('worshipFadeOut').checkValidity()) return false;
+
   cfg.fillMode = 'blur';
   cfg.dateAuto = $('dateAuto').checked;
   cfg.dateManual = `${+$('dateMonth').value}/${+$('dateDay').value}`;
@@ -998,27 +766,19 @@ function collectSettings() {
   cfg.scheduleEnabled = $('scheduleEnabled').checked;
   cfg.scheduleUrl = $('inScheduleUrl').value.trim();
   cfg.musicUrl = $('inMusicUrl').value.trim();
-  cfg.useWorshipPreset = $('useWorshipPreset').checked;
-  cfg.worshipPreset = $('worshipPreset').value;
-  // 勾選常用影片時採用下拉選單，否則採用手動輸入網址。
-  cfg.worshipUrl = cfg.useWorshipPreset ? cfg.worshipPreset : $('inWorshipUrl').value.trim();
-  if (!cfg.useWorshipPreset) {
-    cfg.worshipTitle = meaningfulWorshipTitle($('inWorshipTitle').value);
-    cfg.worshipTitleUrl = cfg.worshipUrl;
-    if (cfg.worshipTitle) $('inWorshipTitle').dataset.url = cfg.worshipUrl;
-    else delete $('inWorshipTitle').dataset.url;
-  }
+  cfg.worshipUrl = $('inWorshipUrl').value.trim();
+  cfg.worshipTitle = meaningfulWorshipTitle($('inWorshipTitle').value);
+  cfg.worshipTitleUrl = cfg.worshipUrl;
+  if (cfg.worshipTitle) $('inWorshipTitle').dataset.url = cfg.worshipUrl;
+  else delete $('inWorshipTitle').dataset.url;
+  cfg.worshipStartSeconds = start;
+  cfg.worshipEndSeconds = end;
+  cfg.worshipFadeInSeconds = Number($('worshipFadeIn').value);
+  cfg.worshipFadeOutSeconds = Number($('worshipFadeOut').value);
   cfg.musicVolume = parseFloat($('musicVolume').value);
   cfg.autoPlayMusic = $('autoPlayMusic').checked;
   cfg.preventLeftArrowWorship = $('preventLeftArrowWorship').checked;
   cfg.cacheKeepDays = parseInt($('cacheKeepDays').value, 10);
-}
-
-// 切換常用影片與手動網址欄位。
-function applyWorshipMode() {
-  const usePreset = $('useWorshipPreset').checked;
-  $('worshipPresetRow').classList.toggle('hidden', !usePreset);
-  $('worshipUrlRow').classList.toggle('hidden', usePreset);
 }
 
 async function pasteInto(inputId) {
@@ -1035,7 +795,8 @@ async function pasteInto(inputId) {
 
 let saveTimer = null;
 function onSettingsChanged() {
-  collectSettings();
+  if (collectSettings() === false) return;
+  $('manualDateFields').hidden = !!cfg.dateAuto;
   applyCover(null);
   if (USE_NATIVE_MAC_AUDIO) {
     if (nativeMusicLoaded) sendNativeAudio('music', 'volume', { volume: cfg.musicVolume });
@@ -1050,11 +811,55 @@ function onSettingsChanged() {
 function showBadge(text) { const b = $('dlBadge'); b.textContent = text; b.classList.remove('hidden'); }
 function hideBadge() { $('dlBadge').classList.add('hidden'); }
 
-function mediaProgressLabel(kind, percent, phase, action = '下載') {
+const downloadProgressStates = new Map();
+function handleMediaProgress(update) {
+  let { kind, percent, phase, url, quality, requestId } = update;
+  const expectedUrl = kind === 'video' ? cfg.worshipUrl : cfg.musicUrl;
+  if (url && !sameWorshipUrl(url, expectedUrl)) return;
+  if (kind === 'video' && quality != null && Number(quality) !== Number(cfg.videoQuality)) return;
+  const previous = downloadProgressStates.get(kind);
+  if (previous && previous.timer) clearTimeout(previous.timer);
+  const sameRequest = previous && sameWorshipUrl(previous.url, url) && previous.phase !== 'error' &&
+    (!requestId || !previous.requestId || previous.requestId === requestId);
+  if (sameRequest) percent = Math.max(Number(previous.percent) || 0, Number(percent) || 0);
+  if (sameRequest && phase === 'prepare' && previous.percent > 0) phase = previous.phase;
+  const state = { kind, percent, phase, url, requestId: requestId || (sameRequest ? previous.requestId : ''),
+    downloadedBytes: update.downloadedBytes ?? (sameRequest ? previous.downloadedBytes : undefined), timer: null };
+  downloadProgressStates.set(kind, state);
+  const renderProgress = () => {
+    const active = [...downloadProgressStates.values()].filter((item) => sameWorshipUrl(item.url, item.kind === 'video' ? cfg.worshipUrl : cfg.musicUrl));
+    if (active.length) showBadge(active.map((item) => mediaProgressLabel(item.kind, item.percent, item.phase, '下載', item)).join(' · '));
+    else hideBadge();
+  };
+  if (phase === 'error') downloadProgressStates.delete(kind);
+  renderProgress();
+  if (kind === 'video' && !$('worshipLayer').classList.contains('hidden') && phase !== 'error') {
+    $('worshipLoading').textContent = mediaProgressLabel(kind, percent, phase, '載入', state);
+  }
+  if (Number(percent) >= 100) state.timer = setTimeout(() => {
+    if (downloadProgressStates.get(kind) !== state) return;
+    downloadProgressStates.delete(kind);
+    renderProgress();
+  }, 800);
+}
+
+function mediaProgressLabel(kind, percent, phase, action = '下載', details = null) {
   const label = kind === 'video' ? '敬拜影片' : '背景音樂';
   const value = Number(percent);
+  if (['update', 'retry', 'fallback720'].includes(phase)) {
+    const message = { update: '更新下載工具中', retry: '重新嘗試下載中', fallback720: '改用 720p 重新下載中' }[phase];
+    return `${label}${message}…`;
+  }
   if (phase === 'merge' && (!Number.isFinite(value) || value < 100)) return `${label}合併檔案中...`;
-  if (Number.isFinite(value) && value > 0) return `${label}${action}中 ${Math.round(value)}%`;
+  const bytes = Number(details?.downloadedBytes);
+  const sizeLabel = phase === 'download' && Number.isFinite(bytes) && bytes > 0
+    ? bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB`
+      : bytes >= 1024 ** 2 ? `${(bytes / 1024 ** 2).toFixed(1)} MB`
+        : `${Math.max(1, Math.round(bytes / 1024))} KB`
+    : '';
+  const transferred = sizeLabel ? ` · 已下載 ${sizeLabel}` : '';
+  if (Number.isFinite(value) && value > 0) return `${label}${action}中 ${Math.round(value)}%${transferred}`;
+  if (transferred) return `${label}${action}中${transferred}`;
   const phaseLabels = {
     prepare: '準備中',
     extract: '解析連結中',
@@ -1075,11 +880,11 @@ async function prefetch(kind) {
   if (!url) return;
   const s = await window.api.mediaStatus(url, kind, cfg.videoQuality);
   if (s.cached) return;
-  showBadge(mediaProgressLabel(kind, 0, 'prepare'));
+  handleMediaProgress({ kind, percent: 0, phase: 'prepare', url });
   const r = await window.api.ensureMedia(url, kind, cfg.videoQuality);
-  hideBadge();
+  handleMediaProgress({ kind, percent: r.ok ? 100 : 0, phase: r.ok ? 'done' : 'error', url });
   if (!r.ok) {
-    const hint = kind === 'video' ? '，可以換一個連結加入常用敬拜影片' : '';
+    const hint = kind === 'video' ? '，可以更換影片連結' : '';
     toast(label + '下載失敗' + hint + '：' + r.error, 5200);
     return;
   }
@@ -1089,7 +894,15 @@ async function prefetch(kind) {
 // ---------- 背景音樂 ----------
 async function resolveAndPlayMusic() {
   if (!isMainCover()) return;
-  if (!cfg.musicUrl) { musicDesired = false; setMusicSwitchState(false); toast('請先設定背景音樂 YouTube 連結'); openSettings(); return; }
+  if (!cfg.musicUrl) {
+    musicDesired = false;
+    setMusicSwitchState(false);
+    toast('請先設定背景音樂 YouTube 連結');
+    openSettings('media');
+    $('backgroundMusicSettings').open = true;
+    $('inMusicUrl').focus();
+    return;
+  }
   const requestedUrl = cfg.musicUrl;
   const requestToken = ++musicRequestToken;
   musicDesired = true;
@@ -1098,9 +911,9 @@ async function resolveAndPlayMusic() {
   const st = await window.api.mediaStatus(requestedUrl, 'audio');
   if (requestToken !== musicRequestToken || cfg.musicUrl !== requestedUrl || !isMainCover()) return;
   const needDownload = !st.cached;
-  showBadge('背景音樂下載中...');
+  if (needDownload) handleMediaProgress({ kind: 'audio', percent: 0, phase: 'prepare', url: requestedUrl });
   const r = await window.api.ensureMedia(requestedUrl, 'audio');
-  hideBadge();
+  if (needDownload) handleMediaProgress({ kind: 'audio', percent: r.ok ? 100 : 0, phase: r.ok ? 'done' : 'error', url: requestedUrl });
   if (requestToken !== musicRequestToken || cfg.musicUrl !== requestedUrl || !musicDesired || !isMainCover()) return;
   if (!r.ok) { musicDesired = false; setMusicSwitchState(false); toast('背景音樂下載失敗：' + r.error, 4000); return; }
   const resolvedSrc = normalizeMediaUrl(r.path);
@@ -1322,6 +1135,7 @@ function hideFlowFooterImmediately() {
   ) document.activeElement.blur();
   if (flowFooterHideTimer) clearTimeout(flowFooterHideTimer);
   flowFooterHideTimer = null;
+  flowFooterHovered = false;
   if (screen) screen.classList.remove('footer-visible');
   if (footer) footer.classList.remove('footer-visible');
 }
@@ -1355,6 +1169,7 @@ function revealFlowFooterBrieflyAfterPageRender() {
 function scheduleFlowFooterHide() {
   if (flowFooterHideTimer) clearTimeout(flowFooterHideTimer);
   flowFooterHideTimer = null;
+  if (flowFooterHovered) return;
   const scheduledStep = flowStep;
   const screen = $('flowScreen');
   const footer = document.querySelector('.flow-footer');
@@ -1373,7 +1188,9 @@ function scheduleFlowFooterHide() {
       flowStep === scheduledStep &&
       screen.dataset.step === scheduledStep &&
       !screen.classList.contains('hidden')
-    ) hideFlowFooterImmediately();
+    ) {
+      if (!flowFooterHovered) hideFlowFooterImmediately();
+    }
   }, 1000);
 }
 
@@ -1411,17 +1228,18 @@ function setupFlowFooterReveal() {
       if (shouldRevealFlowFooterFromPointer(event)) revealFlowFooter();
       scheduleFlowFooterHide();
     });
-    screen.addEventListener('pointerleave', scheduleFlowFooterHide);
+    screen.addEventListener('pointerleave', () => { flowFooterHovered = false; scheduleFlowFooterHide(); });
   }
   if (!footer) return;
   footer.addEventListener('pointerenter', () => {
+    flowFooterHovered = true;
     revealFlowFooter();
-    scheduleFlowFooterHide();
   });
   footer.addEventListener('pointerleave', () => {
+    flowFooterHovered = false;
     scheduleFlowFooterHide();
   });
-  footer.addEventListener('focusin', revealFlowFooter);
+  footer.addEventListener('focusin', () => { revealFlowFooter(); scheduleFlowFooterHide(); });
   footer.addEventListener('pointerup', scheduleFlowFooterHide);
   footer.addEventListener('focusout', (event) => {
     if (event.relatedTarget && footer.contains(event.relatedTarget)) return;
@@ -1959,7 +1777,7 @@ function renderFlowPage(options) {
   $('flowPrevPage').disabled = flowPageIndex <= 0 && flowStep !== 'scripture' && flowStep !== 'utmost';
   const isLastPage = flowPageIndex >= flowPages.length - 1;
   const isLastStep = flowStep === FLOW_ORDER[FLOW_ORDER.length - 1];
-  const nextLabel = isLastPage && isLastStep ? '完成' : (isLastPage ? '竭誠獻上' : '下一頁');
+  const nextLabel = isLastPage && isLastStep ? '閱讀完畢' : (isLastPage ? '竭誠獻上' : '下一頁');
   const prevLabel = flowPageIndex > 0 ? '上一頁' : (flowStep === 'utmost' ? '回到經文' : '返回敬拜');
   setFlowButtonLabel('flowPrevPage', prevLabel);
   setFlowButtonLabel('flowNextPage', nextLabel);
@@ -2367,40 +2185,55 @@ function resetUtmostFinishConfirmation() {
   if (utmostFinishConfirmTimer) clearTimeout(utmostFinishConfirmTimer);
   utmostFinishConfirmTimer = null;
   utmostFinishConfirmUntil = 0;
-  if (isUtmostFinalPage()) setFlowButtonLabel('flowNextPage', '完成');
+  utmostFinishConfirmCount = 0;
+  utmostFinishConfirmSource = '';
+  if (isUtmostFinalPage()) setFlowButtonLabel('flowNextPage', '閱讀完畢');
   return wasArmed;
 }
 
-function requestUtmostFinishConfirmation() {
+function requestUtmostFinishConfirmation(source = 'right') {
+  if (source !== 'right') { resetUtmostFinishConfirmation(); return false; }
   const now = Date.now();
-  if (utmostFinishConfirmUntil > now) {
+  if (utmostFinishConfirmUntil <= now || utmostFinishConfirmSource !== source) resetUtmostFinishConfirmation();
+  utmostFinishConfirmCount++;
+  utmostFinishConfirmSource = source;
+  if (utmostFinishConfirmCount >= 3) {
     resetUtmostFinishConfirmation();
     return true;
   }
-
-  resetUtmostFinishConfirmation();
-  utmostFinishConfirmUntil = now + UTMOST_FINISH_CONFIRM_MS;
-  setFlowButtonLabel('flowNextPage', '再按一次完成');
+  if (!utmostFinishConfirmUntil) utmostFinishConfirmUntil = now + UTMOST_FINISH_CONFIRM_MS;
+  setFlowButtonLabel('flowNextPage', `→ 再按 ${3 - utmostFinishConfirmCount} 下`);
   revealFlowFooter();
   scheduleFlowFooterHide();
-  toast('請再按一次，以確認回到主畫面', 3000);
+  toast(`結束並關閉軟體：右方向鍵再按 ${3 - utmostFinishConfirmCount} 下`, 3000);
+  if (utmostFinishConfirmTimer) clearTimeout(utmostFinishConfirmTimer);
   utmostFinishConfirmTimer = setTimeout(() => {
-    utmostFinishConfirmTimer = null;
-    utmostFinishConfirmUntil = 0;
-    if (isUtmostFinalPage()) setFlowButtonLabel('flowNextPage', '完成');
-  }, UTMOST_FINISH_CONFIRM_MS);
+    resetUtmostFinishConfirmation();
+  }, Math.max(0, utmostFinishConfirmUntil - now));
   return false;
 }
 
 function requestFlowReturnToCover(source = 'button') {
+  if (source === 'escape' || source === 'home') {
+    resetUtmostFinishConfirmation();
+    returnToMainCover();
+    return true;
+  }
   if (isUtmostFinalPage()) {
-    if (source === 'wheel') {
+    if (source !== 'right') {
       revealFlowFooter();
       scheduleFlowFooterHide();
-      toast('請按「完成」或右方向鍵回到主畫面', 2600);
+      resetUtmostFinishConfirmation();
+      toast('按 Esc 返回主畫面，或連按三下右方向鍵關閉軟體', 3000);
       return false;
     }
-    if (!requestUtmostFinishConfirmation()) return false;
+    if (!requestUtmostFinishConfirmation(source)) return false;
+    flowTransitioning = true;
+    window.api.quitApp().catch((error) => {
+      flowTransitioning = false;
+      toast('無法關閉軟體：' + error.message, 3000);
+    });
+    return true;
   }
   returnToMainCover();
   return true;
@@ -2414,7 +2247,7 @@ function nextFlowPageOrStep(source = 'button') {
   if ($('flowScreen').classList.contains('hidden')) { nextFlowStep(source); return; }
   if (flowPageIndex < flowPages.length - 1) {
     flowPageIndex++;
-    renderFlowPage({ revealFooter: source !== 'keyboard' });
+    renderFlowPage({ revealFooter: source !== 'keyboard' && source !== 'right' });
   } else {
     if (flowStep === FLOW_ORDER[FLOW_ORDER.length - 1]) {
       requestFlowReturnToCover(source);
@@ -2451,15 +2284,20 @@ async function startWorship() {
   if (!cfg.worshipUrl) {
     flowStep = 'cover';
     toast('請先設定敬拜影片 YouTube 連結');
-    openSettings();
+    openSettings('media');
+    $('inWorshipUrl').focus();
     resumeMusicOnCover();
     return false;
   }
+  worshipPlaybackSettings = { ...cfg };
+  worshipRangePreview = false;
+  renderWorshipTimeline();
   const requestedUrl = cfg.worshipUrl;
   const requestedQuality = cfg.videoQuality;
   const requestToken = ++worshipRequestToken;
   const layer = $('worshipLayer');
   worshipActive = true;
+  publishWorshipPlayback();
   $('toolbar').classList.remove('show');
   $('wSeek').value = '0';
   $('wCur').textContent = '0:00';
@@ -2490,9 +2328,55 @@ async function startWorship() {
   return true;
 }
 
-// 明確 load 後播放；首次失敗會重試一次，再提示使用者手動播放。
+function loadWorshipMetadata(video, src) {
+  if (worshipMetadataCancel) worshipMetadataCancel();
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      video.removeEventListener('loadedmetadata', ready);
+      video.removeEventListener('error', failed);
+      worshipMetadataCancel = null;
+    };
+    const ready = () => { cleanup(); resolve(); };
+    const failed = () => { cleanup(); reject(new Error('無法讀取敬拜影片')); };
+    const timer = setTimeout(failed, 20000);
+    worshipMetadataCancel = () => { cleanup(); reject(new Error('已取消播放')); };
+    video.addEventListener('loadedmetadata', ready, { once: true });
+    video.addEventListener('error', failed, { once: true });
+    video.src = src;
+    video.load();
+  });
+}
+
+function stopWorshipEnvelope() {
+  if (worshipEnvelopeTimer) clearInterval(worshipEnvelopeTimer);
+  worshipEnvelopeTimer = null;
+}
+
+function applyWorshipEnvelope(force = false) {
+  const video = $('worshipVideo');
+  if (!worshipActive || !activeWorshipRange || worshipFadeTimer || worshipSeeking) return;
+  worshipEnvelopeVolume = worshipRangePreview ? 1 : window.WorshipShared.envelopeVolume(video.currentTime, activeWorshipRange);
+  video.volume = worshipEnvelopeVolume;
+  if (USE_NATIVE_MAC_AUDIO && (force || Math.abs(lastNativeEnvelopeVolume - worshipEnvelopeVolume) >= .01)) {
+    lastNativeEnvelopeVolume = worshipEnvelopeVolume;
+    sendNativeAudio('worship', 'volume', { volume: worshipEnvelopeVolume });
+  }
+  if (!video.paused && !worshipRangePreview && video.currentTime >= activeWorshipRange.end && !worshipRangeFinished) {
+    worshipRangeFinished = true;
+    setWorshipPlaybackDesired(false);
+    video.pause();
+    stopNativeWorshipAudio();
+    backToCover({ nextAfterWorship: true });
+  }
+}
+
+// Wait for metadata before seeking, then start native audio at the same clip position.
 function playWorshipVideo(src, audioSrc, retried, requestToken = worshipRequestToken) {
   cancelWorshipFade();
+  stopWorshipEnvelope();
+  activeWorshipRange = null;
+  worshipRangeFinished = false;
   const video = $('worshipVideo');
   currentWorshipAudioSrc = normalizeMediaUrl(audioSrc);
   if (worshipPlayRetryTimer) clearTimeout(worshipPlayRetryTimer);
@@ -2500,34 +2384,34 @@ function playWorshipVideo(src, audioSrc, retried, requestToken = worshipRequestT
   setWorshipPlaybackDesired(false);
   video.pause();
   stopNativeWorshipAudio();
-  video.src = src;
-  video.load();
-  video.volume = 1;
   video.muted = USE_NATIVE_MAC_AUDIO;
-  setWorshipPlaybackDesired(true);
-  Promise.all([
-    video.play(),
-    loadNativeWorshipAudio(0, true)
-  ]).then(([, nativeResult]) => {
-    if (!nativeResult.ok) throw new Error(nativeResult.error || 'macOS 原生音訊播放器無法啟動');
+  return loadWorshipMetadata(video, src).then(async () => {
     if (requestToken !== worshipRequestToken || !worshipActive) return;
+    activeWorshipRange = window.WorshipShared.playbackRange(worshipPlaybackSettings || cfg, video.duration);
+    renderWorshipTimeline();
+    video.currentTime = activeWorshipRange.start;
+    worshipEnvelopeVolume = window.WorshipShared.envelopeVolume(activeWorshipRange.start, activeWorshipRange);
+    video.volume = worshipEnvelopeVolume;
+    lastNativeEnvelopeVolume = worshipEnvelopeVolume;
+    setWorshipPlaybackDesired(true);
+    const [, nativeResult] = await Promise.all([video.play(), loadNativeWorshipAudio(activeWorshipRange.start, true)]);
+    if (requestToken !== worshipRequestToken || !worshipActive) return;
+    if (!nativeResult.ok) throw new Error(nativeResult.error || 'macOS 原生音訊播放器無法啟動');
+    worshipEnvelopeTimer = setInterval(applyWorshipEnvelope, 50);
     $('worshipLoading').classList.add('hidden');
   }).catch((error) => {
+    if (requestToken !== worshipRequestToken || !worshipActive) return;
     setWorshipPlaybackDesired(false);
     video.pause();
     setWorshipPlayState(false);
     stopNativeWorshipAudio();
-    if (requestToken !== worshipRequestToken || !worshipActive) return;
-    if (!retried && worshipActive && requestToken === worshipRequestToken) {
+    if (!retried) {
       worshipPlayRetryTimer = setTimeout(() => playWorshipVideo(src, audioSrc, true, requestToken), 300);
       return;
     }
-    if (worshipActive) {
-      $('worshipLoading').textContent = '無法自動播放，請按下播放鍵';
-      $('worshipLoading').classList.remove('hidden');
-      setWorshipPlayState(false);
-      showToolbar();
-    }
+    $('worshipLoading').textContent = `${error.message}；請檢查起訖時間或按播放鍵重試`;
+    $('worshipLoading').classList.remove('hidden');
+    showToolbar();
   });
 }
 
@@ -2542,7 +2426,7 @@ async function loadNativeWorshipAudio(position = 0, autoplay = true) {
       loop: false,
       autoplay,
       position,
-      volume: 1
+      volume: activeWorshipRange && !worshipRangePreview ? window.WorshipShared.envelopeVolume(position, activeWorshipRange) : 1
     });
     if (result && result.ok) markWorshipNativeAudioLoaded(position);
     return result;
@@ -2556,14 +2440,15 @@ async function loadNativeWorshipAudio(position = 0, autoplay = true) {
 function cancelWorshipFade() {
   if (worshipFadeTimer) clearInterval(worshipFadeTimer);
   worshipFadeTimer = null;
-  $('worshipVideo').volume = 1;
+  if (!activeWorshipRange) $('worshipVideo').volume = 1;
+  applyWorshipEnvelope(true);
 }
 
 function fadeOutWorship(video) {
   if (worshipFadeTimer) return;
   setWorshipPlaybackDesired(false);
   setWorshipPlayState(false);
-  const start = USE_NATIVE_MAC_AUDIO ? 1 : video.volume;
+  const start = USE_NATIVE_MAC_AUDIO ? worshipEnvelopeVolume : video.volume;
   const startedAt = Date.now();
   worshipFadeTimer = setInterval(() => {
     const progress = Math.min(1, (Date.now() - startedAt) / 1000);
@@ -2598,6 +2483,11 @@ async function toggleWorshipPlayback() {
 
 async function resumeWorshipPlayback(video) {
   cancelWorshipFade();
+  if (!activeWorshipRange && Number.isFinite(video.duration)) activeWorshipRange = window.WorshipShared.playbackRange(worshipPlaybackSettings || cfg, video.duration);
+  if (activeWorshipRange && !worshipRangePreview && (video.currentTime >= activeWorshipRange.end || video.currentTime < activeWorshipRange.start)) video.currentTime = activeWorshipRange.start;
+  worshipRangeFinished = false;
+  applyWorshipEnvelope(true);
+  if (!worshipEnvelopeTimer) worshipEnvelopeTimer = setInterval(applyWorshipEnvelope, 50);
   setWorshipPlaybackDesired(true);
   try {
     await video.play();
@@ -2612,6 +2502,12 @@ async function resumeWorshipPlayback(video) {
 }
 
 function stopWorshipPlayback() {
+  worshipMarkerDrag = null;
+  worshipRangePreview = false;
+  stopWorshipEnvelope();
+  if (worshipMetadataCancel) worshipMetadataCancel();
+  activeWorshipRange = null;
+  worshipPlaybackSettings = null;
   cancelWorshipFade();
   worshipRequestToken++;
   setWorshipPlaybackDesired(false);
@@ -2628,6 +2524,7 @@ function stopWorshipPlayback() {
   if (hideTimer) clearTimeout(hideTimer);
   hideTimer = null;
   worshipActive = false;
+  publishWorshipPlayback();
   $('worshipControls').classList.remove('show');
   $('wBackTop').classList.remove('show');
   $('worshipLayer').classList.add('hidden');
@@ -2741,7 +2638,7 @@ function handleFlowWheelNavigation(event) {
 }
 
 function handleFlowArrowNavigation(event) {
-  if (!event || (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')) return false;
+  if (!event || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return false;
   if (
     event.repeat ||
     event.isComposing ||
@@ -2774,8 +2671,8 @@ function handleFlowArrowNavigation(event) {
   ) return false;
 
   event.preventDefault();
-  if (event.key === 'ArrowRight') {
-    nextFlowPageOrStep('keyboard');
+  if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+    nextFlowPageOrStep(flowStep === 'utmost' && event.key === 'ArrowRight' ? 'right' : 'keyboard');
   } else if (cfg.preventLeftArrowWorship !== false && flowStep === 'scripture' && flowPageIndex <= 0) {
     return true;
   } else {
@@ -2961,7 +2858,7 @@ function showToolbar() {
     hideTimer = null;
     if (!$('settingsPanel').classList.contains('hidden')) return;
     if (!worshipActive && mainToolbarHovered) return;
-    if (worshipActive && worshipControlsHovered) return;
+    if (worshipActive && (worshipControlsHovered || worshipMarkerDrag)) return;
     $('toolbar').classList.remove('show');
     $('worshipControls').classList.remove('show');
     $('wBackTop').classList.remove('show');
@@ -3069,6 +2966,149 @@ function handleWorshipPlaybackLifecycleWake() {
   return scheduleWorshipPlaybackRecovery('lifecycle');
 }
 
+function renderWorshipTimeline() {
+  const video = $('worshipVideo');
+  const duration = video.duration;
+  const ready = Number.isFinite(duration) && duration >= 1;
+  const range = ready ? (activeWorshipRange || { start: 0, end: duration }) : { start: 0, end: 0 };
+  for (const [id, time] of [['wMarkIn', range.start], ['wMarkOut', range.end]]) {
+    const marker = $(id);
+    marker.disabled = !ready;
+    marker.style.left = `${ready ? time / duration * 100 : id === 'wMarkOut' ? 100 : 0}%`;
+    marker.setAttribute('aria-valuemax', String(ready ? Math.floor(duration) : 0));
+    marker.setAttribute('aria-valuenow', String(Math.round(time)));
+    marker.setAttribute('aria-valuetext', fmtTime(time));
+    marker.title = `${id === 'wMarkIn' ? '起點 I' : '終點 O'} ${fmtTime(time)}・拖曳調整`;
+  }
+  $('wRangeSelection').style.left = `${ready ? range.start / duration * 100 : 0}%`;
+  $('wRangeSelection').style.width = `${ready ? (range.end - range.start) / duration * 100 : 100}%`;
+  $('wRangeLabel').textContent = ready ? `播放範圍 ${fmtTime(range.start)} – ${fmtTime(range.end)}` : '播放範圍：載入中';
+  $('wPreviewHint').textContent = worshipRangePreview ? '範圍外預覽' : '';
+  publishWorshipPlayback();
+}
+
+function publishWorshipPlayback() {
+  const video = $('worshipVideo');
+  window.api.publishWorshipPlayback({
+    active: worshipActive,
+    position: Number.isFinite(video.currentTime) ? video.currentTime : null,
+    duration: Number.isFinite(video.duration) ? video.duration : null,
+    end: activeWorshipRange ? activeWorshipRange.end : null,
+    paused: video.paused || video.seeking || video.readyState < 3,
+    preview: worshipRangePreview
+  });
+}
+
+function pauseForWorshipRangeEdit() {
+  setWorshipPlaybackDesired(false);
+  $('worshipVideo').pause();
+  stopNativeWorshipAudio();
+  cancelWorshipFade();
+  resetWorshipSeekState();
+}
+
+function saveWorshipRange() {
+  fillWorshipTime('worshipStart', cfg.worshipStartSeconds || null);
+  fillWorshipTime('worshipEnd', cfg.worshipEndSeconds);
+  clearTimeout(worshipRangeSaveTimer);
+  worshipRangeSaveTimer = setTimeout(() => {
+    worshipRangeSaveTimer = null;
+    window.api.setConfig({ ...cfg }).catch((error) => toast('播放範圍儲存失敗：' + error.message, 3000));
+  }, 200);
+}
+
+function setWorshipMarker(edge, position, save = true) {
+  const video = $('worshipVideo');
+  if (!worshipActive || !activeWorshipRange || !sameWorshipUrl(cfg.worshipUrl, worshipPlaybackSettings.worshipUrl)) return false;
+  const next = window.WorshipShared.moveMarker(worshipPlaybackSettings, video.duration, edge, position);
+  if (!next) return false;
+  Object.assign(cfg, next);
+  Object.assign(worshipPlaybackSettings, next);
+  activeWorshipRange = window.WorshipShared.playbackRange(worshipPlaybackSettings, video.duration);
+  worshipRangeFinished = false;
+  worshipRangePreview = video.currentTime < activeWorshipRange.start || video.currentTime >= activeWorshipRange.end;
+  renderWorshipTimeline();
+  if (save) saveWorshipRange();
+  return true;
+}
+
+function setupWorshipRangeEditing() {
+  const video = $('worshipVideo');
+  const track = $('wTimelineTrack');
+  for (const [id, edge] of [['wMarkIn', 'in'], ['wMarkOut', 'out']]) {
+    const marker = $(id);
+    const dragTo = (event) => {
+      const rect = track.getBoundingClientRect();
+      if (!rect.width) return;
+      if (setWorshipMarker(edge, (event.clientX - rect.left) / rect.width * video.duration, false)) {
+        video.currentTime = edge === 'in' ? activeWorshipRange.start : activeWorshipRange.end;
+        $('wCur').textContent = fmtTime(video.currentTime);
+        $('wSeek').value = String(video.currentTime / video.duration * 1000);
+        worshipRangePreview = video.currentTime >= activeWorshipRange.end;
+        renderWorshipTimeline();
+      }
+    };
+    marker.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0 || !activeWorshipRange) return;
+      event.preventDefault();
+      event.stopPropagation();
+      pauseForWorshipRangeEdit();
+      worshipMarkerDrag = { id, pointerId: event.pointerId, previous: { worshipStartSeconds: cfg.worshipStartSeconds, worshipEndSeconds: cfg.worshipEndSeconds } };
+      marker.setPointerCapture(event.pointerId);
+      marker.focus();
+      dragTo(event);
+    });
+    marker.addEventListener('pointermove', (event) => {
+      if (worshipMarkerDrag?.id === id && worshipMarkerDrag.pointerId === event.pointerId) dragTo(event);
+    });
+    marker.addEventListener('pointerup', (event) => {
+      if (worshipMarkerDrag?.id !== id || worshipMarkerDrag.pointerId !== event.pointerId) return;
+      dragTo(event);
+      worshipMarkerDrag = null;
+      marker.releasePointerCapture(event.pointerId);
+      saveWorshipRange();
+      showToolbar();
+    });
+    const cancelDrag = () => {
+      if (worshipMarkerDrag?.id !== id) return;
+      Object.assign(cfg, worshipMarkerDrag.previous);
+      Object.assign(worshipPlaybackSettings, worshipMarkerDrag.previous);
+      worshipMarkerDrag = null;
+      activeWorshipRange = window.WorshipShared.playbackRange(worshipPlaybackSettings, video.duration);
+      worshipRangePreview = video.currentTime < activeWorshipRange.start || video.currentTime >= activeWorshipRange.end;
+      renderWorshipTimeline();
+    };
+    marker.addEventListener('pointercancel', cancelDrag);
+    marker.addEventListener('lostpointercapture', cancelDrag);
+    marker.addEventListener('keydown', (event) => {
+      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      pauseForWorshipRangeEdit();
+      const current = edge === 'in' ? activeWorshipRange.start : activeWorshipRange.end;
+      const direction = ['ArrowLeft', 'ArrowDown'].includes(event.key) ? -1 : 1;
+      const position = event.key === 'Home' ? 0 : event.key === 'End' ? video.duration : current + direction * (event.shiftKey ? 5 : 1);
+      setWorshipMarker(edge, position);
+    });
+  }
+  window.addEventListener('blur', () => {
+    if (worshipMarkerDrag) $(worshipMarkerDrag.id).dispatchEvent(new Event('pointercancel'));
+  });
+  window.addEventListener('keydown', (event) => {
+    if (!worshipActive || event.repeat || event.isComposing || event.ctrlKey || event.altKey || event.metaKey || !$('settingsPanel').classList.contains('hidden')) return;
+    const key = event.key.toLowerCase();
+    if (key !== 'i' && key !== 'o') return;
+    const timelineTarget = ['wSeek', 'wMarkIn', 'wMarkOut'].includes(event.target?.id);
+    if (!timelineTarget && isEditableFlowNavigationTarget(event.target)) return;
+    event.preventDefault();
+    pauseForWorshipRangeEdit();
+    if (setWorshipMarker(key === 'i' ? 'in' : 'out', video.currentTime)) {
+      showToolbar();
+      toast(`${key === 'i' ? '起點' : '終點'}設為 ${fmtTime(key === 'i' ? activeWorshipRange.start : activeWorshipRange.end)}，已暫停`, 2200);
+    }
+  });
+}
+
 function worshipSeekPosition(video, seek) {
   if (!video || !seek || !video.duration || !Number.isFinite(video.duration)) return null;
   const ratio = Math.max(0, Math.min(1000, Number.parseFloat(seek.value) || 0)) / 1000;
@@ -3131,7 +3171,9 @@ function updateWorshipSeek(video, seek) {
   const position = worshipSeekPosition(video, seek);
   if (position === null) return false;
   beginWorshipSeek(video);
+  worshipRangePreview = !!activeWorshipRange && (position < activeWorshipRange.start || position >= activeWorshipRange.end);
   video.currentTime = position;
+  renderWorshipTimeline();
   $('wCur').textContent = fmtTime(position);
   scheduleWorshipSeekPreview(position);
   return true;
@@ -3150,7 +3192,9 @@ async function commitWorshipSeek(video, seek) {
   worshipSeekResumeAfterCommit = shouldResume;
   setWorshipPlaybackDesired(shouldResume);
   try {
+    worshipRangePreview = !!activeWorshipRange && (position < activeWorshipRange.start || position >= activeWorshipRange.end);
     video.currentTime = position;
+    renderWorshipTimeline();
     $('wCur').textContent = fmtTime(position);
     if (USE_NATIVE_MAC_AUDIO) {
       if (shouldResume) {
@@ -3185,9 +3229,13 @@ function setupWorshipControls() {
   const seek = $('wSeek');
   const controls = $('worshipControls');
   const back = $('wBackTop');
-  v.addEventListener('loadedmetadata', () => { $('wDur').textContent = fmtTime(v.duration); });
+  for (const event of ['timeupdate', 'play', 'pause', 'seeking', 'seeked', 'waiting', 'playing', 'loadedmetadata', 'emptied']) {
+    v.addEventListener(event, publishWorshipPlayback);
+  }
+  v.addEventListener('loadedmetadata', () => { $('wDur').textContent = fmtTime(v.duration); renderWorshipTimeline(); });
   v.addEventListener('timeupdate', () => {
-    if (v.duration) seek.value = String((v.currentTime / v.duration) * 1000);
+    if (v.duration > 0 && !worshipSeeking) seek.value = String(Math.max(0, Math.min(1000, v.currentTime / v.duration * 1000)));
+    applyWorshipEnvelope();
     $('wCur').textContent = fmtTime(v.currentTime);
   });
   v.addEventListener('play', () => {
@@ -3222,6 +3270,8 @@ function setupWorshipControls() {
     showToolbar();
   });
   v.addEventListener('ended', () => {
+    if (worshipRangeFinished) return;
+    worshipRangeFinished = true;
     setWorshipPlaybackDesired(false);
     stopNativeWorshipAudio();
     backToCover({ nextAfterWorship: true });
@@ -3374,17 +3424,97 @@ function setupSettingsTextSelection() {
   panel.addEventListener('lostpointercapture', finishDrag);
 }
 
-function openSettings() {
+const settingsTabScroll = new Map();
+
+function selectSettingsTab(name, focus = false) {
+  const tabs = [...document.querySelectorAll('[data-settings-tab]')];
+  const next = tabs.find((tab) => tab.dataset.settingsTab === name);
+  if (!next) return;
+  const current = tabs.find((tab) => tab.getAttribute('aria-selected') === 'true');
+  const body = $('settingsPanel').querySelector('.settings-body');
+  if (current !== next) {
+    if (current) settingsTabScroll.set(current.dataset.settingsTab, body.scrollTop);
+    for (const tab of tabs) {
+      const selected = tab === next;
+      tab.setAttribute('aria-selected', String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+      $(tab.getAttribute('aria-controls')).hidden = !selected;
+    }
+    body.scrollTop = settingsTabScroll.get(name) || 0;
+  }
+  if (focus) next.focus();
+}
+
+function setupSettingsTabs() {
+  const tabs = [...document.querySelectorAll('[data-settings-tab]')];
+  tabs.forEach((tab, index) => {
+    tab.addEventListener('click', () => selectSettingsTab(tab.dataset.settingsTab));
+    tab.addEventListener('keydown', (event) => {
+      let nextIndex;
+      if (event.key === 'ArrowRight') nextIndex = (index + 1) % tabs.length;
+      else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + tabs.length) % tabs.length;
+      else if (event.key === 'Home') nextIndex = 0;
+      else if (event.key === 'End') nextIndex = tabs.length - 1;
+      else return;
+      event.preventDefault();
+      event.stopPropagation();
+      selectSettingsTab(tabs[nextIndex].dataset.settingsTab, true);
+    });
+  });
+}
+
+function openSettings(tab) {
   settingsPointerStartedOutside = false;
   fillSettings();
+  if (typeof tab === 'string') selectSettingsTab(tab);
+  refreshYtDlpStatus();
   $('settingsPanel').classList.remove('hidden');
   $('settingsBackdrop').classList.remove('hidden');
   $('toolbar').classList.add('show');
+  prefillManualWorshipTitle().catch((error) => console.warn('無法讀取敬拜歌名：', error));
 }
 function closeSettings() {
+  clearTimeout(ytDlpStatusPollTimer);
+  ytDlpStatusPollTimer = null;
   settingsPointerStartedOutside = false;
   $('settingsPanel').classList.add('hidden');
   $('settingsBackdrop').classList.add('hidden');
+}
+
+let ytDlpStatusPollTimer = null;
+async function refreshYtDlpStatus(check = false) {
+  clearTimeout(ytDlpStatusPollTimer);
+  ytDlpStatusPollTimer = null;
+  try {
+    const status = await window.api.ytDlpStatus(check);
+    $('ytDlpVersion').textContent = `目前版本：${status.current || '無法讀取'}${status.latest ? `・最新：${status.latest}` : ''}`;
+    const checked = status.checkedAt ? `（${new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(status.checkedAt))} 檢查）` : '';
+    $('ytDlpStatus').textContent = status.updating ? '下載工具正在背景檢查或更新中…'
+      : status.error ? `無法確認更新狀態：${status.error}`
+      : !status.current || !status.latest ? '等待自動檢查結果；如需重試，可展開下方手動操作'
+      : status.current === status.latest ? `已是最新版本 ${checked}` : `有新版可用，自動更新尚未完成；可展開下方操作重試 ${checked}`;
+    if (status.updating && !$('settingsPanel').classList.contains('hidden')) {
+      ytDlpStatusPollTimer = setTimeout(() => refreshYtDlpStatus(), 2000);
+    }
+  } catch (error) { $('ytDlpStatus').textContent = `版本讀取失敗：${error.message}`; }
+}
+
+function setupYtDlpStatus() {
+  for (const [id, update] of [['btnYtDlpCheck', false], ['btnYtDlpUpdate', true]]) {
+    $(id).addEventListener('click', async () => {
+      $('btnYtDlpCheck').disabled = true;
+      $('btnYtDlpUpdate').disabled = true;
+      $('ytDlpStatus').textContent = update ? '正在更新下載工具…' : '正在檢查最新版本…';
+      try {
+        if (update) {
+          const result = await window.api.updateYtDlp();
+          await refreshYtDlpStatus();
+          if (result.error || result.reason) $('ytDlpStatus').textContent = `更新未完成：${result.error || result.reason}`;
+        } else await refreshYtDlpStatus(true);
+      } catch (error) { $('ytDlpStatus').textContent = `檢查或更新失敗：${error.message}`; }
+      finally { $('btnYtDlpCheck').disabled = false; $('btnYtDlpUpdate').disabled = false; }
+    });
+  }
 }
 
 // ---------- App 自動更新 ----------
@@ -3548,71 +3678,6 @@ function setupCache() {
   });
 }
 
-function setupCustomWorshipList() {
-  const list = $('customWorshipList');
-  if (!list) return;
-  let dragIndex = -1;
-
-  list.addEventListener('dragstart', (e) => {
-    if (e.target.closest('input, button')) {
-      e.preventDefault();
-      dragIndex = -1;
-      return;
-    }
-    const row = e.target.closest('.custom-worship-item');
-    if (!row) return;
-    dragIndex = Number(row.dataset.index);
-    row.classList.add('dragging');
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', row.dataset.index);
-  });
-
-  list.addEventListener('dragend', (e) => {
-    const row = e.target.closest('.custom-worship-item');
-    if (row) row.classList.remove('dragging');
-    dragIndex = -1;
-  });
-
-  list.addEventListener('dragover', (e) => {
-    if (dragIndex < 0) return;
-    e.preventDefault();
-    const row = e.target.closest('.custom-worship-item');
-    list.querySelectorAll('.custom-worship-item.over').forEach((item) => item.classList.remove('over'));
-    if (row) row.classList.add('over');
-  });
-
-  list.addEventListener('dragleave', (e) => {
-    const row = e.target.closest('.custom-worship-item');
-    if (row) row.classList.remove('over');
-  });
-
-  list.addEventListener('drop', async (e) => {
-    if (dragIndex < 0) return;
-    e.preventDefault();
-    const row = e.target.closest('.custom-worship-item');
-    list.querySelectorAll('.custom-worship-item.over').forEach((item) => item.classList.remove('over'));
-    if (!row) return;
-    await saveCustomWorshipOrder(dragIndex, Number(row.dataset.index));
-  });
-
-  list.addEventListener('click', async (e) => {
-    const deleteButton = e.target.closest('.custom-delete-btn');
-    if (!deleteButton) return;
-    const row = deleteButton.closest('.custom-worship-item');
-    if (!row) return;
-    await deleteCustomWorshipPreset(Number(row.dataset.index));
-  });
-
-  list.addEventListener('change', async (e) => {
-    const input = e.target.closest('.custom-worship-title-input');
-    if (!input) return;
-    const row = input.closest('.custom-worship-item');
-    if (!row) return;
-    await renameCustomWorshipPreset(Number(row.dataset.index), input.value, input);
-  });
-}
-
-// ---------- 初始化 ----------
 async function init() {
   // 依平台套用原生風格字型與外觀。
   document.body.classList.add(window.api.platform === 'darwin' ? 'plat-mac' : 'plat-win');
@@ -3639,6 +3704,9 @@ async function init() {
   $('btnFlowNext').addEventListener('click', nextFlowStep);
   $('flowPrevPage').addEventListener('click', (e) => { e.stopPropagation(); prevFlowPageOrStep(); });
   $('flowNextPage').addEventListener('click', (e) => { e.stopPropagation(); nextFlowPageOrStep('button'); });
+  $('flowNextPage').addEventListener('keydown', (event) => {
+    if (event.repeat && (event.key === 'Enter' || event.code === 'Space')) event.preventDefault();
+  });
   $('flowHomeButton').addEventListener('click', (e) => { e.stopPropagation(); requestFlowReturnToCover('home'); });
   $('flowScreen').addEventListener('click', () => {
     if (flowStep === 'end') returnToMainCover();
@@ -3646,27 +3714,19 @@ async function init() {
   setupMainToolbarHoverLifecycle();
   setupFlowFooterReveal();
   setupSettingsTextSelection();
+  setupSettingsTabs();
   window.api.onWindowPointerActivity(handleWindowPointerActivity);
   $('btnMin').addEventListener('click', () => window.api.minimizeWindow());
   $('btnClose').addEventListener('click', () => window.api.closeWindow());
   $('btnPasteMusic').addEventListener('click', () => pasteInto('inMusicUrl'));
   $('btnPasteWorship').addEventListener('click', () => pasteInto('inWorshipUrl'));
-  $('btnPasteCustomWorship').addEventListener('click', () => pasteInto('inCustomWorshipUrl'));
-  $('btnAddWorshipPreset').addEventListener('click', addCustomWorshipPreset);
-  $('inCustomWorshipUrl').addEventListener('input', () => {
-    customWorshipTitleRequestToken++;
-    prepareWorshipTitleDraft($('inCustomWorshipTitle'), $('inCustomWorshipUrl').value);
-  });
-  $('inCustomWorshipTitle').addEventListener('input', () => {
-    const url = normalizeCustomWorshipUrl($('inCustomWorshipUrl').value);
-    if (url) $('inCustomWorshipTitle').dataset.url = url;
-  });
-  $('inCustomWorshipUrl').addEventListener('change', () => { prefillCustomWorshipTitle(); });
   $('inWorshipUrl').addEventListener('input', () => {
     manualWorshipTitleRequestToken++;
+    resetWorshipRangeForUrl();
     prepareWorshipTitleDraft($('inWorshipTitle'), $('inWorshipUrl').value);
   });
   $('inWorshipUrl').addEventListener('change', () => {
+    resetWorshipRangeForUrl();
     prepareWorshipTitleDraft($('inWorshipTitle'), $('inWorshipUrl').value);
   });
   $('btnScheduleNow').addEventListener('click', async () => {
@@ -3687,8 +3747,8 @@ async function init() {
     if (p) await useImagePath(p);
   });
 
-  ['dateAuto','dateDay','inReading','inMusicUrl','inWorshipUrl','inWorshipTitle','inCustomWorshipUrl','musicVolume','autoPlayMusic','preventLeftArrowWorship',
-   'useWorshipPreset','worshipPreset','cacheKeepDays','scheduleEnabled','inScheduleUrl']
+  ['dateAuto','dateDay','inReading','inMusicUrl','inWorshipUrl','inWorshipTitle','worshipStartMinutes','worshipStartSeconds','worshipEndMinutes','worshipEndSeconds','worshipFadeIn','worshipFadeOut','musicVolume','autoPlayMusic','preventLeftArrowWorship',
+   'cacheKeepDays','scheduleEnabled','inScheduleUrl']
     .forEach((id) => {
       const el = $(id);
       if (!el) return;
@@ -3700,20 +3760,6 @@ async function init() {
     onSettingsChanged();
   });
 
-  // 切換常用敬拜影片與手動網址時，同步設定並預先下載。
-  $('useWorshipPreset').addEventListener('change', async () => {
-    applyWorshipMode();
-    collectSettings();
-    if (cfg.worshipUrl) prefetch('video');
-    await ensureCurrentWorshipAnnouncementTitle(false);
-  });
-  // 更換常用影片後，預先準備新選項。
-  $('worshipPreset').addEventListener('change', async () => {
-    collectSettings();
-    if (cfg.useWorshipPreset && cfg.worshipUrl) prefetch('video');
-    await ensureCurrentWorshipAnnouncementTitle(false);
-  });
-
   // 網址輸入完成後更新媒體來源。
   $('inMusicUrl').addEventListener('change', () => { collectSettings(); if (cfg.musicUrl) resolveAndPlayMusic(); });
   $('inWorshipUrl').addEventListener('change', async () => {
@@ -3723,19 +3769,15 @@ async function init() {
   });
 
   // 媒體下載進度。
-  window.api.onMediaProgress(({ kind, percent, phase }) => {
-    showBadge(mediaProgressLabel(kind, percent, phase));
-    if (kind === 'video' && !$('worshipLayer').classList.contains('hidden'))
-      $('worshipLoading').textContent = mediaProgressLabel(kind, percent, phase, '載入');
-    if (Number(percent) >= 100) setTimeout(hideBadge, 800);
-  });
+  window.api.onMediaProgress(handleMediaProgress);
 
   setupDragDrop();
   setupWindowsCoverWindowDrag();
   setupWorshipControls();
+  setupWorshipRangeEditing();
   setupAppUpdater();
+  setupYtDlpStatus();
   setupCache();
-  setupCustomWorshipList();
 
   // 經文範圍選單。
   fillBookSelect();
@@ -3764,6 +3806,7 @@ async function init() {
   window.addEventListener('keydown', handleEscapeNavigation);
   window.addEventListener('focus', handleWorshipPlaybackLifecycleWake);
   window.addEventListener('focus', handleDailyReadingLifecycleWake);
+  window.addEventListener('blur', resetUtmostFinishConfirmation);
   window.addEventListener('pageshow', handleWorshipPlaybackLifecycleWake);
   window.addEventListener('pageshow', handleDailyReadingLifecycleWake);
   document.addEventListener('visibilitychange', handleWorshipPlaybackLifecycleWake);

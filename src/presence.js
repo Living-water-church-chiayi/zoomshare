@@ -86,6 +86,7 @@ function validRoster(value) {
       aliases: Array.isArray(member.aliases) ? member.aliases.slice(0, 20).map((item) => String(item).trim().slice(0, 100)).filter(Boolean) : [],
       canReadScripture: member.canReadScripture === true,
       canReadUtmost: member.canReadUtmost === true,
+      isFullTime: member.isFullTime === true,
       enabled: member.enabled === true,
       order: Number.isFinite(Number(member.order)) ? Number(member.order) : 0
     }];
@@ -163,8 +164,9 @@ async function writePrivateJson(filePath, value) {
 }
 
 class PresenceManager extends EventEmitter {
-  constructor() {
+  constructor({ localTrial = false } = {}) {
     super();
+    this.localTrial = localTrial;
     this.device = null;
     this.socket = null;
     this.reconnectTimer = null;
@@ -193,7 +195,6 @@ class PresenceManager extends EventEmitter {
 
   devicePath() { return path.join(app.getPath('userData'), 'presence-device.json'); }
   cachePath() { return path.join(app.getPath('userData'), 'presence-cache.json'); }
-
   cachePayload() {
     return {
       roster: this.state.roster,
@@ -240,7 +241,7 @@ class PresenceManager extends EventEmitter {
   }
 
   publicState() {
-    return JSON.parse(JSON.stringify(this.state));
+    return JSON.parse(JSON.stringify({ ...this.state, localTrial: this.localTrial }));
   }
 
   publish(patch = {}) {
@@ -339,7 +340,7 @@ class PresenceManager extends EventEmitter {
   async unpair() {
     const device = this.device;
     this.stop();
-    if (device) {
+    if (device && !this.localTrial) {
       await fetch(`${device.serviceUrl}/v1/devices/current`, {
         method: 'DELETE',
         headers: { authorization: `Bearer ${device.token}` },
@@ -365,6 +366,13 @@ class PresenceManager extends EventEmitter {
     const rosterErrors = Array.isArray(data.rosterErrors) ? data.rosterErrors.map(String).slice(0, 100) : [];
     const utmostSharing = validUtmostSharing(data.utmostSharing);
     const assignmentStats = validAssignmentStats(data.assignmentStats);
+    if (this.localTrial) {
+      try {
+        const local = validAssignmentStats(JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'trial-assignments.json'), 'utf8')));
+        if (local.date === appDateKey()) assignmentStats.currentAssignment = local.currentAssignment;
+      } catch {}
+    }
+
     const fetchedAt = String(data.fetchedAt || new Date().toISOString());
     this.publish({
       roster,
@@ -382,6 +390,15 @@ class PresenceManager extends EventEmitter {
   }
 
   async saveAssignments({ date, scripture, utmost }) {
+    if (this.localTrial) {
+      if (date !== appDateKey()) throw new Error('只能安排目前靈修日期的閱讀');
+      const assignmentStats = validAssignmentStats({
+        ...this.state.assignmentStats, date, currentAssignment: { scripture, utmost }
+      });
+      await writePrivateJson(path.join(app.getPath('userData'), 'trial-assignments.json'), assignmentStats);
+      this.publish({ assignmentStats });
+      return this.publicState();
+    }
     if (!this.device) throw new Error('裝置尚未配對');
     const response = await fetch(`${this.device.serviceUrl}/v1/assignments`, {
       method: 'POST',

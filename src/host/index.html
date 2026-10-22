@@ -7,8 +7,10 @@
         content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'" />
   <title>靈修班主持台</title>
   <link rel="stylesheet" href="host.css" />
+  <link rel="stylesheet" href="../window-focus.css" />
+  <script src="../window-focus.js" defer></script>
 </head>
-<body>
+<body data-window-role="host">
   <main>
     <section id="setupView" class="setup-view hidden">
       <img class="welcome-mark" src="../renderer/images/app-icon.png" alt="" aria-hidden="true" />
@@ -30,6 +32,17 @@
     </section>
 
     <section id="consoleView" class="console-view hidden">
+      <div class="host-clock-bar">
+        <div class="host-clock-row">
+          <span>台北時間</span>
+          <time id="hostClock" class="host-clock" aria-label="台北時間"></time>
+        </div>
+        <div id="hostWorshipCountdown" class="host-worship-countdown hidden" data-tone="normal">
+          <div><strong id="hostWorshipLabel">敬拜倒數</strong><small id="hostWorshipHint">至設定出點</small></div>
+          <span id="hostWorshipRemaining" class="host-worship-remaining" role="timer" aria-label="敬拜剩餘時間"></span>
+        </div>
+      </div>
+
       <header class="console-header">
         <div>
           <p class="eyebrow">PRIVATE HOST VIEW</p>

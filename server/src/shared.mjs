@@ -72,6 +72,7 @@ export function parseRosterRows(rows) {
       aliases,
       canReadScripture: parseBoolean(row[index['可讀經文']]),
       canReadUtmost: parseBoolean(row[index['可讀竭誠獻上']]),
+      isFullTime: parseBoolean(row[headers.indexOf('全職同工')]),
       enabled: parseBoolean(row[index['啟用']], true),
       order: Number.isFinite(rawOrder) ? rawOrder : rowIndex
     });
@@ -127,36 +128,83 @@ function isoDate(year, month, day) {
   return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
-export function parseUtmostSharingRows(rows, now = new Date(), timeZone = 'Asia/Taipei') {
-  const today = datePartsInTimeZone(now, timeZone);
-  const todayKey = isoDate(today.year, today.month, today.day);
-  const entriesByDate = new Map();
-  const columnPairs = [[1, 2], [4, 5], [7, 8], [10, 11], [13, 14]];
+function sharingDate(value, year, startMonth = 1) {
+  const text = String(value ?? '').normalize('NFKC').trim();
+  const match = text.match(/^(?:(\d{4})[年/.-])?(\d{1,2})[月/.-](\d{1,2})(?:日)?(?:\s*[(（]?(?:星期|週)[一二三四五六日天][)）]?)?$/);
+  if (!match) return null;
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  // A fourth-quarter sheet often includes the first few days of January.
+  const actualYear = match[1] ? Number(match[1]) : year + (startMonth >= 10 && month <= 2 ? 1 : 0);
+  const check = new Date(Date.UTC(actualYear, month - 1, day));
+  if (check.getUTCFullYear() !== actualYear || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) return null;
+  return isoDate(actualYear, month, day);
+}
 
+function sharingEntries(rows, year, startMonth = 1) {
+  const entries = [];
+  let pairs = null;
   for (const row of Array.isArray(rows) ? rows : []) {
     if (!Array.isArray(row)) continue;
-    for (const [dateColumn, sharerColumn] of columnPairs) {
-      const match = String(row[dateColumn] ?? '').normalize('NFKC').trim().match(/^(\d{1,2})月(\d{1,2})日$/);
-      if (!match) continue;
-      const month = Number(match[1]);
-      const day = Number(match[2]);
-      const check = new Date(Date.UTC(today.year, month - 1, day));
-      if (check.getUTCFullYear() !== today.year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) continue;
+    const labels = row.map((cell) => String(cell ?? '').normalize('NFKC').replace(/\s+/g, ''));
+    const dateColumns = labels.flatMap((label, index) => /^(?:日期|服事日期|第[一二三四五六七八九十\d]+週)$/.test(label) ? [index] : []);
+    const shareColumns = labels.flatMap((label, index) => /^(?:分享|分享者|帶領分享|竭誠獻上分享者)$/.test(label) ? [index] : []);
+    if (dateColumns.length) {
+      // Each week/date header owns its columns up to the next week/date header.
+      pairs = dateColumns.flatMap((column, index) => {
+        const next = dateColumns[index + 1] ?? row.length;
+        const share = shareColumns.find((candidate) => candidate > column && candidate < next);
+        // Also support a vertical table whose sharing column precedes its date.
+        const preceding = dateColumns.length === 1 && shareColumns.length === 1 ? shareColumns[0] : undefined;
+        return share !== undefined || preceding !== undefined ? [[column, share ?? preceding]] : [];
+      });
+      continue;
+    }
+    const columns = pairs ?? row.flatMap((value, column) => sharingDate(value, year, startMonth) ? [[column, column + 1]] : []);
+    for (const [dateColumn, sharerColumn] of columns) {
+      const date = sharingDate(row[dateColumn], year, startMonth);
+      if (!date) continue;
       const sharer = String(row[sharerColumn] ?? '').trim().slice(0, 120);
-      if (!sharer) continue;
-      entriesByDate.set(isoDate(today.year, month, day), sharer);
+      entries.push({ date, sharer });
     }
   }
+  return entries;
+}
 
-  const entries = [...entriesByDate].sort(([left], [right]) => left.localeCompare(right));
-  const sharer = entriesByDate.get(todayKey) || '';
-  const nextEntry = entries.find(([date]) => date > todayKey);
-  return {
-    found: Boolean(sharer),
-    date: todayKey,
-    sharer,
+function sharingResult(entries, now, timeZone) {
+  const today = datePartsInTimeZone(now, timeZone);
+  const todayKey = isoDate(today.year, today.month, today.day);
+  const byDate = new Map();
+  const conflicts = new Set();
+  for (const { date, sharer } of entries) {
+    if (byDate.has(date) && byDate.get(date) !== sharer) conflicts.add(date);
+    else byDate.set(date, sharer);
+
+  }
+  const sharer = conflicts.has(todayKey) ? '' : byDate.get(todayKey) || '';
+  const nextEntry = [...byDate].sort(([left], [right]) => left.localeCompare(right))
+    .find(([date, name]) => date > todayKey && name && !conflicts.has(date));
+  const result = {
+    found: Boolean(sharer), date: todayKey, sharer,
     next: nextEntry ? { date: nextEntry[0], sharer: nextEntry[1] } : null
   };
+  if (conflicts.has(todayKey)) result.error = `${todayKey} 的服事表有不同分享者，請確認重複日期`;
+  return result;
+}
+
+export function parseUtmostSharingRows(rows, now = new Date(), timeZone = 'Asia/Taipei') {
+  return sharingResult(sharingEntries(rows, datePartsInTimeZone(now, timeZone).year), now, timeZone);
+}
+
+export function parseUtmostSharingSheets(sheets, now = new Date(), timeZone = 'Asia/Taipei') {
+  const today = datePartsInTimeZone(now, timeZone);
+  const entries = sheets.flatMap((sheet) => {
+    const period = String(sheet.name || '').normalize('NFKC').match(/(20\d{2})(?:[年.\/ -]+(\d{1,2}))?/);
+    return sharingEntries(sheet.rows, period ? Number(period[1]) : today.year, period && period[2] ? Number(period[2]) : 1);
+  });
+  const result = sharingResult(entries, now, timeZone);
+  if (!entries.length) result.error = '服事表未找到日期與分享欄位，請確認表格格式';
+  return result;
 }
 
 export function parseScheduleRows(rows, now = new Date(), timeZone = 'Asia/Taipei') {

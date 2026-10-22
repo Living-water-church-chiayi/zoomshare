@@ -8,6 +8,7 @@ const { buildRosterMatcher, deriveRosterPresence, matchRosterMemberIds, normaliz
 const { smartSegmentSizes, scriptureSegments, utmostParagraphSegments } = require('../src/assignment-shared');
 const {
   SCHEDULE_CACHE_TTL_MS,
+  PresenceManager,
   createScheduleCacheEntry,
   validScheduleCache
 } = require('../src/presence');

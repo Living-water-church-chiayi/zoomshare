@@ -8,10 +8,35 @@ import {
   parseRosterRows,
   parseScheduleRows,
   parseUtmostSharingRows,
+  parseUtmostSharingSheets,
   snapshotFromMeeting
 } from '../src/shared.mjs';
-import { MeetingPresence, verifiedZoomEvent } from '../src/index.mjs';
+import worker, { MeetingPresence, verifiedZoomEvent } from '../src/index.mjs';
 import DevotionalDate from '../../src/devotional-date.js';
+
+test('removed Zoom host-grant route issues no grants while original bootstrap routing remains', async () => {
+  const forwarded = [];
+  const env = { MEETING_PRESENCE: { getByName: () => ({ fetch: async (request) => {
+    forwarded.push(new URL(request.url).pathname);
+    return Response.json({ ok: true });
+  } }) } };
+  const removed = await worker.fetch(new Request('https://presence.example.test/v1/zoom/control', {
+    method: 'POST', headers: { authorization: 'Bearer paired-test-device' }
+  }), env);
+  assert.equal(removed.status, 404);
+  assert.deepEqual(forwarded, []);
+  assert.equal((await new MeetingPresence({}, {}).fetch(new Request('https://presence.internal/zoom/control', { method: 'POST' }))).status, 404);
+  assert.equal((await worker.fetch(new Request('https://presence.example.test/v1/bootstrap'), env)).status, 200);
+  assert.deepEqual(forwarded, ['/bootstrap']);
+});
+
+test('accepts an optional full-time roster column while keeping existing seven-column rosters valid', () => {
+  const headers = ['編號', '姓名', 'Zoom別名', '可讀經文', '可讀竭誠獻上', '啟用', '排序'];
+  const row = ['m1', '同工甲', '', '是', '是', '是', '1'];
+  assert.equal(parseRosterRows([headers, row]).roster[0].isFullTime, false);
+  assert.equal(parseRosterRows([[...headers, '全職同工'], [...row, '是']]).roster[0].isFullTime, true);
+  assert.equal(parseRosterRows([[...headers, '全職同工'], [...row, '否']]).roster[0].isFullTime, false);
+});
 
 test('normalizes names without fuzzy matching', () => {
   assert.equal(normalizePersonName('  Ａmy   王  '), 'amy 王');
@@ -102,6 +127,57 @@ test('finds today and the next Utmost sharing assignment in horizontal week colu
     sharer: '今天分享者',
     next: { date: '2026-07-27', sharer: '下週分享者' }
   });
+});
+
+test('finds sharing columns after layout changes and ignores helper dates and hosts', () => {
+  const result = parseUtmostSharingRows([
+    ['標題'],
+    ['備註', '備註', '第一週', '主持人', '分享', '第二週', '分享者', '日期_輔助', '結果'],
+    ['', '', '１０月１３日', '主持甲', '月琴', '10/14', '信一', '10月13日', '錯誤輔助'],
+    ['', '', '2月30日', '主持乙', '無效日期', '', '', '', '']
+  ], new Date('2026-10-13T01:00Z'));
+  assert.deepEqual(result, { found: true, date: '2026-10-13', sharer: '月琴', next: { date: '2026-10-14', sharer: '信一' } });
+});
+
+test('matches full dates and does not assign old-year sharing rows to this year', () => {
+  const now = new Date('2026-10-13T01:00Z');
+  const result = parseUtmostSharingSheets([
+    { name: '2025.10-12月', rows: [['日期', '分享'], ['10月13日', '去年的'], ['10月14日', '去年下次']] },
+    { name: '新表', rows: [['分享者', '日期', '主持人'], ['月琴', '2026年10月13日', '主持甲'], ['信一', '2026/10/14', '主持乙']] }
+  ], now);
+  assert.deepEqual(result, { found: true, date: '2026-10-13', sharer: '月琴', next: { date: '2026-10-14', sharer: '信一' } });
+});
+
+test('carries fourth-quarter January into next year and finds next sharing across tabs', () => {
+  const sheets = [
+    { name: '2026.10-12月', rows: [['日期', '分享'], ['12月31日', '年底'], ['1月1日', '元旦']] },
+    { name: '2027.1-3月', rows: [['日期', '分享'], ['1月5日', '新季度']] }
+  ];
+  assert.deepEqual(parseUtmostSharingSheets(sheets, new Date('2026-12-31T09:30Z')), {
+    found: true, date: '2027-01-01', sharer: '元旦', next: { date: '2027-01-05', sharer: '新季度' }
+  });
+  assert.equal(parseUtmostSharingSheets(sheets, new Date('2026-01-01T01:00Z')).found, false);
+});
+
+test('keeps blank sharing cells blank and reports conflicting overlapping dates', () => {
+  const sheets = [{ name: '2026.10-12月', rows: [['日期', '分享', '主持人'], ['10月13日', '', '主持人'], ['10月14日', '信一', '']] }];
+  const now = new Date('2026-10-13T01:00Z');
+  assert.deepEqual(parseUtmostSharingSheets(sheets, now), {
+    found: false, date: '2026-10-13', sharer: '', next: { date: '2026-10-14', sharer: '信一' }
+  });
+  sheets.push({ name: '2026.10-12月副本', rows: [['日期', '分享'], ['10月13日', '不同人選']] });
+  const result = parseUtmostSharingSheets(sheets, now);
+  assert.equal(result.found, false);
+  assert.match(result.error, /不同分享者/);
+});
+
+test('does not substitute a host when a dated table lacks its sharing column', () => {
+  const result = parseUtmostSharingSheets([
+    { name: '2026.10-12月', rows: [['日期', '主持人'], ['10月13日', '主持人']] }
+  ], new Date('2026-10-13T01:00Z'));
+  assert.equal(result.found, false);
+  assert.equal(result.sharer, '');
+  assert.match(result.error, /日期與分享欄位/);
 });
 
 test('filters webhook events by account and meeting number', () => {

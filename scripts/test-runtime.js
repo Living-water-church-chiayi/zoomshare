@@ -92,6 +92,20 @@ function loadFunctions(source, names, globals = {}) {
     parseInt,
     encodeURIComponent,
     DevotionalDate: require('../src/devotional-date'),
+    crypto,
+    DownloadProgress: require('../src/download-progress').DownloadProgress,
+    flowFooterHovered: false,
+    activeWorshipRange: null,
+    worshipPlaybackSettings: null,
+    worshipRangeFinished: false,
+    worshipRangePreview: false,
+    worshipMarkerDrag: null,
+    worshipEnvelopeVolume: 1,
+    worshipEnvelopeTimer: 1,
+    applyWorshipEnvelope() {},
+    handleMediaProgress() {},
+    renderWorshipTimeline() {},
+    publishWorshipPlayback() {},
     ...globals
   });
   const declarations = names.map((name) => extractFunction(source, name)).join('\n');
@@ -775,7 +789,7 @@ test('reveals reading navigation only from the bottom hotzone', () => {
   assert.deepEqual(calls, ['reveal', 'schedule']);
 });
 
-test('hides reading navigation after one idle second even when the pointer stays over it', () => {
+test('hides reading navigation one second after leaving the controls', () => {
   let footerVisible = false;
   let timer = null;
   let delay = 0;
@@ -1192,6 +1206,15 @@ test('advances directly to Scripture when the worship video finishes', () => {
   setupWorshipControls();
   videoListeners.ended();
   assert.deepEqual(returns, [{ nextAfterWorship: true }]);
+});
+
+test('maps worship seek positions to the original duration even with a selected playback range', () => {
+  const { worshipSeekPosition } = loadFunctions(rendererSource, ['worshipSeekPosition'], {
+    activeWorshipRange: { start: 20, end: 80 }
+  });
+  assert.equal(worshipSeekPosition({ duration: 120 }, { value: '0' }), 0);
+  assert.equal(worshipSeekPosition({ duration: 120 }, { value: '250' }), 30);
+  assert.equal(worshipSeekPosition({ duration: 120 }, { value: '1000' }), 120);
 });
 
 test('previews Mac worship audio near the dragged seek position without queueing every input', async () => {
@@ -1778,121 +1801,6 @@ test('validates custom worship presets with the same YouTube policy', () => {
   assert.equal(normalizeCustomWorshipUrl('https://example.com/video'), '');
 });
 
-test('does not let a slow title lookup overwrite a newer custom worship URL', async () => {
-  const pending = new Map();
-  const elements = {
-    inCustomWorshipUrl: { value: '' },
-    inCustomWorshipTitle: { value: '', dataset: {} }
-  };
-  const functions = loadFunctions(
-    rendererSource,
-    [
-      'youtubeVideoId',
-      'normalizeWorshipTitle',
-      'meaningfulWorshipTitle',
-      'sameWorshipUrl',
-      'normalizeCustomWorshipUrl',
-      'prepareWorshipTitleDraft',
-      'prefillCustomWorshipTitle'
-    ],
-    {
-      $: (id) => elements[id],
-      customWorshipTitleRequestToken: 0,
-      lookupWorshipTitle: (url) => new Promise((resolve) => pending.set(url, resolve))
-    }
-  );
-
-  elements.inCustomWorshipUrl.value = 'https://youtu.be/first11';
-  const first = functions.prefillCustomWorshipTitle();
-  elements.inCustomWorshipUrl.value = 'https://youtu.be/second22';
-  const second = functions.prefillCustomWorshipTitle();
-
-  pending.get('https://youtu.be/second22').call(null, '第二首歌');
-  await second;
-  assert.equal(elements.inCustomWorshipTitle.value, '第二首歌');
-  assert.equal(elements.inCustomWorshipTitle.dataset.url, 'https://youtu.be/second22');
-
-  pending.get('https://youtu.be/first11').call(null, '第一首歌');
-  await first;
-  assert.equal(elements.inCustomWorshipTitle.value, '第二首歌');
-});
-
-test('does not add or clear a newer custom worship draft after a stale lookup', async () => {
-  let resolveLookup;
-  const cfg = { customWorshipPresets: [] };
-  const elements = {
-    inCustomWorshipUrl: { value: 'https://youtu.be/first11' },
-    inCustomWorshipTitle: { value: '', dataset: {}, focus() {} },
-    btnAddWorshipPreset: { textContent: '加入', disabled: false }
-  };
-  const functions = loadFunctions(
-    rendererSource,
-    [
-      'youtubeVideoId',
-      'normalizeWorshipTitle',
-      'meaningfulWorshipTitle',
-      'sameWorshipUrl',
-      'normalizeCustomWorshipUrl',
-      'customWorshipPresets',
-      'addCustomWorshipPreset'
-    ],
-    {
-      cfg,
-      $: (id) => elements[id],
-      customWorshipTitleRequestToken: 0,
-      lookupWorshipTitle: () => new Promise((resolve) => { resolveLookup = resolve; }),
-      renderCustomWorshipPresets() {},
-      applyWorshipMode() {},
-      collectSettings() {},
-      toast() {},
-      window: { api: { setConfig: async () => {} } }
-    }
-  );
-
-  const add = functions.addCustomWorshipPreset();
-  elements.inCustomWorshipUrl.value = 'https://youtu.be/second22';
-  elements.inCustomWorshipTitle.value = '第二首歌';
-  resolveLookup('第一首歌');
-  await add;
-
-  assert.deepEqual(cfg.customWorshipPresets, []);
-  assert.equal(elements.inCustomWorshipUrl.value, 'https://youtu.be/second22');
-  assert.equal(elements.inCustomWorshipTitle.value, '第二首歌');
-});
-
-test('keeps an active inline worship-title draft when metadata arrives', () => {
-  const cfg = {
-    customWorshipPresets: [{ title: '自訂敬拜影片', url: 'https://youtu.be/first11' }]
-  };
-  const input = { value: '我正在編輯的歌名' };
-  const option = { textContent: '自訂敬拜影片' };
-  const elements = {
-    customWorshipList: { querySelector: () => input },
-    customWorshipGroup: { querySelector: () => option }
-  };
-  const functions = loadFunctions(
-    rendererSource,
-    [
-      'normalizeWorshipTitle',
-      'meaningfulWorshipTitle',
-      'customWorshipPresets',
-      'customWorshipTitleEditor',
-      'updateCustomWorshipPresetTitle'
-    ],
-    {
-      cfg,
-      $: (id) => elements[id],
-      document: { activeElement: input }
-    }
-  );
-
-  const title = functions.updateCustomWorshipPresetTitle(0, 'YouTube 自動歌名', true);
-  assert.equal(title, '我正在編輯的歌名');
-  assert.equal(cfg.customWorshipPresets[0].title, '我正在編輯的歌名');
-  assert.equal(input.value, '我正在編輯的歌名');
-  assert.equal(option.textContent, '我正在編輯的歌名');
-});
-
 test('never combines a stale metadata result with a newer worship URL', async () => {
   const firstUrl = 'https://youtu.be/first11';
   const secondUrl = 'https://youtu.be/second22';
@@ -1918,8 +1826,6 @@ test('never combines a stale metadata result with a newer worship URL', async ()
       'normalizeWorshipTitle',
       'meaningfulWorshipTitle',
       'sameWorshipUrl',
-      'worshipOptionAnnouncementTitle',
-      'selectedCustomWorshipPresetIndex',
       'currentWorshipAnnouncement',
       'ensureCurrentWorshipAnnouncementTitle'
     ],
@@ -2001,12 +1907,16 @@ test('builds yt-dlp download args with YouTube client fallback and bounded socke
   const videoArgs = ytDlpDownloadArgs('https://youtu.be/abc', 'video', 720, '/tmp/video.%(ext)s', '/tmp/bin');
 
   assert.ok(videoArgs.includes('--no-cache-dir'));
+  assert.equal(videoArgs[videoArgs.indexOf('--output-na-placeholder') + 1], 'null', 'missing fields must remain valid JSON');
   assert.equal(videoArgs.includes('--check-formats'), false);
   assert.equal(videoArgs[videoArgs.indexOf('--socket-timeout') + 1], '20');
   assert.ok(videoArgs.includes('--force-ipv4'));
   assert.equal(videoArgs[videoArgs.indexOf('--extractor-args') + 1], 'youtube:player_client=web_embedded,default');
   assert.ok(videoArgs.includes('--retry-sleep'));
   assert.ok(videoArgs.includes('--ffmpeg-location'));
+  const progressTemplate = videoArgs[videoArgs.indexOf('--progress-template') + 1];
+  assert.match(progressTemplate, /%\(progress\.fragment_index\)j/);
+  assert.match(progressTemplate, /%\(progress\.fragment_count\)j/);
   assert.equal(videoArgs[videoArgs.indexOf('-f') + 1], 'bestvideo[height<=720]+bestaudio/best[height<=720]/best');
   assert.deepEqual(plain(videoArgs.slice(-2)), ['--', 'https://youtu.be/abc']);
 
@@ -2046,10 +1956,16 @@ test('formats media progress phases before yt-dlp reports percentages', () => {
   assert.equal(mediaProgressLabel('video', 0, 'prepare'), '敬拜影片準備中...');
   assert.equal(mediaProgressLabel('video', 0, 'extract', '載入'), '敬拜影片解析連結中...');
   assert.equal(mediaProgressLabel('video', 0, 'check'), '敬拜影片檢查格式中...');
-  assert.equal(mediaProgressLabel('audio', 0, 'update'), '背景音樂更新下載工具中...');
-  assert.equal(mediaProgressLabel('video', 0, 'fallback720'), '敬拜影片改用 720p 下載中...');
+  assert.equal(mediaProgressLabel('audio', 0, 'update'), '背景音樂更新下載工具中…');
+  assert.equal(mediaProgressLabel('video', 0, 'fallback720'), '敬拜影片改用 720p 重新下載中…');
   assert.equal(mediaProgressLabel('video', 49.6, 'download', '載入'), '敬拜影片載入中 50%');
   assert.equal(mediaProgressLabel('video', 99, 'merge'), '敬拜影片合併檔案中...');
+  assert.equal(mediaProgressLabel('video', 25, 'download', '下載', { downloadedBytes: 48 * 1024 ** 2 }),
+    '敬拜影片下載中 25% · 已下載 48.0 MB');
+  assert.equal(mediaProgressLabel('video', 0, 'download', '載入', { downloadedBytes: 712 }),
+    '敬拜影片載入中 · 已下載 1 KB');
+  assert.equal(mediaProgressLabel('video', 99, 'merge', '下載', { downloadedBytes: 48 * 1024 ** 2 }),
+    '敬拜影片合併檔案中...');
 });
 
 test('falls back from high-resolution worship video downloads to 720p', async () => {
@@ -2247,7 +2163,8 @@ test('builds the announcement from the renderer implementation and current confi
     scriptureEndCh: 3,
     scriptureEndV: 17,
     useWorshipPreset: true,
-    worshipPreset: 'https://youtu.be/stalePreset1',
+    worshipTitle: '讚美之泉（美好的創造）',
+    worshipTitleUrl: 'https://youtu.be/7mrMh_2tXCI',
     worshipUrl: 'https://youtu.be/7mrMh_2tXCI?si=xiVMJ-2zx56L9oeW',
     customWorshipPresets: [{
       title: '讚美之泉（美好的創造）',
@@ -2267,8 +2184,6 @@ test('builds the announcement from the renderer implementation and current confi
       'normalizeWorshipTitle',
       'meaningfulWorshipTitle',
       'sameWorshipUrl',
-      'worshipOptionAnnouncementTitle',
-      'selectedCustomWorshipPresetIndex',
       'currentWorshipAnnouncement',
       'buildAnnounceText'
     ],
@@ -2338,11 +2253,12 @@ test('formats manual announcement dates and Chinese scripture chapter numbers', 
   assert.equal(functions.formatScriptureAnnouncementRef(), '創世記三：17-四：2');
 });
 
-test('resolves worship announcement titles by YouTube video id and ignores empty options', () => {
+test('resolves manual worship announcement titles by YouTube video id and rejects stale titles', () => {
   const cfg = {
     useWorshipPreset: false,
     worshipUrl: 'https://youtu.be/7mrMh_2tXCI?si=current-share',
-    worshipPreset: '',
+    worshipTitle: '讚美之泉（美好的創造）',
+    worshipTitleUrl: 'https://www.youtube.com/watch?v=7mrMh_2tXCI',
     customWorshipPresets: []
   };
   const select = {
@@ -2359,7 +2275,7 @@ test('resolves worship announcement titles by YouTube video id and ignores empty
   const functions = loadFunctions(
     rendererSource,
     ['youtubeVideoId', 'normalizeWorshipTitle', 'meaningfulWorshipTitle', 'sameWorshipUrl',
-      'worshipOptionAnnouncementTitle', 'selectedCustomWorshipPresetIndex', 'currentWorshipAnnouncement'],
+      'currentWorshipAnnouncement'],
     { cfg, document }
   );
 
@@ -2421,65 +2337,6 @@ test('resolves worship announcement titles by YouTube video id and ignores empty
     title: '',
     url: cfg.worshipUrl
   }, 'a selected legacy duplicate must not borrow another preset title');
-});
-
-test('keeps every built-in worship announcement title paired with the video that will play', () => {
-  const expectedTitles = new Map([
-    ['7mrMh_2tXCI', '讚美之泉（美好的創造）'],
-    ['v76-wz1mv8w', '讚美之泉（祢的恩典夠我用）'],
-    ['mVqSmWIjoZU', '讚美之泉（好喜歡與你在一起）'],
-    ['kvrRtRe9AoU', '讚美之泉（我們的神）'],
-    ['uSHI-9s4dTU', '盛曉玫（依然愛我）'],
-    ['lfP-3JLVvaw', '盛曉玫（活出愛）'],
-    ['Q3m-in8i6FU', '盛曉玫（幸福）'],
-    ['96WDXhk6qjU', '盛曉玫（有一天）'],
-    ['eGAeeQxZ6FM', '盛曉玫（因為祢）'],
-    ['KqlvbYd5uJA', '新店行道會（叫我抬起頭的神）'],
-    ['v-k7ojwYE08', '新店行道會（這裡有榮耀）']
-  ]);
-  const options = Array.from(
-    rendererHtml.matchAll(/<option\s+value="([^"]+)"\s+data-announcement-title="([^"]+)">([^<]+)<\/option>/g),
-    (match) => ({
-      value: match[1],
-      dataset: { announcementTitle: match[2] },
-      textContent: match[3],
-      selected: false
-    })
-  );
-  assert.equal(options.length, expectedTitles.size, 'unexpected number of titled built-in worship options');
-
-  const cfg = { useWorshipPreset: true, worshipUrl: '', customWorshipPresets: [] };
-  const select = { options, selectedOptions: [] };
-  const document = { getElementById: (id) => id === 'worshipPreset' ? select : null };
-  const functions = loadFunctions(
-    rendererSource,
-    ['youtubeVideoId', 'normalizeWorshipTitle', 'meaningfulWorshipTitle', 'sameWorshipUrl',
-      'worshipOptionAnnouncementTitle', 'selectedCustomWorshipPresetIndex', 'currentWorshipAnnouncement'],
-    { cfg, document }
-  );
-
-  for (const option of options) {
-    const videoId = functions.youtubeVideoId(option.value);
-    assert.ok(expectedTitles.has(videoId), `unexpected worship video id ${videoId}`);
-    cfg.worshipUrl = option.value;
-    cfg.customWorshipPresets = [{
-      title: '不應覆蓋今天選取歌曲的舊名稱',
-      url: `https://www.youtube.com/watch?v=${videoId}`
-    }];
-    select.selectedOptions = [option];
-    assert.deepEqual(plain(functions.currentWorshipAnnouncement()), {
-      title: expectedTitles.get(videoId),
-      url: option.value
-    });
-
-    cfg.useWorshipPreset = false;
-    select.selectedOptions = [];
-    assert.deepEqual(plain(functions.currentWorshipAnnouncement()), {
-      title: expectedTitles.get(videoId),
-      url: option.value
-    }, `manual URL mode used a stale custom title for ${videoId}`);
-    cfg.useWorshipPreset = true;
-  }
 });
 
 test('parses scripture verses across chapter boundaries without losing chapter identity', () => {
@@ -3008,7 +2865,7 @@ test('uses arrow keys for reading while optionally blocking Scripture-to-worship
   const utmostLeft = arrowEvent('ArrowLeft');
   assert.equal(utmostNavigation.handleFlowArrowNavigation(utmostLeft.event), true);
   assert.equal(utmostLeft.prevented(), true);
-  assert.deepEqual(utmostCalls, [['next', 'keyboard'], ['prev', 'keyboard']]);
+  assert.deepEqual(utmostCalls, [['next', 'right'], ['prev', 'keyboard']]);
 });
 
 test('uses right arrow as a global flow shortcut on cover and worship', () => {
@@ -3299,10 +3156,10 @@ function loadUtmostConfirmationHarness() {
   let now = 1000;
   let nextTimerId = 1;
   const timers = new Map();
-  const calls = { returned: 0, revealed: 0, toasts: [], steps: [] };
+  const calls = { returned: 0, quit: 0, revealed: 0, toasts: [], steps: [] };
   const elements = {
     flowScreen: { classList: { contains: (name) => name === 'hidden' ? false : false } },
-    flowNextPage: { textContent: '完成' }
+    flowNextPage: { textContent: '閱讀完畢' }
   };
   const functions = loadFunctions(
     rendererSource,
@@ -3329,6 +3186,9 @@ function loadUtmostConfirmationHarness() {
       flowTransitioning: false,
       utmostFinishConfirmUntil: 0,
       utmostFinishConfirmTimer: null,
+      utmostFinishConfirmCount: 0,
+      utmostFinishConfirmSource: '',
+      window: { api: { quitApp: () => { calls.quit++; return Promise.resolve(); } } },
       UTMOST_FINISH_CONFIRM_MS: 3500,
       revealFlowFooter: () => { calls.revealed++; },
       scheduleFlowFooterHide: () => {},
@@ -3358,56 +3218,94 @@ function loadUtmostConfirmationHarness() {
   };
 }
 
-test('requires a deliberate second action before leaving the Utmost page', () => {
+test('requires three deliberate right-arrow actions to quit without returning home', () => {
   const harness = loadUtmostConfirmationHarness();
-
-  assert.equal(harness.requestFlowReturnToCover('button'), false);
+  assert.equal(harness.requestFlowReturnToCover('right'), false);
+  assert.equal(harness.calls.quit, 0);
+  assert.equal(harness.elements.flowNextPage.textContent, '→ 再按 2 下');
+  assert.equal(harness.requestFlowReturnToCover('right'), false);
+  assert.equal(harness.calls.quit, 0);
+  assert.equal(harness.elements.flowNextPage.textContent, '→ 再按 1 下');
+  assert.equal(harness.requestFlowReturnToCover('right'), true);
+  assert.equal(harness.calls.quit, 1);
   assert.equal(harness.calls.returned, 0);
-  assert.equal(harness.elements.flowNextPage.textContent, '再按一次完成');
-  assert.equal(harness.calls.revealed, 1);
-  assert.match(harness.calls.toasts[0][0], /再按一次/);
-
-  assert.equal(harness.requestFlowReturnToCover('keyboard'), true);
-  assert.equal(harness.calls.returned, 1);
-  assert.equal(harness.elements.flowNextPage.textContent, '完成');
   assert.equal(harness.timers.size, 0);
+});
+
+test('down arrows, buttons and wheel input cannot quit and reset right-arrow confirmation', () => {
+  for (const source of ['keyboard', 'button', 'wheel']) {
+    const harness = loadUtmostConfirmationHarness();
+    harness.requestFlowReturnToCover('right');
+    for (let i = 0; i < 3; i++) harness.requestFlowReturnToCover(source);
+    assert.equal(harness.elements.flowNextPage.textContent, '閱讀完畢');
+    assert.equal(harness.timers.size, 0);
+    assert.equal(harness.calls.quit, 0);
+    harness.requestFlowReturnToCover('right');
+    assert.equal(harness.elements.flowNextPage.textContent, '→ 再按 2 下');
+  }
 });
 
 test('does not let inertial wheel scrolling confirm or finish Utmost', () => {
   const harness = loadUtmostConfirmationHarness();
-
+  harness.requestFlowReturnToCover('right');
   assert.equal(harness.requestFlowReturnToCover('wheel'), false);
-  assert.equal(harness.calls.returned, 0);
-  assert.equal(harness.timers.size, 0, 'wheel input must not arm the completion deadline');
-  assert.match(harness.calls.toasts[0][0], /右方向鍵/);
-
-  assert.equal(harness.requestFlowReturnToCover('button'), false);
-  assert.equal(harness.calls.returned, 0, 'first deliberate action after wheel input must still only arm');
-  assert.equal(harness.requestFlowReturnToCover('button'), true);
-  assert.equal(harness.calls.returned, 1);
+  assert.equal(harness.calls.quit, 0);
+  assert.equal(harness.timers.size, 0, 'wheel input must cancel the completion deadline');
+  assert.match(harness.calls.toasts.at(-1)[0], /方向鍵/);
+  assert.equal(harness.requestFlowReturnToCover('right'), false);
+  assert.equal(harness.requestFlowReturnToCover('right'), false);
+  assert.equal(harness.calls.quit, 0);
+  assert.equal(harness.requestFlowReturnToCover('right'), true);
+  assert.equal(harness.calls.quit, 1);
 });
 
-test('expires the Utmost completion confirmation and restores its label', () => {
+test('expires the Utmost confirmation after two actions and restores its label', () => {
   const harness = loadUtmostConfirmationHarness();
-
+  harness.requestUtmostFinishConfirmation();
+  harness.advanceTime(1000);
+  harness.requestUtmostFinishConfirmation();
+  harness.advanceTime(2500);
+  assert.equal(harness.runOnlyTimer(), 2500);
+  assert.equal(harness.elements.flowNextPage.textContent, '閱讀完畢');
   assert.equal(harness.requestUtmostFinishConfirmation(), false);
-  harness.advanceTime(3500);
-  assert.equal(harness.runOnlyTimer(), 3500);
-  assert.equal(harness.elements.flowNextPage.textContent, '完成');
-  assert.equal(harness.requestUtmostFinishConfirmation(), false, 'expired confirmation must arm again');
-  assert.equal(harness.elements.flowNextPage.textContent, '再按一次完成');
+  assert.equal(harness.elements.flowNextPage.textContent, '→ 再按 2 下');
 });
 
 test('uses the first left action to cancel an armed Utmost completion', () => {
   const harness = loadUtmostConfirmationHarness();
-
-  assert.equal(harness.requestUtmostFinishConfirmation(), false);
+  harness.requestUtmostFinishConfirmation();
   harness.prevFlowPageOrStep();
   assert.deepEqual(harness.calls.steps, []);
-  assert.equal(harness.elements.flowNextPage.textContent, '完成');
-
+  assert.equal(harness.elements.flowNextPage.textContent, '閱讀完畢');
   harness.prevFlowPageOrStep();
   assert.deepEqual(harness.calls.steps, ['scripture']);
+});
+
+test('Escape or Home returns from the final Utmost page without quitting, even after two right arrows', () => {
+  for (const source of ['escape', 'home']) {
+    const harness = loadUtmostConfirmationHarness();
+    harness.requestFlowReturnToCover('right');
+    harness.requestFlowReturnToCover('right');
+    assert.equal(harness.requestFlowReturnToCover(source), true);
+    assert.equal(harness.calls.returned, 1);
+    assert.equal(harness.calls.quit, 0);
+    assert.equal(harness.timers.size, 0);
+  }
+});
+
+test('publishes the actual worship playback range and paused position for the host countdown', () => {
+  const published = [];
+  const video = { currentTime: 50, duration: 300, paused: false, seeking: false, readyState: 4 };
+  const { publishWorshipPlayback } = loadFunctions(rendererSource, ['publishWorshipPlayback'], {
+    $: () => video, worshipActive: true, activeWorshipRange: { start: 20, end: 100 },
+    window: { api: { publishWorshipPlayback: (value) => published.push(plain(value)) } }
+  });
+  publishWorshipPlayback();
+  assert.deepEqual(published.at(-1), { active: true, position: 50, duration: 300, end: 100, paused: false, preview: false });
+  video.currentTime = 75; video.paused = true;
+  publishWorshipPlayback();
+  assert.equal(published.at(-1).position, 75);
+  assert.equal(published.at(-1).paused, true);
 });
 
 test('keeps the cover silent after Utmost while preserving manual music playback', () => {
@@ -3504,7 +3402,7 @@ test('updates paused native music volume without touching the renderer audio ele
   const { onSettingsChanged } = loadFunctions(rendererSource, ['onSettingsChanged'], {
     $: (id) => {
       if (id === 'bgAudio') domAudioLookups++;
-      return null;
+      return id === 'manualDateFields' ? { hidden: false } : null;
     },
     cfg: { musicVolume: 0.28 },
     USE_NATIVE_MAC_AUDIO: true,
@@ -3909,6 +3807,51 @@ for (const native of [false, true]) {
     });
   }
 }
+
+test('keeps concurrent download progress and pending consumers from resetting another request', () => {
+  const states = new Map();
+  const badges = [];
+  const timers = [];
+  const cfg = { worshipUrl: 'video', musicUrl: 'audio', videoQuality: 1080 };
+  const functions = loadFunctions(rendererSource, ['handleMediaProgress', 'mediaProgressLabel'], {
+    cfg, downloadProgressStates: states, sameWorshipUrl: (left, right) => left === right,
+    $: () => ({ classList: { contains: () => true } }),
+    showBadge: (text) => badges.push(text), hideBadge: () => badges.push('hidden'),
+    setTimeout: (callback) => { timers.push(callback); return timers.length; }, clearTimeout() {}
+  });
+  functions.handleMediaProgress({ kind: 'video', percent: 5, phase: 'download', url: 'video', requestId: 'v1', downloadedBytes: 4 * 1024 ** 2 });
+  functions.handleMediaProgress({ kind: 'video', percent: 0, phase: 'prepare', url: 'video' });
+  assert.match(badges.at(-1), /5%/);
+  functions.handleMediaProgress({ kind: 'audio', percent: 2, phase: 'download', url: 'audio', requestId: 'a1' });
+  assert.match(badges.at(-1), /敬拜影片下載中 5% · 已下載 4.0 MB · 背景音樂下載中 2%/);
+  functions.handleMediaProgress({ kind: 'video', percent: 100, phase: 'done', url: 'video', requestId: 'v1' });
+  functions.handleMediaProgress({ kind: 'video', percent: 1, phase: 'download', url: 'video', requestId: 'v2' });
+  timers[0]();
+  assert.equal(states.get('video').percent, 1);
+  functions.handleMediaProgress({ kind: 'video', percent: 90, phase: 'download', url: 'old-video', requestId: 'old' });
+  assert.equal(states.get('video').percent, 1);
+});
+
+test('migrates the active legacy worship source and title without reviving the removed presets', () => {
+  const defaults = vm.runInNewContext(mainSource.match(/const DEFAULT_CONFIG = \{[\s\S]*?\n\};/)[0] + '\nDEFAULT_CONFIG');
+  const functions = loadFunctions(mainSource, ['isPlainObject', 'boundedString', 'boundedInteger', 'isSafeBackgroundFileName', 'sanitizeConfig'], {
+    DEFAULT_CONFIG: defaults, path, BACKGROUND_EXTENSIONS: new Set(['.png']),
+    BIBLE_GATEWAY_BOOKS: { '提摩太前書': '1+Timothy' },
+    normalizeMediaRequest: (url) => ({ url }), sanitizeMediaTitle: (title) => String(title || '')
+  });
+  const saved = functions.sanitizeConfig({ useWorshipPreset: true, worshipPreset: 'https://youtu.be/current1111', worshipUrl: 'https://youtu.be/current1111',
+    worshipTitleUrl: 'https://youtu.be/old1111', worshipTitle: '舊的歌名',
+    customWorshipPresets: [{ title: '今天的歌名', url: 'https://youtu.be/current1111' }] });
+  assert.equal(saved.worshipUrl, 'https://youtu.be/current1111');
+  assert.equal(saved.worshipTitle, '今天的歌名');
+  assert.equal(saved.worshipTitleUrl, saved.worshipUrl);
+  assert.equal(saved.worshipStartSeconds, 0);
+  assert.equal(saved.worshipEndSeconds, null);
+  assert.equal(saved.worshipFadeInSeconds, 1);
+  assert.equal(saved.worshipFadeOutSeconds, 1);
+  assert.ok(!('useWorshipPreset' in saved));
+  assert.ok(!('customWorshipPresets' in saved));
+});
 
 async function runTests() {
   let passed = 0;

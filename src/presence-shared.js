@@ -241,5 +241,30 @@
     };
   }
 
-  return { normalizeDisplayName, twoCharacterHanTokens, buildRosterMatcher, matchRosterMember, matchRosterMemberIds, deriveRosterPresence };
+  const DEFAULT_FULL_TIME_NAMES = Object.freeze(['月琴阿姨', '信一', '恩馳', '恩慈', '佳瑄', '育農', '道萱']);
+
+  function defaultFullTimeMemberIds(roster) {
+    const matcher = buildRosterMatcher(roster);
+    return new Set(DEFAULT_FULL_TIME_NAMES.flatMap((name) => matchRosterMemberIds(matcher, name)));
+  }
+
+  function readingCandidates(kind, derived, excludedMemberIds = [], scriptureIds = []) {
+    const excluded = new Set(Array.from(excludedMemberIds, String));
+    if (kind === 'utmost') for (const id of scriptureIds) excluded.add(String(id));
+    const candidates = kind === 'scripture' ? derived.scriptureCandidates : derived.utmostCandidates;
+    return candidates.filter((member) => !excluded.has(String(member.memberId)));
+  }
+
+  function compareReadingPriority(left, right, statsFor) {
+    const a = statsFor(left.memberId);
+    const b = statsFor(right.memberId);
+    if (a.readYesterday !== b.readYesterday) return a.readYesterday ? 1 : -1;
+    if ((a.totalCount > 0) !== (b.totalCount > 0)) return a.totalCount > 0 ? 1 : -1;
+    if (!!left.isFullTime !== !!right.isFullTime) return left.isFullTime ? 1 : -1;
+    return a.totalCount - b.totalCount || Number(left.order || 0) - Number(right.order || 0) ||
+      String(left.name).localeCompare(String(right.name), 'zh-Hant');
+  }
+
+  return { normalizeDisplayName, twoCharacterHanTokens, buildRosterMatcher, matchRosterMember, matchRosterMemberIds,
+    deriveRosterPresence, readingCandidates, compareReadingPriority, DEFAULT_FULL_TIME_NAMES, defaultFullTimeMemberIds };
 });

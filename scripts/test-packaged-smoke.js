@@ -160,6 +160,7 @@ async function run() {
       before: '2026-09-22', after: '2026-09-23', midnight: '2026-09-23', label: '9/23'
     }, 'Packaged renderer must switch all daily dates at 17:30');
 
+    await evaluate(page, `window.api.publishWorshipPlayback({ active: true, position: 45, end: 100, duration: 300, paused: false })`);
     await evaluate(page, `document.getElementById('btnHost').click()`);
     const hostPage = await waitForTarget(port, child, /host[\\/]index\.html(?:$|[?#])/);
     const hostExpression = `(() => ({
@@ -179,6 +180,26 @@ async function run() {
     assert.match(hostState.title, /主持/, 'Packaged host console title is incorrect');
     assert.equal(hostState.setupVisible, true, 'Fresh packaged host console should show device pairing');
     assert.equal(hostState.hasPrivateLists, true, 'Packaged host console is missing candidate lists');
+    const countdown = await evaluate(hostPage, `({
+      hidden: document.getElementById('hostWorshipCountdown').classList.contains('hidden'),
+      text: document.getElementById('hostWorshipRemaining').textContent,
+      tone: document.getElementById('hostWorshipCountdown').dataset.tone
+    })`);
+    assert.deepEqual(countdown, { hidden: false, text: '0:55', tone: 'minute' }, 'Opening host during worship must hydrate the current countdown');
+    await evaluate(page, `window.api.publishWorshipPlayback({ active: true, position: 85, end: 100, duration: 300, paused: true })`);
+    const countdownDeadline = Date.now() + 3000;
+    let syncedCountdown;
+    do {
+      syncedCountdown = await evaluate(hostPage, `({ text: document.getElementById('hostWorshipRemaining').textContent,
+        tone: document.getElementById('hostWorshipCountdown').dataset.tone,
+        paused: document.getElementById('hostWorshipLabel').textContent.includes('已暫停') })`);
+      if (syncedCountdown.text === '0:15') break;
+      await delay(50);
+    } while (Date.now() < countdownDeadline);
+    assert.deepEqual(syncedCountdown, { text: '0:15', tone: 'ending', paused: true }, 'Worship seek/pause must reach the host through real IPC');
+    await evaluate(page, `window.api.publishWorshipPlayback({ active: false })`);
+    await delay(100);
+    assert.equal(await evaluate(hostPage, `document.getElementById('hostWorshipCountdown').classList.contains('hidden')`), true);
     assert.equal(await evaluate(hostPage, `taipeiDateKey(new Date('2026-09-22T09:30:00Z'))`), '2026-09-23',
       'Packaged host must use the same preparation date as the renderer');
     const nameMatches = await evaluate(hostPage, `(() => {
@@ -190,6 +211,22 @@ async function run() {
         window.PresenceShared.matchRosterMemberIds(matcher, name));
     })()`);
     assert.deepEqual(nameMatches, [['z'], [], ['s'], []], 'Packaged host must reject surname-prefix and conflicting-surname matches');
+    const showFinalUtmost = `flowStep = 'utmost'; flowPages = [{ type: 'text', text: '測試最後一頁' }]; flowPageIndex = 0;
+      flowTransitioning = false; flowLoading = false; document.getElementById('flowScreen').classList.remove('hidden');`;
+    await evaluate(page, `${showFinalUtmost}
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));`);
+    await delay(150);
+    assert.equal(await evaluate(page, `flowStep`), 'cover', 'Escape must return to the cover even after two quit-confirmation presses');
+    await evaluate(page, `${showFinalUtmost}
+      for (let i = 0; i < 3; i++) window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown' }));`);
+    assert.equal(child.exitCode, null, 'Down arrows must never quit the app');
+    assert.equal(await evaluate(page, `utmostFinishConfirmCount`), 0, 'Down arrows must not arm app exit');
+    await evaluate(page, `for (let i = 0; i < 3; i++) window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));`);
+    const quitDeadline = Date.now() + 5000;
+    while (child.exitCode === null && Date.now() < quitDeadline) await delay(50);
+    assert.equal(child.exitCode, 0, 'Three right-arrow presses on the last Utmost page must quit the app');
     console.log(`Packaged Electron smoke passed: ${path.basename(executable)}`);
   } finally {
     stopProcessTree(child);

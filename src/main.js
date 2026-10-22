@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, screen, session, powerSaveBlocker } = require('electron');
 const path = require('path');
@@ -15,8 +15,23 @@ const execFileP = promisify(execFile);
 const { autoUpdater } = require('electron-updater');
 const { PresenceManager } = require('./presence');
 const DevotionalDate = require('./devotional-date');
+const { DownloadProgress } = require('./download-progress');
+const { countdownState } = require('./worship-shared');
 
-const presenceManager = new PresenceManager();
+const LOCAL_TRIAL = !app.isPackaged && process.argv.includes('--local-trial');
+if (LOCAL_TRIAL) {
+  const originalData = app.getPath('userData');
+  const trialData = path.join(app.getPath('appData'), 'lingxiu-cover-local-trial');
+  fs.mkdirSync(trialData, { recursive: true });
+  // APFS clones keep the installed app's settings and media independent.
+  for (const name of ['config.json', 'presence-device.json', 'presence-cache.json', 'backgrounds', 'media', ytDlpBinName()]) {
+    const source = path.join(originalData, name);
+    const target = path.join(trialData, name);
+    if (fs.existsSync(source) && !fs.existsSync(target)) fs.cpSync(source, target, { recursive: true, mode: fs.constants.COPYFILE_FICLONE });
+  }
+  app.setPath('userData', trialData);
+}
+const presenceManager = new PresenceManager({ localTrial: LOCAL_TRIAL });
 const APP_ICON_PATH = path.join(__dirname, 'renderer', 'images', 'app-icon.png');
 const ROSTER_SHEET_URL = 'https://docs.google.com/spreadsheets/d/11O0As3DWpT45otcL5T7BadMpPVWcWKAoiZ5OUPocMpA/edit#gid=20260720';
 
@@ -65,11 +80,12 @@ const DEFAULT_CONFIG = {
   fillMode: 'blur',
   musicUrl: '',
   worshipUrl: '',
-  useWorshipPreset: false,
-  worshipPreset: '',
   worshipTitle: '',
   worshipTitleUrl: '',
-  customWorshipPresets: [],
+  worshipStartSeconds: 0,
+  worshipEndSeconds: null,
+  worshipFadeInSeconds: 1,
+  worshipFadeOutSeconds: 1,
   musicVolume: 0.8,
   autoPlayMusic: true,
   preventLeftArrowWorship: true,
@@ -778,12 +794,27 @@ async function replaceFileSafely(tempPath, destinationPath, backupSuffix = '.old
 
 async function localYtDlpVersion() {
   try {
-    const { stdout } = await execFileP(resolveYtDlpPath(), ['--version'], { windowsHide: true, env: spawnEnv() });
+    const { stdout } = await execFileP(resolveYtDlpPath(), ['--version'], { windowsHide: true, env: spawnEnv(), timeout: 30000 });
     return stdout.trim();
   } catch { return null; }
 }
 
 let ytDlpUpdatePromise = null;
+let ytDlpStatus = { current: null, latest: null, checkedAt: '', error: '' };
+
+async function readYtDlpStatus(check = false) {
+  const current = await localYtDlpVersion();
+  ytDlpStatus = { ...ytDlpStatus, current };
+  if (check) {
+    try {
+      const release = await httpGetJson('https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest');
+      const latest = String(release && release.tag_name || '').trim();
+      if (!latest) throw new Error('無法確認最新版本');
+      ytDlpStatus = { current, latest, checkedAt: new Date().toISOString(), error: '' };
+    } catch (error) { ytDlpStatus = { ...ytDlpStatus, error: error.message }; }
+  }
+  return { ...ytDlpStatus, updating: !!ytDlpUpdatePromise };
+}
 
 async function performAutoUpdateYtDlp() {
   const tmp = process.platform === 'win32'
@@ -794,6 +825,7 @@ async function performAutoUpdateYtDlp() {
     const latest = ((release && release.tag_name) || '').trim();
     if (!latest) return { updated: false, reason: 'no-tag' };
     const current = await localYtDlpVersion();
+    ytDlpStatus = { current, latest, checkedAt: new Date().toISOString(), error: '' };
     if (current && current === latest) return { updated: false, current };
     const asset = (release.assets || []).find((a) => a.name === ytDlpBinName());
     if (!asset) return { updated: false, reason: 'no-asset' };
@@ -808,10 +840,12 @@ async function performAutoUpdateYtDlp() {
     const stat = await fsp.stat(tmp);
     if (!stat.isFile() || stat.size < 100_000) throw new Error('下載的 yt-dlp 檔案不完整');
     const { stdout } = await execFileP(tmp, ['--version'], { windowsHide: true, env: spawnEnv() });
-    if (!String(stdout || '').trim()) throw new Error('下載的 yt-dlp 無法執行');
+    if (String(stdout || '').trim() !== latest) throw new Error('下載的 yt-dlp 版本與發行版不符');
     await replaceFileSafely(tmp, userBinPath(), '.old');
+    ytDlpStatus = { ...ytDlpStatus, current: latest };
     return { updated: true, from: current, to: latest };
   } catch (e) {
+    ytDlpStatus = { ...ytDlpStatus, error: e.message };
     return { updated: false, error: e.message };
   } finally {
     await fsp.unlink(tmp).catch(() => {});
@@ -1060,6 +1094,11 @@ function ytDlpDownloadArgs(url, kind, quality, outputTemplate, ffmpegDir) {
     '--no-cache-dir',
     '--no-playlist',
     '--newline',
+    '--progress', '--no-simulate',
+    '--output-na-placeholder', 'null',
+    '--print', 'before_dl:__LINGXIU_FORMATS__%(requested_formats)j',
+    '--no-quiet',
+    '--progress-template', 'download:__LINGXIU_PROGRESS__{"format_id":%(info.format_id)j,"downloaded":%(progress.downloaded_bytes)j,"total":%(progress.total_bytes)j,"estimate":%(progress.total_bytes_estimate)j,"fragment_index":%(progress.fragment_index)j,"fragment_count":%(progress.fragment_count)j,"status":%(progress.status)j}',
     '--socket-timeout', '20',
     '--force-ipv4',
     '--extractor-args', 'youtube:player_client=web_embedded,default',
@@ -1118,9 +1157,9 @@ function cleanIncompleteFilesForKey(key) {
   } catch {}
 }
 
-function sendProgress(kind, percent, phase) {
+function sendProgress(kind, percent, phase, request = {}) {
   if (mainWindow && !mainWindow.isDestroyed())
-    mainWindow.webContents.send('media:progress', { kind, percent, phase });
+    mainWindow.webContents.send('media:progress', { kind, percent, phase, ...request });
 }
 
 function ytDlpProgressPhase(output) {
@@ -1134,7 +1173,7 @@ function ytDlpProgressPhase(output) {
   return '';
 }
 
-function downloadMedia(url, kind, quality, downloadQuality = quality) {
+function downloadMedia(url, kind, quality, downloadQuality = quality, progress = null) {
   return new Promise((resolve, reject) => {
     const key = cacheKey(url, kind, quality);
     const tmpl = path.join(CACHE_DIR(), `${key}.%(ext)s`);
@@ -1143,32 +1182,16 @@ function downloadMedia(url, kind, quality, downloadQuality = quality) {
     const args = ytDlpDownloadArgs(url, kind, downloadQuality, tmpl, ffmpegDir);
 
     const usingFallbackQuality = kind === 'video' && downloadQuality !== quality;
-    sendProgress(kind, 0, usingFallbackQuality ? 'fallback720' : 'prepare');
+    const reporter = progress || new DownloadProgress((percent, phase, details) => sendProgress(kind, percent, phase, { ...details, url, quality }));
+    reporter.emit(0, usingFallbackQuality ? 'fallback720' : 'prepare');
     const child = spawn(resolveYtDlpPath(), args, { windowsHide: true, env: spawnEnv() });
     let stderr = '';
-    let destCount = 0;
     let settled = false;
-    const onLine = (buf) => {
-      const text = String(buf).replace(/\x1B\[[0-9;]*[A-Za-z]/g, ''); // 移除 ANSI 色碼。
-      const phase = ytDlpProgressPhase(text);
-      if (phase) sendProgress(kind, phase === 'merge' ? 99 : 0, phase);
-      const dests = text.match(/\[download\]\s+Destination:/g);
-      if (dests) destCount += dests.length;
-      const pcts = text.match(/\[download\]\s+([\d.]+)%/g);
-      if (pcts && pcts.length) {
-        const pm = pcts[pcts.length - 1].match(/([\d.]+)%/);
-        if (pm) {
-          let pct = parseFloat(pm[1]);
-          if (kind === 'video') { // 影片與音訊分別使用 0-50、50-100 的進度區間。
-            const phase = Math.min(Math.max(destCount, 1), 2);
-            pct = (phase - 1) * 50 + pct / 2;
-          }
-          if (!isNaN(pct)) sendProgress(kind, pct, 'download');
-        }
-      }
-    };
-    child.stdout.on('data', onLine);
-    child.stderr.on('data', (d) => { stderr = (stderr + String(d)).slice(-64 * 1024); onLine(d); });
+    child.stdout.on('data', (data) => reporter.consume(data, 'stdout'));
+    child.stderr.on('data', (data) => {
+      stderr = (stderr + String(data)).slice(-64 * 1024);
+      reporter.consume(data, 'stderr');
+    });
     child.on('error', (error) => {
       if (settled) return;
       settled = true;
@@ -1180,32 +1203,35 @@ function downloadMedia(url, kind, quality, downloadQuality = quality) {
       settled = true;
       cleanIncompleteFilesForKey(key);
       const out = findCachedFile(url, kind, quality);
-      if (code === 0 && out) { sendProgress(kind, 100); resolve(out); }
+      reporter.flush();
+      if (code === 0 && out) { reporter.emit(100, 'done'); resolve(out); }
       else reject(new Error(stderr.split(/\r?\n/).filter(Boolean).pop() || (`yt-dlp 下載失敗（代碼 ${code}）`)));
     });
   });
 }
 
 async function downloadMediaWithRecovery(url, kind, quality) {
+  const requestId = crypto.randomUUID();
+  const progress = new DownloadProgress((percent, phase, details) => sendProgress(kind, percent, phase, { ...details, url, quality, requestId }));
   try {
-    return await downloadMedia(url, kind, quality);
+    return await downloadMedia(url, kind, quality, quality, progress);
   } catch (error) {
     if (kind === 'video' && Number(quality) > VIDEO_FALLBACK_QUALITY) {
       try {
-        return await downloadMedia(url, kind, quality, VIDEO_FALLBACK_QUALITY);
+        return await downloadMedia(url, kind, quality, VIDEO_FALLBACK_QUALITY, progress);
       } catch (fallbackError) {
         if (!isYtDlpForbiddenError(error) && !isYtDlpForbiddenError(fallbackError)) throw fallbackError;
         error = fallbackError;
       }
     }
     if (!isYtDlpForbiddenError(error)) throw error;
-    sendProgress(kind, 0, 'update');
+    progress.emit(0, 'update');
     const updateResult = await autoUpdateYtDlp();
     if (!updateResult || !updateResult.updated) throw ytDlpForbiddenMessage(error, updateResult);
-    sendProgress(kind, 0, 'retry');
+    progress.emit(0, 'retry');
     try {
       const retryQuality = kind === 'video' && Number(quality) > VIDEO_FALLBACK_QUALITY ? VIDEO_FALLBACK_QUALITY : quality;
-      return await downloadMedia(url, kind, quality, retryQuality);
+      return await downloadMedia(url, kind, quality, retryQuality, progress);
     } catch (retryError) {
       if (isYtDlpForbiddenError(retryError)) throw ytDlpForbiddenMessage(retryError, updateResult, true);
       throw retryError;
@@ -1227,7 +1253,10 @@ async function ensureMedia(url, kind, quality) {
   const p = (async () => {
     await waitForPendingYtDlpUpdate();
     return downloadMediaWithRecovery(url, kind, quality);
-  })().finally(() => inflight.delete(key));
+  })().catch((error) => {
+    sendProgress(kind, 0, 'error', { url, quality });
+    throw error;
+  }).finally(() => inflight.delete(key));
   inflight.set(key, p);
   return p;
 }
@@ -1421,12 +1450,18 @@ function sanitizeConfig(input) {
       return [{ title: sanitizeMediaTitle(item.title) || '自訂敬拜影片', url: normalized }];
     } catch { return []; }
   }) : [];
-  const worshipTitle = sanitizeMediaTitle(value.worshipTitle);
+  const worshipUrl = boundedString(value.worshipUrl || (value.useWorshipPreset && value.worshipPreset), '', 4096);
+  const legacyPreset = presets.find((item) => item.url === worshipUrl);
+  const worshipTitle = sanitizeMediaTitle(value.worshipTitleUrl === worshipUrl ? value.worshipTitle : legacyPreset && legacyPreset.title);
   let worshipTitleUrl = '';
   if (value.worshipTitleUrl) {
     try { worshipTitleUrl = normalizeMediaRequest(boundedString(value.worshipTitleUrl, '', 4096), 'video').url; }
     catch {}
   }
+  if (worshipTitle) worshipTitleUrl = worshipUrl;
+  const worshipStartSeconds = boundedInteger(value.worshipStartSeconds, 0, 0, 599999);
+  const worshipEndSeconds = value.worshipEndSeconds == null ? null : boundedInteger(value.worshipEndSeconds, null, 0, 599999);
+  const fadeSeconds = (number) => Number.isFinite(Number(number)) ? Math.max(0, Math.min(10, Number(number))) : 1;
   const backgroundFile = isSafeBackgroundFileName(value.backgroundFile) ? value.backgroundFile : '';
   const book = Object.prototype.hasOwnProperty.call(BIBLE_GATEWAY_BOOKS, value.scriptureBook)
     ? value.scriptureBook : DEFAULT_CONFIG.scriptureBook;
@@ -1450,12 +1485,13 @@ function sanitizeConfig(input) {
     backgroundFile,
     fillMode,
     musicUrl: boundedString(value.musicUrl, '', 4096),
-    worshipUrl: boundedString(value.worshipUrl, '', 4096),
-    useWorshipPreset: value.useWorshipPreset === true,
-    worshipPreset: boundedString(value.worshipPreset, '', 4096),
+    worshipUrl,
+    worshipStartSeconds,
+    worshipEndSeconds: worshipEndSeconds !== null && worshipEndSeconds > worshipStartSeconds ? worshipEndSeconds : null,
+    worshipFadeInSeconds: fadeSeconds(value.worshipFadeInSeconds),
+    worshipFadeOutSeconds: fadeSeconds(value.worshipFadeOutSeconds),
     worshipTitle,
     worshipTitleUrl,
-    customWorshipPresets: presets,
     musicVolume: Number.isFinite(volume) ? Math.min(1, Math.max(0, volume)) : DEFAULT_CONFIG.musicVolume,
     autoPlayMusic: value.autoPlayMusic !== false,
     preventLeftArrowWorship: value.preventLeftArrowWorship !== false,
@@ -2114,6 +2150,10 @@ function finishManualWindowDrag() {
 }
 
 function registerIpc() {
+  trustedOn('worship:playback', (event, state) => {
+    if (event.sender === mainWindow?.webContents) updateHostWorshipPlayback(state);
+  });
+  trustedHandle('host:worship-playback', () => hostWorshipPlayback);
   trustedHandle('config:get', async () => {
     const cfg = await readConfig();
     return { cfg, backgroundUrl: bgFileUrl(cfg.backgroundFile) };
@@ -2203,6 +2243,7 @@ function registerIpc() {
 
   trustedHandle('ytdlp:update', async () => autoUpdateYtDlp());
   trustedHandle('ytdlp:version', async () => localYtDlpVersion());
+  trustedHandle('ytdlp:status', async (check) => readYtDlpStatus(check === true));
 
   // ---------- 應用程式更新 ----------
   trustedHandle('app:version', () => app.getVersion());
@@ -2266,6 +2307,7 @@ function registerIpc() {
   trustedHandle('win:close', () => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
   });
+  trustedHandle('app:quit', () => { app.quit(); });
   trustedHandle('win:mode', (mode) => setWindowMode(mode));
   trustedOn('win:drag-start', (_event, point) => startManualWindowDrag(point));
   trustedOn('win:drag-move', (_event, point) => moveManualWindowDrag(point));
@@ -2310,6 +2352,7 @@ function registerIpc() {
 // ---------- 視窗 ----------
 let mainWindow = null;
 let hostWindow = null;
+let hostWorshipPlayback = { active: false };
 let lastWideBounds = null;
 let pointerMonitorTimer = null;
 let lastPointerPoint = null;
@@ -2507,6 +2550,7 @@ async function createWindow() {
   mainWindowAspectRatio = 16 / 9;
   window.setAspectRatio(16 / 9);
   window.removeMenu();
+  if (LOCAL_TRIAL) window.setTitle('靈修封面・本機試用');
   attachCoordinatedWindowLayoutEvents(window, 'cover');
 
   const guardNavigation = (event, targetUrl) => {
@@ -2522,6 +2566,8 @@ async function createWindow() {
     catch {}
     return { action: 'deny' };
   });
+  window.webContents.on('did-start-loading', () => updateHostWorshipPlayback(null));
+  window.webContents.on('render-process-gone', () => updateHostWorshipPlayback(null));
   window.loadFile(RENDERER_ENTRY_PATH).catch((error) => console.error('載入主畫面失敗：', error));
 
   window.webContents.on('context-menu', (_e, params) => {
@@ -2537,6 +2583,7 @@ async function createWindow() {
 
   window.webContents.once('did-finish-load', () => { checkLatestVersion(); });
   window.on('closed', () => {
+    updateHostWorshipPlayback(null);
     clearCoordinatedWindowLayoutTimer();
     stopMainWindowPointerMonitor();
     closeNativeAudio();
@@ -2547,6 +2594,11 @@ async function createWindow() {
 
 function sendPresenceState(state = presenceManager.publicState()) {
   if (hostWindow && !hostWindow.isDestroyed()) hostWindow.webContents.send('presence:state', state);
+}
+
+function updateHostWorshipPlayback(value) {
+  hostWorshipPlayback = countdownState(value);
+  if (hostWindow && !hostWindow.isDestroyed()) hostWindow.webContents.send('host:worship-playback', hostWorshipPlayback);
 }
 
 function scriptureConfigFrom(cfg) {
@@ -2602,6 +2654,7 @@ function openHostWindow() {
     }
   });
   hostWindow = window;
+  if (LOCAL_TRIAL) window.setTitle('靈修班主持台・本機試用');
   startHostPresenceRefresh();
   window.removeMenu();
   attachCoordinatedWindowLayoutEvents(window, 'host');
@@ -2610,6 +2663,7 @@ function openHostWindow() {
     if (!isTrustedRendererUrl(targetUrl, HOST_ENTRY_PATH)) event.preventDefault();
   });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  if (LOCAL_TRIAL) window.webContents.on('did-finish-load', () => window.setTitle('靈修班主持台・本機試用'));
   window.loadFile(HOST_ENTRY_PATH).catch((error) => console.error('載入主持台失敗：', error));
   window.once('ready-to-show', () => {
     if (!window.isDestroyed()) {
@@ -2724,6 +2778,7 @@ app.whenReady().then(async () => {
   presenceManager.on('state', sendPresenceState);
   await ensureWritableYtDlp();
   await createWindow();
+  if (LOCAL_TRIAL) openHostWindow();
   presenceManager.start().catch((error) => console.warn('啟動主持台即時連線失敗：', error.message));
   setupAutoUpdater();
   autoUpdateYtDlp().then((r) => { if (r && r.updated) console.log('yt-dlp 已更新至', r.to); });
@@ -2745,4 +2800,4 @@ app.on('before-quit', () => {
   stopHostPresenceRefresh();
   presenceManager.stop();
 });
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.on('window-all-closed', () => { if (LOCAL_TRIAL || process.platform !== 'darwin') app.quit(); });

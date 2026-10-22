@@ -815,15 +815,16 @@ body.plat-win .worship-layer { -webkit-app-region: drag; }
   left: 18px;
   right: 18px;
   bottom: 18px;
-  display: flex;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  background: rgba(24,22,27,.52);
-  border: 1px solid rgba(255,255,255,.16);
-  border-radius: 28px;
-  box-shadow: 0 8px 26px rgba(0,0,0,.2);
-  backdrop-filter: saturate(.85) blur(14px);
+  gap: 2px 10px;
+  padding: 9px 16px 8px;
+  background: rgba(24,22,27,.3);
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 18px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.1);
+  backdrop-filter: blur(10px);
   z-index: 6;
   opacity: 0;
   transform: translateY(6px);
@@ -834,37 +835,37 @@ body.plat-win .worship-layer { -webkit-app-region: drag; }
 .worship-controls .wbtn {
   font-family: var(--ui);
   font-size: 13px;
-  font-weight: 900;
+  font-weight: 500;
   color: var(--ink);
   background: #fff;
-  border: 1.5px solid var(--line-strong);
+  border: 1px solid var(--line-strong);
   border-radius: var(--pill);
-  padding: 10px 16px;
+  padding: 7px 12px;
   cursor: pointer;
   white-space: nowrap;
   transition: background .15s, transform .1s, border-color .15s;
 }
 .worship-controls #wPlay {
-  width: 56px;
-  height: 56px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   display: grid;
   place-items: center;
-  background: rgba(255,255,255,.16);
+  background: transparent;
   color: rgba(255,255,255,.92);
-  border: 1px solid rgba(255,255,255,.24);
+  border: 0;
   border-radius: 50%;
 }
 .worship-play-btn svg {
-  width: 56px;
-  height: 56px;
+  width: 36px;
+  height: 36px;
   display: block;
 }
 .worship-play-btn circle,
 .worship-play-btn path {
   fill: none;
   stroke: currentColor;
-  stroke-width: 4;
+  stroke-width: 2.5;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -876,21 +877,21 @@ body.plat-win .worship-layer { -webkit-app-region: drag; }
 .worship-play-btn.playing .play-icon { display: none; }
 .worship-play-btn.playing .pause-icon { display: block; }
 .worship-controls .worship-next-btn {
-  min-width: 112px;
+  min-width: 104px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  background: rgba(255,255,255,.14);
+  background: rgba(255,255,255,.06);
   color: rgba(255,255,255,.9);
-  border-color: rgba(255,255,255,.2);
+  border-color: rgba(255,255,255,.12);
 }
 .worship-controls .worship-next-btn:hover {
   background: rgba(255,255,255,.22);
   color: #fff;
   border-color: rgba(255,255,255,.32);
 }
-.worship-controls .wbtn:hover { background: rgba(255,255,255,.22); color: #fff; border-color: rgba(255,255,255,.32); transform: translateY(-1px); box-shadow: 0 7px 16px rgba(0,0,0,.18); }
+.worship-controls .wbtn:hover { background: rgba(255,255,255,.16); color: #fff; border-color: rgba(255,255,255,.24); }
 .worship-controls .worship-next-btn:hover {
   background: rgba(255,255,255,.22);
   color: #fff;
@@ -899,12 +900,37 @@ body.plat-win .worship-layer { -webkit-app-region: drag; }
 .worship-controls .wbtn:active { transform: scale(1.04); }
 .worship-controls .wtime {
   color: rgba(255,255,255,.74);
-  font-size: 13px;
+  font-size: 12px;
   min-width: 48px;
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
-.worship-controls .wseek { flex: 1; height: 7px; cursor: pointer; accent-color: rgba(255,255,255,.72); }
+.worship-timeline { grid-column: 1 / -1; min-width: 0; padding-inline: 10px; }
+.worship-range-caption { display: flex; justify-content: space-between; gap: 12px; color: rgba(255,255,255,.8); font: 400 11px/1.4 var(--ui); }
+.worship-range-caption > span:last-child { color: rgba(255,255,255,.56); }
+.worship-timeline-track { position: relative; height: 32px; touch-action: none; }
+.worship-timeline-track::before { content: ''; position: absolute; inset: 20px 0 auto; height: 3px; border-radius: 3px; background: rgba(255,255,255,.22); }
+.worship-range-selection { position: absolute; top: 20px; height: 3px; border-radius: 3px; background: #d2bb91; pointer-events: none; }
+.worship-controls .wseek { appearance: none; -webkit-appearance: none; position: absolute; inset: 9px 0 auto; width: 100%; height: 25px; margin: 0; background: transparent; cursor: pointer; }
+.wseek::-webkit-slider-runnable-track { height: 3px; background: transparent; }
+.wseek::-webkit-slider-thumb { appearance: none; -webkit-appearance: none; width: 10px; height: 10px; border-radius: 50%; background: #fff; margin-top: -3.5px; }
+.worship-marker { position: absolute; top: 0; width: 30px; height: 32px; padding: 0; border: 0; background: transparent; color: #f3dfb8; transform: translateX(-50%); cursor: ew-resize; touch-action: none; }
+.worship-marker::before { content: ''; position: absolute; left: 14px; top: 14px; width: 2px; height: 16px; background: currentColor; }
+.worship-marker span { position: absolute; top: 0; left: 5px; display: grid; place-items: center; width: 20px; height: 14px; color: currentColor; font: 600 10px/1 var(--ui); }
+.marker-out { color: #b7d0cd; }
+.worship-marker:focus-visible { outline: 2px solid #fff; outline-offset: 2px; border-radius: 6px; }
+.worship-marker:disabled { opacity: .35; cursor: default; }
+.worship-clock { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.worship-time-divider { color: #b6aeb9; font: 12px var(--ui); }
+.worship-preview-hint { min-width: 0; color: #e5d9c5; font: 12px/1.4 var(--ui); }
+@media (max-width: 640px) {
+  .worship-controls { left: 10px; right: 10px; bottom: 12px; padding-inline: 10px; gap: 2px 6px; border-radius: 16px; }
+  .worship-range-caption { font-size: 10px; gap: 6px; }
+  .worship-controls #wPlay, .worship-play-btn svg { width: 32px; height: 32px; }
+  .worship-controls .wtime { min-width: auto; font-size: 11px; }
+  .worship-controls .worship-next-btn { min-width: 0; padding: 7px 9px; font-size: 11px; }
+  .worship-preview-hint { font-size: 10px; }
+}
 
 .toolbar {
   position: fixed;
@@ -1070,24 +1096,25 @@ body.plat-win .worship-layer { -webkit-app-region: drag; }
   animation: fadeIn .2s ease;
 }
 .settings {
+  --settings-accent: #6b526f;
+  --settings-muted: #7b717d;
+  --settings-line: #e5dfe5;
+  --settings-soft: #f1edf2;
   position: fixed;
   top: calc(18px * var(--settings-display-scale, 1));
   right: calc(18px * var(--settings-display-scale, 1));
   bottom: calc(18px * var(--settings-display-scale, 1));
-  height: auto;
-  width: calc(500px * var(--settings-display-scale, 1));
+  width: calc(560px * var(--settings-display-scale, 1));
   max-width: calc(100vw - calc(36px * var(--settings-display-scale, 1)));
   z-index: 30;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: #f7f3ee;
+  background: #fcfafb;
   color: var(--ink);
-  backdrop-filter: var(--panel-blur);
-  -webkit-backdrop-filter: var(--panel-blur);
-  border: 1px solid rgba(47,41,51,.12);
-  border-radius: calc(34px * var(--settings-display-scale, 1));
-  box-shadow: 0 24px 70px rgba(47,41,51,.22);
+  border: 1px solid rgba(255,255,255,.8);
+  border-radius: calc(24px * var(--settings-display-scale, 1));
+  box-shadow: 0 24px 80px rgba(40,29,43,.2), 0 2px 8px rgba(40,29,43,.06);
   font-family: var(--ui);
   transform: translateX(0);
   transition: transform .32s cubic-bezier(.32,.72,0,1), opacity .24s ease;
@@ -1096,344 +1123,147 @@ body.plat-win .worship-layer { -webkit-app-region: drag; }
   opacity: .4;
   transform: translateX(calc(100% + calc(38px * var(--settings-display-scale, 1))));
 }
-body.plat-mac .settings {
-  top: calc(18px * var(--settings-display-scale, 1));
-  right: calc(18px * var(--settings-display-scale, 1));
-  bottom: calc(18px * var(--settings-display-scale, 1));
-  height: auto;
-  border: 1px solid rgba(47,41,51,.12);
-  border-radius: calc(34px * var(--settings-display-scale, 1));
-  overflow: hidden;
-}
-body.plat-mac .settings.hidden { transform: translateX(calc(100% + calc(38px * var(--settings-display-scale, 1)))); }
 .settings-head {
+  flex: 0 0 auto;
   display: flex;
-  justify-content: center;
   align-items: center;
-  min-height: calc(76px * var(--settings-display-scale, 1));
-  padding: calc(20px * var(--settings-display-scale, 1)) calc(64px * var(--settings-display-scale, 1));
   position: relative;
-  background: rgba(255,253,248,.94);
-  border-bottom: 1px solid var(--line);
-  font-size: calc(22px * var(--settings-display-scale, 1));
-  font-weight: 900;
-  letter-spacing: 0;
+  min-height: calc(82px * var(--settings-display-scale, 1));
+  padding: calc(20px * var(--settings-display-scale, 1)) calc(70px * var(--settings-display-scale, 1)) calc(18px * var(--settings-display-scale, 1)) calc(26px * var(--settings-display-scale, 1));
 }
+.settings-head h2 { color: #352d39; font-size: calc(22px * var(--settings-display-scale, 1)); line-height: 1.3; font-weight: 750; letter-spacing: .02em; }
+.settings-head p { margin-top: calc(5px * var(--settings-display-scale, 1)); color: var(--settings-muted); font-size: calc(11.5px * var(--settings-display-scale, 1)); font-weight: 400; }
 .settings-head .close {
   position: absolute;
-  right: calc(18px * var(--settings-display-scale, 1));
+  right: calc(23px * var(--settings-display-scale, 1));
   top: 50%;
   transform: translateY(-50%);
-  background: #fff;
-  border: 1px solid var(--line);
-  color: var(--ink);
-  width: calc(40px * var(--settings-display-scale, 1));
-  height: calc(40px * var(--settings-display-scale, 1));
-  border-radius: var(--pill);
-  font-size: calc(16px * var(--settings-display-scale, 1));
+  width: calc(32px * var(--settings-display-scale, 1));
+  height: calc(32px * var(--settings-display-scale, 1));
+  border: 0;
+  border-radius: calc(10px * var(--settings-display-scale, 1));
+  background: var(--settings-soft);
+  color: var(--settings-muted);
+  font-family: var(--ui);
+  font-size: calc(18px * var(--settings-display-scale, 1));
   cursor: pointer;
-  box-shadow: var(--elev-soft);
-  transition: background .15s, color .15s, transform .1s;
 }
-.settings-head .close:hover { background: #f4eee8; color: var(--primary); box-shadow: 0 7px 16px rgba(47,41,51,.14); }
-.settings-head .close:active { transform: translateY(-50%) scale(1.06); }
+.settings-head .close:hover { background: #e8e0e9; color: var(--settings-accent); }
+.settings-tabs {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: calc(4px * var(--settings-display-scale, 1));
+  margin: 0 calc(24px * var(--settings-display-scale, 1));
+  padding: calc(4px * var(--settings-display-scale, 1));
+  background: #eee9ef;
+  border-radius: calc(12px * var(--settings-display-scale, 1));
+}
+.settings-tabs button {
+  min-width: 0;
+  min-height: calc(36px * var(--settings-display-scale, 1));
+  padding: calc(8px * var(--settings-display-scale, 1)) calc(4px * var(--settings-display-scale, 1));
+  border: 0;
+  border-radius: calc(9px * var(--settings-display-scale, 1));
+  background: transparent;
+  font-family: var(--ui);
+  font-size: calc(13px * var(--settings-display-scale, 1));
+  font-weight: 550;
+  color: var(--settings-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.settings-tabs button[aria-selected="true"] { color: var(--settings-accent); background: #fff; box-shadow: 0 2px 5px rgba(50,34,55,.09); font-weight: 700; }
+.settings-tabs button:hover:not([aria-selected="true"]) { color: var(--settings-accent); background: rgba(255,255,255,.5); }
+.settings button:focus-visible, .settings-disclosure > summary:focus-visible { outline: 2px solid var(--settings-accent); outline-offset: 2px; }
+.settings [hidden] { display: none !important; }
+.settings-pane { min-width: 0; outline-offset: -2px; }
 .settings-body {
-  padding: calc(18px * var(--settings-display-scale, 1)) calc(18px * var(--settings-display-scale, 1)) calc(26px * var(--settings-display-scale, 1));
-  overflow-y: auto;
   flex: 1 1 auto;
   min-height: 0;
+  overflow-y: auto;
+  padding: calc(26px * var(--settings-display-scale, 1)) calc(26px * var(--settings-display-scale, 1)) calc(30px * var(--settings-display-scale, 1));
+  scrollbar-gutter: stable;
 }
-.settings-body::-webkit-scrollbar { width: calc(10px * var(--settings-display-scale, 1)); }
-.settings-body::-webkit-scrollbar-thumb {
-  background: rgba(47,41,51,.2);
-  border-radius: calc(10px * var(--settings-display-scale, 1));
-  border: calc(3px * var(--settings-display-scale, 1)) solid transparent;
-  background-clip: content-box;
-}
-.settings fieldset {
-  border: 0;
-  border-radius: calc(24px * var(--settings-display-scale, 1));
-  padding: calc(20px * var(--settings-display-scale, 1)) calc(18px * var(--settings-display-scale, 1)) calc(14px * var(--settings-display-scale, 1));
-  margin-bottom: calc(16px * var(--settings-display-scale, 1));
-  background: #fffdf8;
-  box-shadow: 0 10px 26px rgba(47,41,51,.07);
-}
-.settings legend {
-  float: left;
-  width: 100%;
-  padding: 0 0 calc(14px * var(--settings-display-scale, 1));
-  color: var(--ink);
-  font-size: calc(20px * var(--settings-display-scale, 1));
-  font-weight: 900;
-  letter-spacing: 0;
-  background: transparent;
-  border: none;
-}
+.settings-body::-webkit-scrollbar { width: calc(7px * var(--settings-display-scale, 1)); }
+.settings-body::-webkit-scrollbar-thumb { background: #d8cfd9; border-radius: 10px; border: 2px solid #fcfafb; background-clip: padding-box; }
+.settings fieldset { min-width: 0; border: 0; border-bottom: 1px solid var(--settings-line); padding: 0 0 calc(20px * var(--settings-display-scale, 1)); margin: 0 0 calc(20px * var(--settings-display-scale, 1)); }
+.settings-pane > fieldset:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
+.settings legend { float: left; width: 100%; padding: 0 0 calc(18px * var(--settings-display-scale, 1)); color: #3f3443; font-size: calc(16px * var(--settings-display-scale, 1)); font-weight: 700; letter-spacing: .015em; border: 0; }
 .settings legend + * { clear: both; }
-.settings label {
-  display: block;
-  min-width: 0;
-  font-size: calc(13.5px * var(--settings-display-scale, 1));
-  color: var(--ink);
-  margin-bottom: calc(14px * var(--settings-display-scale, 1));
-  font-weight: 900;
-}
-.settings label.inline {
-  display: flex;
-  align-items: center;
-  gap: calc(10px * var(--settings-display-scale, 1));
-  width: 100%;
-  clear: both;
-  min-width: 0;
-  margin: calc(4px * var(--settings-display-scale, 1)) 0 calc(14px * var(--settings-display-scale, 1));
-  min-height: calc(48px * var(--settings-display-scale, 1));
-  padding: calc(12px * var(--settings-display-scale, 1)) calc(14px * var(--settings-display-scale, 1));
-  background: #f8f4ef;
-  border: 1px solid transparent;
-  border-radius: calc(16px * var(--settings-display-scale, 1));
-  color: var(--ink);
-}
-.settings label.inline input[type="checkbox"] {
-  flex: 0 0 auto;
-  width: calc(18px * var(--settings-display-scale, 1));
-  height: calc(18px * var(--settings-display-scale, 1));
-  accent-color: var(--primary);
-}
-.settings label.inline:hover {
-  border-color: rgba(47,41,51,.18);
-  background: #fff;
-  box-shadow: 0 6px 14px rgba(47,41,51,.08);
-}
-.settings input[type="text"],
-.settings textarea,
-.settings select {
+.settings label { display: block; min-width: 0; margin-bottom: calc(18px * var(--settings-display-scale, 1)); color: #514655; font-size: calc(12.5px * var(--settings-display-scale, 1)); font-weight: 600; }
+.settings label.inline { display: flex; align-items: center; gap: calc(10px * var(--settings-display-scale, 1)); width: 100%; clear: both; min-height: calc(36px * var(--settings-display-scale, 1)); padding: calc(4px * var(--settings-display-scale, 1)) 0; margin: 0 0 calc(8px * var(--settings-display-scale, 1)); }
+.settings label.inline input[type="checkbox"] { flex: 0 0 auto; width: calc(17px * var(--settings-display-scale, 1)); height: calc(17px * var(--settings-display-scale, 1)); accent-color: var(--settings-accent); }
+.settings input[type="text"], .settings input[type="number"], .settings textarea, .settings select {
   width: 100%;
   min-width: 0;
   margin-top: calc(8px * var(--settings-display-scale, 1));
-  padding: calc(13px * var(--settings-display-scale, 1)) calc(14px * var(--settings-display-scale, 1));
-  background: #f8f4ef;
-  color: var(--ink);
-  border: 1px solid transparent;
-  border-radius: calc(14px * var(--settings-display-scale, 1));
+  padding: calc(11px * var(--settings-display-scale, 1)) calc(13px * var(--settings-display-scale, 1));
+  border: 1px solid var(--settings-line);
+  border-radius: calc(10px * var(--settings-display-scale, 1));
+  background: #fff;
+  color: #3f3443;
+  box-shadow: 0 1px 2px rgba(43,31,47,.025);
   font-family: var(--ui);
   font-size: calc(14px * var(--settings-display-scale, 1));
-  font-weight: 700;
-  transition: border-color .15s ease, box-shadow .15s ease, background .15s;
+  font-weight: 400;
+  transition: border-color .15s, box-shadow .15s;
 }
-.settings input[type="text"],
-.settings textarea {
-  -webkit-user-select: text;
-  user-select: text;
-  cursor: text;
-}
-.settings textarea { min-height: calc(92px * var(--settings-display-scale, 1)); resize: vertical; }
-.settings input[type="text"]:focus,
-.settings textarea:focus,
-.settings select:focus {
-  outline: none;
-  border-color: rgba(49,38,53,.28);
-  background: #fff;
-  box-shadow: 0 0 0 calc(4px * var(--settings-display-scale, 1)) rgba(49,38,53,.08);
-}
-.settings input[type="text"]::placeholder,
-.settings textarea::placeholder { color: #aaa39c; }
-.settings input[type="range"] {
-  width: 100%;
-  accent-color: var(--primary);
-  margin-top: calc(8px * var(--settings-display-scale, 1));
-}
+.settings input[type="text"], .settings input[type="number"], .settings textarea { -webkit-user-select: text; user-select: text; cursor: text; }
+.settings textarea { min-height: calc(82px * var(--settings-display-scale, 1)); resize: vertical; }
+.settings input[type="text"]:focus, .settings input[type="number"]:focus, .settings textarea:focus, .settings select:focus { outline: none; border-color: #a18aa6; box-shadow: 0 0 0 calc(3px * var(--settings-display-scale, 1)) rgba(107,82,111,.09); }
+.settings input::placeholder, .settings textarea::placeholder { color: #a79ba9; }
+.settings #inWorshipUrl, .settings #inMusicUrl { font-size: calc(12.5px * var(--settings-display-scale, 1)); }
+.settings #inWorshipTitle { font-weight: 550; }
+.settings input[type="range"] { width: 100%; accent-color: var(--settings-accent); margin-top: calc(10px * var(--settings-display-scale, 1)); }
 .settings .full-btn {
   width: 100%;
-  min-height: calc(48px * var(--settings-display-scale, 1));
-  padding: calc(13px * var(--settings-display-scale, 1)) calc(18px * var(--settings-display-scale, 1));
-  background: var(--primary);
-  color: #fff;
-  border: none;
-  border-radius: var(--pill);
-  cursor: pointer;
-  font-size: calc(14px * var(--settings-display-scale, 1));
-  font-weight: 900;
-  font-family: var(--ui);
-  transition: transform .1s ease, box-shadow .15s ease;
-}
-body.plat-mac .full-btn { border-radius: var(--pill); background: var(--primary); }
-.settings .full-btn:hover { background: var(--primary); box-shadow: 0 7px 16px rgba(47,41,51,.18); transform: translateY(-1px); }
-.settings .full-btn:active { transform: scale(1.025); box-shadow: 0 8px 18px rgba(47,41,51,.16); }
-.settings .hint {
-  font-size: calc(12px * var(--settings-display-scale, 1));
-  color: var(--muted);
-  margin: calc(9px * var(--settings-display-scale, 1)) 0;
-  line-height: 1.55;
-  font-weight: 700;
-}
-.settings .url-row {
-  display: flex;
-  min-width: 0;
-  gap: calc(9px * var(--settings-display-scale, 1));
-  margin-top: calc(7px * var(--settings-display-scale, 1));
-}
-.settings .url-row input { margin-top: 0; flex: 1; min-width: 0; }
-.settings .field-note {
-  display: block;
-  margin-top: calc(7px * var(--settings-display-scale, 1));
-  color: var(--muted);
-  font-size: calc(11px * var(--settings-display-scale, 1));
-  font-weight: 700;
-  line-height: 1.5;
-}
-.settings .add-preset-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-}
-.settings .paste-btn {
-  flex: 0 0 auto;
-  min-height: calc(45px * var(--settings-display-scale, 1));
+  min-height: calc(42px * var(--settings-display-scale, 1));
   padding: calc(10px * var(--settings-display-scale, 1)) calc(16px * var(--settings-display-scale, 1));
-  background: #fffdf8;
-  color: var(--ink);
-  border: 1px solid rgba(47,41,51,.18);
-  border-radius: var(--pill);
+  border: 1px solid transparent;
+  border-radius: calc(10px * var(--settings-display-scale, 1));
+  background: var(--settings-accent);
+  color: #fff;
   cursor: pointer;
   font-family: var(--ui);
   font-size: calc(13px * var(--settings-display-scale, 1));
-  font-weight: 900;
-  transition: transform .1s ease, border-color .15s;
+  font-weight: 600;
 }
-.settings .paste-btn:hover { background: #fffdf8; border-color: var(--primary); box-shadow: 0 6px 14px rgba(47,41,51,.1); transform: translateY(-1px); }
-.settings .paste-btn:active { transform: scale(1.035); }
-.settings .paste-btn:disabled {
-  opacity: .58;
-  cursor: wait;
-  transform: none;
-  box-shadow: none;
-}
-.settings .add-btn {
-  background: var(--primary);
-  color: #fff;
-  border-color: var(--primary);
-}
-.settings .add-btn:hover {
-  background: var(--primary);
-  color: #fff;
-}
-.custom-worship-list {
-  display: grid;
-  gap: calc(8px * var(--settings-display-scale, 1));
-  margin: calc(12px * var(--settings-display-scale, 1)) 0 calc(14px * var(--settings-display-scale, 1));
-}
-.custom-worship-list:empty,
-.custom-worship-list[hidden] {
-  display: none;
-}
-.custom-worship-item {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  min-width: 0;
-  gap: calc(10px * var(--settings-display-scale, 1));
-  min-height: calc(46px * var(--settings-display-scale, 1));
-  padding: calc(8px * var(--settings-display-scale, 1)) calc(9px * var(--settings-display-scale, 1)) calc(8px * var(--settings-display-scale, 1)) calc(12px * var(--settings-display-scale, 1));
-  background: #f8f4ef;
-  border: 1px solid transparent;
-  border-radius: calc(16px * var(--settings-display-scale, 1));
-  cursor: grab;
-  transition: transform .12s ease, border-color .15s ease, box-shadow .15s ease, background .15s ease;
-}
-.custom-worship-item:hover,
-.custom-worship-item.over {
-  background: #fff;
-  border-color: rgba(47,41,51,.18);
-  box-shadow: 0 6px 14px rgba(47,41,51,.08);
-}
-.custom-worship-item.dragging {
-  opacity: .55;
-  transform: scale(.99);
-}
-.custom-worship-item:active { cursor: grabbing; }
-.drag-handle {
-  color: var(--muted);
-  font-size: calc(18px * var(--settings-display-scale, 1));
-  font-weight: 900;
-  line-height: 1;
-  letter-spacing: calc(-4px * var(--settings-display-scale, 1));
-}
-.settings .custom-worship-title-input {
-  width: 100%;
-  min-width: 0;
-  min-height: calc(34px * var(--settings-display-scale, 1));
-  margin: 0;
-  padding: calc(6px * var(--settings-display-scale, 1)) calc(9px * var(--settings-display-scale, 1));
-  background: transparent;
-  border-color: transparent;
-  color: var(--ink);
-  font-size: calc(13px * var(--settings-display-scale, 1));
-  font-weight: 900;
-  cursor: text;
-}
-.settings .custom-worship-title-input:hover {
-  background: rgba(255,255,255,.68);
-  border-color: rgba(47,41,51,.12);
-}
-.settings .custom-worship-title-input:focus {
-  background: #fff;
-}
-.custom-delete-btn {
-  width: calc(36px * var(--settings-display-scale, 1));
-  height: calc(36px * var(--settings-display-scale, 1));
-  display: grid;
-  place-items: center;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: #000;
-  cursor: pointer;
-  transition: transform .12s ease, background .15s ease;
-}
-.custom-delete-btn:hover {
-  background: rgba(0,0,0,.08);
-  transform: translateY(-1px);
-}
-.custom-delete-btn:active { transform: scale(1.08); }
-.custom-delete-btn svg {
-  width: calc(21px * var(--settings-display-scale, 1));
-  height: calc(21px * var(--settings-display-scale, 1));
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2.2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.settings .date-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  min-width: 0;
-  gap: calc(12px * var(--settings-display-scale, 1));
-}
+.settings .full-btn:hover { background: #59425e; }
+.settings .secondary-btn, body.plat-mac .settings .secondary-btn { background: #fff; color: var(--settings-accent); border-color: #d9cedc; box-shadow: 0 1px 2px rgba(50,34,55,.025); }
+.settings .secondary-btn:hover, body.plat-mac .settings .secondary-btn:hover { background: var(--settings-soft); border-color: #b9a5be; }
+.settings .hint { color: var(--settings-muted); font-size: calc(11.5px * var(--settings-display-scale, 1)); line-height: 1.6; margin: calc(10px * var(--settings-display-scale, 1)) 0; font-weight: 400; }
+.settings .hint:empty { display: none; }
+.settings .url-row { display: flex; min-width: 0; align-items: stretch; gap: calc(8px * var(--settings-display-scale, 1)); margin-top: calc(8px * var(--settings-display-scale, 1)); }
+.settings .url-row input { margin-top: 0; flex: 1; min-width: 0; }
+.settings .field-note { display: block; color: var(--settings-muted); font-size: calc(11px * var(--settings-display-scale, 1)); line-height: 1.55; margin-top: calc(7px * var(--settings-display-scale, 1)); font-weight: 400; }
+.settings-group-label { margin: calc(22px * var(--settings-display-scale, 1)) 0 calc(12px * var(--settings-display-scale, 1)); color: #514655; font-size: calc(12.5px * var(--settings-display-scale, 1)); font-weight: 600; }
+.settings .optional-label { color: var(--settings-muted); font-size: calc(11px * var(--settings-display-scale, 1)); font-weight: 400; margin-left: calc(6px * var(--settings-display-scale, 1)); }
+.settings-disclosure { clear: both; }
+.settings-disclosure > summary { list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: calc(40px * var(--settings-display-scale, 1)); color: var(--settings-accent); font-size: calc(12.5px * var(--settings-display-scale, 1)); font-weight: 550; cursor: pointer; }
+.settings-disclosure > summary::-webkit-details-marker { display: none; }
+.settings-disclosure > summary svg { flex: 0 0 auto; width: calc(15px * var(--settings-display-scale, 1)); height: calc(15px * var(--settings-display-scale, 1)); fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.settings-disclosure[open] > summary svg { transform: rotate(90deg); }
+.settings-disclosure-body { padding-top: calc(14px * var(--settings-display-scale, 1)); }
+.settings-section-disclosure { border-bottom: 1px solid var(--settings-line); padding: 0 0 calc(20px * var(--settings-display-scale, 1)); margin: 0 0 calc(20px * var(--settings-display-scale, 1)); }
+.settings-section-disclosure > summary { min-height: calc(46px * var(--settings-display-scale, 1)); padding-inline: calc(13px * var(--settings-display-scale, 1)); border-radius: calc(10px * var(--settings-display-scale, 1)); background: var(--settings-soft); color: #514655; font-size: calc(14px * var(--settings-display-scale, 1)); font-weight: 600; }
+.settings-section-disclosure:last-child { margin-bottom: 0; border-bottom: 0; padding-bottom: 0; }
+.settings-reading-preview { clear: both; display: flex; flex-direction: column; gap: 8px; margin: calc(20px * var(--settings-display-scale, 1)) 0 calc(12px * var(--settings-display-scale, 1)); padding: calc(16px * var(--settings-display-scale, 1)); border-left: 3px solid #b09ab6; border-radius: calc(10px * var(--settings-display-scale, 1)); background: var(--settings-soft); color: var(--settings-muted); font-size: calc(11px * var(--settings-display-scale, 1)); }
+.settings-reading-preview #refPreview { color: var(--settings-accent); font-size: calc(16px * var(--settings-display-scale, 1)); font-weight: 650; }
+.settings .settings-spaced-label { margin-top: calc(22px * var(--settings-display-scale, 1)); }
+.settings #scheduleStatus { overflow-wrap: anywhere; }
+.settings #settingsDaily > fieldset > .field-note { margin-bottom: calc(14px * var(--settings-display-scale, 1)); }
+.settings .paste-btn { flex: 0 0 auto; min-height: calc(42px * var(--settings-display-scale, 1)); padding: calc(10px * var(--settings-display-scale, 1)) calc(15px * var(--settings-display-scale, 1)); border: 1px solid #e1d8e4; border-radius: calc(10px * var(--settings-display-scale, 1)); background: var(--settings-soft); color: var(--settings-accent); font-family: var(--ui); font-size: calc(12.5px * var(--settings-display-scale, 1)); font-weight: 600; cursor: pointer; }
+.settings .paste-btn:hover { background: #e8e0ea; border-color: #c8b6cd; }
+.settings .paste-btn:disabled { opacity: .58; cursor: wait; }
+.settings .date-row { display: grid; grid-template-columns: 1fr 1fr; min-width: 0; gap: calc(12px * var(--settings-display-scale, 1)); }
 .settings .date-row label { margin-bottom: 0; }
-.settings .settings-divider {
-  height: 1px;
-  background: var(--divider);
-  margin: calc(16px * var(--settings-display-scale, 1)) 0 calc(14px * var(--settings-display-scale, 1));
-}
+.settings .settings-divider { height: 1px; background: var(--settings-line); margin: calc(20px * var(--settings-display-scale, 1)) 0; }
 .settings .ref-book { width: 100%; margin-top: calc(7px * var(--settings-display-scale, 1)); }
-.settings .ref-row {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  gap: calc(8px * var(--settings-display-scale, 1));
-  margin: calc(10px * var(--settings-display-scale, 1)) 0;
-}
+.settings .ref-row { display: flex; align-items: center; min-width: 0; gap: calc(8px * var(--settings-display-scale, 1)); margin: calc(10px * var(--settings-display-scale, 1)) 0; }
 .settings .ref-row select { flex: 1; min-width: 0; margin-top: 0; }
-.settings .ref-lab {
-  color: var(--brand);
-  font-size: calc(13px * var(--settings-display-scale, 1));
-  font-weight: 900;
-  width: 1.7em;
-  flex: 0 0 auto;
-}
-.settings .ref-colon { color: var(--ink-soft); flex: 0 0 auto; font-weight: 900; }
-#refPreview { color: var(--brand); font-weight: 900; }
+.settings .ref-lab { color: var(--settings-accent); font-size: calc(12px * var(--settings-display-scale, 1)); font-weight: 600; width: 1.7em; flex: 0 0 auto; }
+.settings .ref-colon { color: var(--settings-muted); flex: 0 0 auto; font-weight: 600; }
 
 .dl-badge,
 .toast {
@@ -1460,7 +1290,10 @@ body.plat-mac .full-btn { border-radius: var(--pill); background: var(--primary)
   padding: 12px 20px;
   font-size: 14px;
   animation: toastIn .22s ease;
+  pointer-events: none;
 }
+body:has(.worship-layer:not(.hidden)) .toast { bottom: 190px; }
+body:has(.worship-layer:not(.hidden)) .dl-badge { top: 18px; bottom: auto; left: 84px; max-width: calc(100vw - 105px); }
 .update-banner {
   position: fixed;
   top: 14px;
@@ -1517,3 +1350,19 @@ body.plat-mac .full-btn { border-radius: var(--pill); background: var(--primary)
 @keyframes slideDown { from { transform: translateY(-100%); } to { transform: translateY(0); } }
 
 .hidden { display: none !important; }
+
+.worship-range-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: calc(20px * var(--settings-display-scale, 1)); }
+.worship-range-row input { width: 100%; min-width: 0; }
+.worship-range-row input:invalid { border-color: #b44141; }
+.worship-time-label { font-size: calc(12px * var(--settings-display-scale, 1)); font-weight: 600; color: var(--ink-soft); }
+.worship-time-inputs { display: flex; align-items: center; gap: calc(5px * var(--settings-display-scale, 1)); margin-top: calc(8px * var(--settings-display-scale, 1)); padding-inline: calc(10px * var(--settings-display-scale, 1)); border: 1px solid var(--settings-line); border-radius: calc(10px * var(--settings-display-scale, 1)); background: #fff; box-shadow: 0 1px 2px rgba(43,31,47,.025); }
+.worship-time-inputs:focus-within { border-color: #a18aa6; box-shadow: 0 0 0 calc(3px * var(--settings-display-scale, 1)) rgba(107,82,111,.09); }
+.worship-time-inputs:has(input:invalid) { border-color: #b44141; }
+.settings .worship-time-inputs input { flex: 1; width: 0; margin: 0; padding: calc(11px * var(--settings-display-scale, 1)) 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; text-align: center; font-variant-numeric: tabular-nums; appearance: textfield; }
+.settings .worship-time-inputs input:focus { border: 0; box-shadow: none; }
+.worship-time-inputs input::-webkit-inner-spin-button, .worship-time-inputs input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.worship-time-inputs span { flex: 0 0 auto; color: var(--settings-muted); font-size: calc(11px * var(--settings-display-scale, 1)); }
+
+.settings .worship-time .field-note { margin: calc(7px * var(--settings-display-scale, 1)) 0 calc(14px * var(--settings-display-scale, 1)); }
+
+.settings .update-tool-title { clear: both; margin: 0 0 10px; font-size: calc(15px * var(--settings-display-scale, 1)); font-weight: 600; color: var(--ink); }

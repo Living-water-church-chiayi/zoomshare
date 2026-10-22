@@ -1,6 +1,58 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { loadDailyBootstrap, loadSheetBootstrap, parseCsv } from '../src/google-sheets.mjs';
+import { loadDailyBootstrap, loadSheetBootstrap, parseCsv, parsePublicSheetTabs } from '../src/google-sheets.mjs';
+
+test('discovers public tabs safely, including escaped titles, and rejects login pages', () => {
+  assert.deepEqual(parsePublicSheetTabs(String.raw`items.push({name: "2026.10-12月", pageUrl: "x", gid: "123"});items.push({name: "下一季\x26\u0020排班", gid: "456"});items.push({name: "duplicate", gid: "123"});`), [
+    { name: '2026.10-12月', gid: '123' }, { name: '下一季& 排班', gid: '456' }
+  ]);
+  assert.throws(() => parsePublicSheetTabs('<html>Sign in</html>'), /分頁清單/);
+});
+
+test('discovers a new quarter even when configured with the old quarter CSV gid', async (t) => {
+  const calls = [];
+  let newQuarter = false;
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    const address = String(url);
+    calls.push(address);
+    if (address.includes('/spreadsheets/d/scripture/export')) return new Response('10/13,啟示錄,4,1,4,11');
+    if (address.endsWith('/htmlview')) return new Response(
+      'items.push({name: "2026.7-9月", gid: "111"});' +
+      (newQuarter ? 'items.push({name: "2026.10-12月", gid: "222"});' : '') +
+      'items.push({name: "2025.10-12月", gid: "333"});'
+    );
+    if (address.endsWith('gid=111')) return new Response('第一週,分享,主持人\n9月29日,舊季度,主持\n10月2日,舊季末,主持');
+    if (address.endsWith('gid=222')) return new Response('日期,主持人,分享\n10月13日,育農/道萱,月琴\n10月14日,,信一');
+    if (address.endsWith('gid=333')) return new Response('日期,分享\n10月13日,去年的人選');
+    assert.fail(`Unexpected request: ${address}`);
+  });
+  const env = { GOOGLE_SHEET_ID: 'scripture', UTMOST_ASSIGNMENT_CSV_URL: 'https://docs.google.com/spreadsheets/d/sharing/export?format=csv&gid=111' };
+  const now = new Date('2026-10-13T01:00Z');
+  assert.equal((await loadDailyBootstrap(env, now)).utmostSharing.found, false);
+  newQuarter = true;
+  const result = (await loadDailyBootstrap(env, now)).utmostSharing;
+  assert.deepEqual(result, { found: true, date: '2026-10-13', sharer: '月琴', next: { date: '2026-10-14', sharer: '信一' } });
+  assert.equal(calls.filter((url) => url.endsWith('/htmlview')).length, 2, 'new tabs must be discovered on refresh');
+});
+
+test('reports discovery, permission, and format failures instead of an empty schedule', async (t) => {
+  let failure = 'discovery';
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    if (String(url).includes('/spreadsheets/d/scripture/export')) return new Response('10/13,啟示錄,4,1,4,11');
+    if (String(url).endsWith('/htmlview')) return new Response(failure === 'discovery' ? '<html>Login</html>' : 'items.push({name: "2026.10-12月", gid: "222"});');
+    if (failure === 'permission') return new Response('Forbidden', { status: 403 });
+    return new Response('檢查項目,結果\n主持人,1');
+  });
+  const env = { GOOGLE_SHEET_ID: 'scripture', UTMOST_ASSIGNMENT_SHEET_URL: 'https://docs.google.com/spreadsheets/d/sharing/edit' };
+  const now = new Date('2026-10-13T01:00Z');
+  for (const [mode, message] of [['discovery', /分頁清單/], ['permission', /HTTP 403/], ['format', /日期與分享欄位/]]) {
+    failure = mode;
+    const result = await loadDailyBootstrap(env, now);
+    assert.equal(result.schedule.found, true);
+    assert.equal(result.utmostSharing.found, false);
+    assert.match(result.utmostSharing.error, message);
+  }
+});
 
 test('parses quoted CSV cells used by the public assignment sheet', () => {
   assert.deepEqual(parseCsv('date,"name, title"\r\n7/20,"Amy ""A"""\r\n'), [

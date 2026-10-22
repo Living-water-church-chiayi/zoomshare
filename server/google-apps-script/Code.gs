@@ -1,6 +1,6 @@
 const SPREADSHEET_ID = '11O0As3DWpT45otcL5T7BadMpPVWcWKAoiZ5OUPocMpA';
 const SCHEDULE_COLUMNS = 'A:F';
-const ROSTER_RANGE = '服務名單!A:G';
+const ROSTER_RANGE = '服務名單!A:H';
 
 function json_(value) {
   return ContentService

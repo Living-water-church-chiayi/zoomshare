@@ -214,12 +214,9 @@ assert.match(
   /function recoverWorshipPlayback\([\s\S]*?loadNativeWorshipAudio\(position, true\)/,
   'macOS worship recovery must reload native audio at the current video time'
 );
-assert.match(
-  renderer,
-  /footer\.addEventListener\('pointerenter',[\s\S]*?revealFlowFooter\(\);[\s\S]*?scheduleFlowFooterHide\(\);/,
-  'reading navigation must hide after idle hover instead of staying visible forever'
-);
-assert.doesNotMatch(renderer, /flowFooterHovered/, 'reading navigation idle hiding must not be blocked by hover state');
+assert.match(renderer, /footer\.addEventListener\('pointerenter',[\s\S]*?flowFooterHovered = true;/, 'reading controls must stay visible on pointer hover');
+assert.match(renderer, /if \(flowFooterHovered\) return;/, 'hovered reading controls must not arm a hide timer');
+assert.match(renderer, /footer\.addEventListener\('pointerleave',[\s\S]*?flowFooterHovered = false;[\s\S]*?scheduleFlowFooterHide/, 'leaving reading controls must restore idle hiding');
 assert.match(
   renderer,
   /function shouldRevealFlowFooterFromPointer\(event\)[\s\S]*?flowFooterHotzoneHeight/,
@@ -304,11 +301,9 @@ console.log('OK reading keyboard and completion wiring');
 const html = read('src/renderer/index.html');
 assert.match(html, /Content-Security-Policy/, 'renderer must declare a Content Security Policy');
 assert.match(html, /id="btnFlowNext"[^>]*>敬拜影片<\/button>/, 'cover flow button must be labelled 敬拜影片');
-assert.match(
-  html,
-  /7mrMh_2tXCI[^>]*data-announcement-title="讚美之泉（美好的創造）"[^>]*>美好的創造<\/option>/,
-  'the announcement sample worship song must be available as a named preset'
-);
+assert.doesNotMatch(html, /id="useWorshipPreset"|id="worshipPreset"/, 'preset worship controls have been removed');
+assert.match(html, /id="worshipStartMinutes"/, 'worship must expose start minutes');
+assert.match(html, /id="worshipEndSeconds"/, 'worship must expose end seconds');
 assert.match(html, /id="preventLeftArrowWorship"/, 'settings must expose the left-arrow worship safeguard');
 const ids = [...html.matchAll(/\bid=["']([^"']+)["']/g)].map((match) => match[1]);
 const idCounts = new Map();

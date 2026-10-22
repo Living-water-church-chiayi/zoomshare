@@ -1,7 +1,7 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
-const { buildRosterMatcher, deriveRosterPresence, matchRosterMemberIds } = window.PresenceShared;
+const { buildRosterMatcher, deriveRosterPresence, matchRosterMemberIds, readingCandidates, compareReadingPriority, defaultFullTimeMemberIds } = window.PresenceShared;
 const { scriptureSegments, utmostParagraphSegments } = window.AssignmentShared;
 
 let currentState = null;
@@ -135,19 +135,55 @@ function todaySharerMemberIds() {
   const matcher = buildRosterMatcher(currentState.roster || []);
   const memberIds = new Set();
   for (const memberId of matchRosterMemberIds(matcher, sharing.sharer)) memberIds.add(String(memberId));
-  const labels = String(sharing.sharer).split(/[、/／+＋]|(?:\s*[及和]\s*)/).map((value) => value.trim()).filter(Boolean);
+  const labels = String(sharing.sharer).split(/[、,，/／+＋&＆]|(?:\s*[及和]\s*)/).map((value) => value.trim()).filter(Boolean);
   for (const label of labels) {
     for (const memberId of matchRosterMemberIds(matcher, label)) memberIds.add(String(memberId));
   }
   return memberIds;
 }
 
+function hostRoster(state) {
+  const defaults = defaultFullTimeMemberIds(state.roster || []);
+  return (state.roster || []).map((member) => ({
+    ...member,
+    isFullTime: defaults.has(String(member.memberId))
+  }));
+}
+
 function eligibleCandidates(kind, derived) {
-  const candidates = kind === 'scripture' ? derived.scriptureCandidates : derived.utmostCandidates;
-  if (kind === 'scripture') return candidates;
-  const blocked = new Set(selected.scripture.filter(Boolean));
-  for (const memberId of todaySharerMemberIds()) blocked.add(memberId);
-  return candidates.filter((member) => !blocked.has(String(member.memberId)));
+  return readingCandidates(kind, derived, todaySharerMemberIds(), selected.scripture.filter(Boolean));
+}
+
+function pruneExcludedSelections() {
+  const excluded = todaySharerMemberIds();
+  let changed = false;
+  for (const kind of ['scripture', 'utmost']) selected[kind] = selected[kind].map((id) => {
+    if (!excluded.has(id)) return id;
+    changed = true;
+    return '';
+  });
+  return changed;
+}
+
+function updateHostClock() {
+  const now = new Date();
+  const clock = $('hostClock');
+  clock.dateTime = now.toISOString();
+  clock.textContent = new Intl.DateTimeFormat('zh-TW', {
+    timeZone: 'Asia/Taipei', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+  }).format(now);
+}
+
+function renderWorshipCountdown(state) {
+  const panel = $('hostWorshipCountdown');
+  setHidden(panel, !state || !state.active);
+  if (!state || !state.active) return;
+  panel.dataset.tone = state.tone;
+  const seconds = state.remainingSeconds;
+  $('hostWorshipRemaining').textContent = seconds === null ? '準備中' : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+  $('hostWorshipLabel').textContent = state.paused && seconds !== null ? '敬拜倒數・已暫停' : '敬拜倒數';
+  $('hostWorshipHint').textContent = state.preview ? '範圍外預覽・至設定出點' : '至設定出點';
 }
 
 function normalizeSelections() {
@@ -241,12 +277,7 @@ function renderEligibleList(kind, derived) {
     container.appendChild(empty);
     return;
   }
-  const sorted = [...candidates].sort((left, right) => {
-    const leftStats = assignmentStats(left.memberId);
-    const rightStats = assignmentStats(right.memberId);
-    if (leftStats.readYesterday !== rightStats.readYesterday) return leftStats.readYesterday ? 1 : -1;
-    return leftStats.totalCount - rightStats.totalCount || Number(left.order || 0) - Number(right.order || 0);
-  });
+  const sorted = [...candidates].sort((left, right) => compareReadingPriority(left, right, assignmentStats));
   for (const member of sorted) {
     const memberId = String(member.memberId);
     const stats = assignmentStats(memberId);
@@ -366,6 +397,7 @@ function renderState(state) {
   setHidden($('consoleView'), !state.configured);
   if (!state.configured) return;
 
+  document.querySelector('.console-header h1').textContent = state.localTrial ? '主持人服務控制台・本機試用' : '主持人服務控制台';
   const snapshot = state.snapshot || { status: 'idle', meetingUuid: '', participants: [] };
   if (snapshot.status !== 'active') {
     currentMeetingUuid = '';
@@ -386,7 +418,9 @@ function renderState(state) {
   currentUtmostSegments = utmostParagraphSegments(utmostBody, 4);
   normalizeSelections();
 
-  const derived = deriveRosterPresence(snapshot, state.roster || []);
+  const roster = hostRoster(state);
+  const removedExcluded = pruneExcludedSelections();
+  const derived = deriveRosterPresence(snapshot, roster);
   const departed = selectedOnlineDepartures(derived);
   showNotice(departed.length ? `${departed.join('、')} 已離線，安排仍保留。` : friendlySyncError(state.error));
 
@@ -411,14 +445,18 @@ function renderState(state) {
   renderEligibleList('scripture', derived);
   renderEligibleList('utmost', derived);
   renderAllOnline(derived);
-  renderRoster(state.roster || []);
+  renderRoster(roster);
+  if (removedExcluded) {
+    showNotice('今日竭誠分享者已從閱讀安排移除。');
+    queueSaveAssignments();
+  }
 
   const acceptedSharedDuplicateMessages = derived.acceptedSharedDuplicateMessages || new Set();
   const errors = [...new Set([...(state.rosterErrors || []), ...derived.errors])]
     .filter((error) => !acceptedSharedDuplicateMessages.has(error));
   $('rosterErrors').textContent = errors.length ? `名單需要檢查：\n${errors.join('\n')}` : '';
   setHidden($('rosterErrors'), errors.length === 0);
-  $('deviceDescription').textContent = `${state.deviceLabel || '這台主持人電腦'}・${state.serviceUrl}${state.stale ? '・使用離線資料' : ''}`;
+  $('deviceDescription').textContent = `${state.deviceLabel || '這台主持人電腦'}・${state.serviceUrl}${state.stale ? '・使用離線資料' : ''}${state.localTrial ? '・試用安排僅存本機' : ''}`;
 }
 
 function assignmentPayload() {
@@ -471,7 +509,11 @@ function chooseCandidate(event) {
   const values = selected[kind];
   const index = activeSlots[kind];
   const memberId = button.dataset.memberId;
-  if (kind === 'utmost' && (selected.scripture.includes(memberId) || todaySharerMemberIds().has(memberId))) {
+  if (todaySharerMemberIds().has(memberId)) {
+    showNotice('今日竭誠分享者與主持人不列入閱讀安排。');
+    return;
+  }
+  if (kind === 'utmost' && selected.scripture.includes(memberId)) {
     showNotice('今天讀經文或負責竭誠獻上分享的人，不能再安排朗讀竭誠獻上。');
     return;
   }
@@ -550,6 +592,8 @@ async function refreshHostDailyData() {
 async function init() {
   document.body.classList.add(window.hostApi.platform === 'darwin' ? 'plat-mac' : 'plat-win');
   updateHostDisplayScale();
+  updateHostClock();
+  setInterval(updateHostClock, 1000);
   window.addEventListener('resize', updateHostDisplayScale);
   $('deviceLabel').value = `${window.hostApi.platform === 'darwin' ? 'Mac' : 'Windows'} 主持人電腦`;
   $('pairForm').addEventListener('submit', submitPair);
@@ -575,6 +619,8 @@ async function init() {
     renderState(await window.hostApi.unpair());
   });
   window.hostApi.onState(renderState);
+  window.hostApi.onWorshipPlayback(renderWorshipCountdown);
+  window.hostApi.worshipPlayback().then(renderWorshipCountdown).catch(() => {});
   window.hostApi.onScriptureCurrent((scripture) => {
     currentScriptureConfig = validScriptureConfig(scripture);
     if (currentState) renderState(currentState);

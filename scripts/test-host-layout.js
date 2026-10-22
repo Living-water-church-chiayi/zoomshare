@@ -56,9 +56,9 @@ async function run() {
   ipcMain.handle('presence:assignments', () => state);
   ipcMain.handle('host:utmost-today', () => { utmostTodayCount += 1; return { ok: true, body: '第一段\n\n第二段\n\n第三段\n\n第四段' }; });
   ipcMain.handle('host:scripture-current', () => { scriptureCurrentCount += 1; return { book: '提摩太前書', startCh: 6, startV: 9, endCh: 6, endV: 21 }; });
+  ipcMain.handle('host:worship-playback', () => ({ active: false }));
   ipcMain.handle('host:open-roster-sheet', () => { rosterSheetOpenCount += 1; return { ok: true }; });
   ipcMain.handle('host:close', () => ({ ok: true }));
-
   const window = new BrowserWindow({
     width: 460,
     height: 760,
@@ -197,10 +197,93 @@ async function run() {
   assert.equal(selected.name, '王小明');
   assert.equal(selected.candidateSelected, true);
   assert.match(selected.details, /已安排・本週閱讀/);
+  // Let the debounced assignment save settle before injecting later snapshots.
+  await new Promise((resolve) => setTimeout(resolve, 350));
 
   await window.webContents.executeJavaScript(`document.querySelector('#utmostAssignments .assignment-card').click()`);
   const utmostCandidateIds = await window.webContents.executeJavaScript(`Array.from(document.querySelectorAll('#utmostEligibleList .candidate-button'), (item) => item.dataset.memberId)`);
   assert.deepEqual(utmostCandidateIds, ['utmost']);
+
+  assert.equal(await window.webContents.executeJavaScript(`document.querySelector('.host-settings')`), null, 'staff settings must not appear in the host console');
+
+  // The host selector was removed; stale host preferences and host schedule data
+  // must not exclude anyone. Only the sharer is excluded in both reading pools.
+  state = {
+    ...state,
+    hostPreferences: { hostDate: today, hostMemberId: 'reader', fullTimeOverrides: { staff: false } },
+    utmostSharing: { ...state.utmostSharing, host: '林平安' },
+    roster: [...state.roster.map((member) => ({ ...member, canReadScripture: true })),
+      { memberId: 'staff', name: '信一', enabled: true, canReadScripture: true, canReadUtmost: true, isFullTime: false, order: 0 },
+      { memberId: 'lay', name: '弟兄姊妹乙', enabled: true, canReadScripture: true, canReadUtmost: true, order: 90 }],
+    snapshot: { ...state.snapshot, participants: [...state.snapshot.participants,
+      { sessionId: 'p5', displayName: '信一' }, { sessionId: 'p6', displayName: '弟兄姊妹乙' }] }
+  };
+  window.webContents.send('presence:state', state);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const pools = await window.webContents.executeJavaScript(`(() => ({
+    scripture: Array.from(document.querySelectorAll('#scriptureEligibleList button'), (item) => item.dataset.memberId),
+    utmost: Array.from(document.querySelectorAll('#utmostEligibleList button'), (item) => item.dataset.memberId),
+    assignment: document.querySelector('#scriptureAssignments strong').textContent,
+    clock: document.getElementById('hostClock').textContent
+  }))()`);
+  for (const ids of [pools.scripture, pools.utmost]) {
+    assert.ok(!ids.includes('sharer'), 'sharer leaked into a reading pool');
+    assert.equal(ids.at(-1), 'staff', 'staff must follow eligible non-staff readers');
+  }
+  assert.equal(pools.assignment, '王小明', 'legacy host settings must not clear a reading assignment');
+  assert.ok(pools.scripture.includes('reader') && pools.scripture.includes('utmost'), 'legacy host settings must not exclude readers');
+  assert.equal(await window.webContents.executeJavaScript(`document.getElementById('todayHost')`), null);
+  assert.match(pools.clock, /\d{2}:\d{2}:\d{2}/);
+  const staffLabels = await window.webContents.executeJavaScript(`document.getElementById('consoleView').textContent.includes('全職同工')`);
+  assert.equal(staffLabels, false, 'staff classification should not be displayed in the host console');
+  state = { ...state,
+    roster: [...state.roster, { memberId: 'past', name: '昨天讀過的人', aliases: [], enabled: true, canReadScripture: true, canReadUtmost: true }],
+    snapshot: { ...state.snapshot, participants: [...state.snapshot.participants, { sessionId: 'p7', displayName: '昨天讀過的人' }] },
+    assignmentStats: { ...state.assignmentStats, memberStats: { ...state.assignmentStats.memberStats, past: { readYesterday: true, totalCount: 1 } } }
+  };
+  window.webContents.send('presence:state', state);
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  for (const list of ['scriptureEligibleList', 'utmostEligibleList']) {
+    const ids = await window.webContents.executeJavaScript(`Array.from(document.querySelectorAll('#${list} button'), (item) => item.dataset.memberId)`);
+    assert.ok(ids.indexOf('staff') < ids.indexOf('past'), 'full-time coworkers must precede yesterday readers');
+    assert.equal(await window.webContents.executeJavaScript(`document.querySelector('#${list} [data-member-id="past"]').disabled`), true);
+  }
+  const { countdownState } = require('../src/worship-shared');
+  for (const [position, text, tone] of [[0,'1:40','normal'],[40,'1:00','minute'],[70,'0:30','soon'],[85,'0:15','ending']]) {
+    window.webContents.send('host:worship-playback', countdownState({ active: true, position, end: 100, duration: 300 }));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const countdown = await window.webContents.executeJavaScript(`(() => ({
+      hidden: document.getElementById('hostWorshipCountdown').classList.contains('hidden'),
+      text: document.getElementById('hostWorshipRemaining').textContent,
+      tone: document.getElementById('hostWorshipCountdown').dataset.tone,
+      overflow: document.body.scrollWidth > document.body.clientWidth
+    }))()`);
+    assert.deepEqual(countdown, { hidden: false, text, tone, overflow: false });
+  }
+  window.webContents.send('host:worship-playback', countdownState({ active: true, position: 85, end: 105, duration: 300, paused: true }));
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(await window.webContents.executeJavaScript(`document.getElementById('hostWorshipRemaining').textContent`), '0:20');
+  assert.match(await window.webContents.executeJavaScript(`document.getElementById('hostWorshipLabel').textContent`), /已暫停/);
+  await window.webContents.executeJavaScript(`window.scrollTo(0, 300)`);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  const pinnedClock = await window.webContents.executeJavaScript(`(() => {
+    const rect = document.querySelector('.host-clock-bar').getBoundingClientRect();
+    const countdown = document.getElementById('hostWorshipCountdown').getBoundingClientRect();
+    return { top: rect.top, bottom: rect.bottom, scroll: window.scrollY, countdownBottom: countdown.bottom };
+  })()`);
+  assert.ok(pinnedClock.scroll > 100, 'clock test must actually scroll the host console');
+  assert.ok(Math.abs(pinnedClock.top) <= 1 && pinnedClock.bottom < 160 && pinnedClock.countdownBottom <= pinnedClock.bottom, 'clock and worship countdown must remain pinned at the viewport top');
+  window.webContents.send('host:worship-playback', { active: false });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(await window.webContents.executeJavaScript(`getComputedStyle(document.getElementById('hostWorshipCountdown')).display`), 'none');
+  if (process.env.HOST_PREVIEW_SECTION !== 'clock') await window.webContents.executeJavaScript(`window.scrollTo(0, 0)`);
+
+  const removedMicrophoneControls = await window.webContents.executeJavaScript(`({
+    panel: document.getElementById('microphoneMonitor'),
+    settings: document.getElementById('zoomSettings'),
+    connectApi: typeof window.hostApi.connectZoom
+  })`);
+  assert.deepEqual(removedMicrophoneControls, { panel: null, settings: null, connectApi: 'undefined' });
 
   if (!process.env.HOST_PREVIEW_ONLINE) {
     state = { ...state, snapshot: { ...state.snapshot, participants: state.snapshot.participants.filter((item) => item.sessionId !== 'p1') } };

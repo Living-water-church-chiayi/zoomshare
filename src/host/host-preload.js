@@ -11,6 +11,12 @@ contextBridge.exposeInMainWorld('hostApi', {
   saveAssignments: (assignments) => ipcRenderer.invoke('presence:assignments', assignments),
   utmostToday: () => ipcRenderer.invoke('host:utmost-today'),
   scriptureCurrent: () => ipcRenderer.invoke('host:scripture-current'),
+  worshipPlayback: () => ipcRenderer.invoke('host:worship-playback'),
+  onWorshipPlayback: (callback) => {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on('host:worship-playback', listener);
+    return () => ipcRenderer.removeListener('host:worship-playback', listener);
+  },
   openRosterSheet: () => ipcRenderer.invoke('host:open-roster-sheet'),
   close: () => ipcRenderer.invoke('host:close'),
   onState: (callback) => {

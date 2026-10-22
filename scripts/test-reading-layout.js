@@ -240,6 +240,7 @@ function rendererHarnessSource() {
     let flowPageRenderToken = 0;
     let flowStep = 'cover';
     let flowFooterHideTimer = null;
+    let flowFooterHovered = false;
     ${implementations}
 
     const prepare = (step) => {
@@ -351,21 +352,25 @@ function rendererHarnessSource() {
         revealFlowFooter();
         const directRevealWorked = screen.classList.contains('footer-visible');
 
-        const startedAt = performance.now();
         footer.dispatchEvent(new PointerEvent('pointerenter', { pointerType: 'mouse' }));
         scheduleFlowFooterHide();
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+        const stayedVisibleOnHover = screen.classList.contains('footer-visible');
+        const startedAt = performance.now();
+        footer.dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'mouse' }));
         while (screen.classList.contains('footer-visible') && performance.now() - startedAt < 1800) {
           await new Promise((resolve) => setTimeout(resolve, 20));
         }
         const hideElapsed = performance.now() - startedAt;
-        const hiddenAfterIdleHover = !screen.classList.contains('footer-visible');
+        const hiddenAfterLeave = !screen.classList.contains('footer-visible');
         hideFlowFooterImmediately();
         return {
           hiddenInitially,
           middleMoveStayedHidden,
           setupRevealWorked,
           directRevealWorked,
-          hiddenAfterIdleHover,
+          stayedVisibleOnHover,
+          hiddenAfterLeave,
           hideElapsed
         };
       }
@@ -650,7 +655,7 @@ function coverMeasurementScript() {
     const settingsRect = settings.getBoundingClientRect();
     const settingsBody = settings.querySelector('.settings-body');
     const settingsClose = document.getElementById('btnCloseSettings').getBoundingClientRect();
-    const settingsFirstInput = document.getElementById('inMusicUrl').getBoundingClientRect();
+    const settingsFirstInput = document.getElementById('inWorshipUrl').getBoundingClientRect();
     const settingsRootStyle = getComputedStyle(document.documentElement);
     const settingsMetrics = {
       scale: Number.parseFloat(settingsRootStyle.getPropertyValue('--settings-display-scale')) || 1,
@@ -1080,7 +1085,8 @@ async function run() {
       assert.equal(footerLifecycle.middleMoveStayedHidden, true, `${step} footer lifecycle: middle mouse movement revealed the arrows`);
       assert.equal(footerLifecycle.setupRevealWorked, true, `${step} footer lifecycle: bottom mouse movement did not reveal the arrows`);
       assert.equal(footerLifecycle.directRevealWorked, true, `${step} footer lifecycle: revealFlowFooter did not reveal the footer`);
-      assert.equal(footerLifecycle.hiddenAfterIdleHover, true, `${step} footer lifecycle: idle hover did not hide the footer`);
+      assert.equal(footerLifecycle.stayedVisibleOnHover, true, `${step} footer lifecycle: controls hid under the pointer`);
+      assert.equal(footerLifecycle.hiddenAfterLeave, true, `${step} footer lifecycle: controls did not hide after leaving`);
       assert.ok(
         footerLifecycle.hideElapsed >= 850 && footerLifecycle.hideElapsed <= 1750,
         `${step} footer lifecycle: expected about 1000ms, observed ${footerLifecycle.hideElapsed.toFixed(1)}ms`

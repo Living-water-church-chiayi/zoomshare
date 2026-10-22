@@ -7,8 +7,10 @@
         content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' file: data:; media-src 'self' file:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'" />
   <title>早靈修投影</title>
   <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="../window-focus.css" />
+  <script src="../window-focus.js" defer></script>
 </head>
-<body>
+<body data-window-role="projection">
   <div id="updateBanner" class="update-banner hidden">
     <span id="updateBannerText">有新版可以使用</span>
     <button id="btnUpdateDownload" class="ub-btn">立即更新</button>
@@ -71,6 +73,15 @@
       <button id="wBackTop" class="worship-back" title="返回封面">‹</button>
       <div id="worshipHotzone" class="worship-hotzone"></div>
       <div id="worshipControls" class="worship-controls">
+        <div class="worship-timeline">
+          <div class="worship-range-caption"><span id="wRangeLabel">播放範圍：完整影片</span><span>I 設起點 · O 設終點</span></div>
+          <div id="wTimelineTrack" class="worship-timeline-track">
+            <div id="wRangeSelection" class="worship-range-selection"></div>
+            <input id="wSeek" class="wseek" type="range" min="0" max="1000" value="0" step="1" aria-label="完整影片播放位置" />
+            <button id="wMarkIn" class="worship-marker marker-in" type="button" role="slider" aria-label="敬拜播放起點" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" title="拖曳起點，或按 I 設定"><span>I</span></button>
+            <button id="wMarkOut" class="worship-marker marker-out" type="button" role="slider" aria-label="敬拜播放終點" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" title="拖曳終點，或按 O 設定"><span>O</span></button>
+          </div>
+        </div>
         <button id="wPlay" class="wbtn worship-play-btn" title="播放" aria-label="播放">
           <svg class="play-icon" viewBox="0 0 48 48" aria-hidden="true">
             <circle cx="24" cy="24" r="20"></circle>
@@ -82,9 +93,8 @@
             <path d="M29 16v16"></path>
           </svg>
         </button>
-        <span id="wCur" class="wtime">0:00</span>
-        <input id="wSeek" class="wseek" type="range" min="0" max="1000" value="0" step="1" />
-        <span id="wDur" class="wtime">0:00</span>
+        <div class="worship-clock"><span id="wCur" class="wtime">0:00</span><span class="worship-time-divider">/</span><span id="wDur" class="wtime">0:00</span></div>
+        <span class="worship-preview-hint" id="wPreviewHint"></span>
         <button id="wReturn" class="wbtn worship-next-btn" title="前往經文">
           <span>前往今日經文</span>
         </button>
@@ -115,142 +125,163 @@
 
   <div id="settingsBackdrop" class="settings-backdrop hidden"></div>
 
-  <div id="settingsPanel" class="settings hidden">
+  <div id="settingsPanel" class="settings hidden" role="dialog" aria-labelledby="settingsTitle">
     <div class="settings-head">
-      <span>設定</span>
-      <button id="btnCloseSettings" class="close">×</button>
+      <div><h2 id="settingsTitle">設定</h2><p>變更會自動儲存</p></div>
+      <button id="btnCloseSettings" class="close" aria-label="關閉設定">×</button>
+    </div>
+    <div class="settings-tabs" role="tablist" aria-label="設定分類">
+      <button id="settingsTabMedia" type="button" role="tab" aria-selected="true" aria-controls="settingsMedia" data-settings-tab="media">敬拜與音樂</button>
+      <button id="settingsTabDaily" type="button" role="tab" aria-selected="false" aria-controls="settingsDaily" tabindex="-1" data-settings-tab="daily">每日內容</button>
+      <button id="settingsTabGeneral" type="button" role="tab" aria-selected="false" aria-controls="settingsGeneral" tabindex="-1" data-settings-tab="general">一般設定</button>
     </div>
     <div class="settings-body">
-      <fieldset>
-        <legend>音樂</legend>
-        <label>背景音樂
-          <div class="url-row">
-            <input type="text" id="inMusicUrl" placeholder="https://www.youtube.com/watch?v=..." />
-            <button type="button" id="btnPasteMusic" class="paste-btn">貼上</button>
+      <section id="settingsMedia" class="settings-pane" role="tabpanel" aria-labelledby="settingsTabMedia" tabindex="0">
+        <fieldset>
+          <legend>敬拜影片</legend>
+          <div id="worshipUrlRow">
+            <label>影片連結
+              <div class="url-row">
+                <input type="text" id="inWorshipUrl" placeholder="貼上 YouTube 影片連結" />
+                <button type="button" id="btnPasteWorship" class="paste-btn">貼上</button>
+              </div>
+            </label>
           </div>
-        </label>
-        <label class="inline"><input type="checkbox" id="autoPlayMusic" /> 主畫面自動播放背景音樂</label>
-        <label>音量 <input type="range" id="musicVolume" min="0" max="1" step="0.05" /></label>
-
-        <label>敬拜影片</label>
-        <label class="inline"><input type="checkbox" id="useWorshipPreset" /> 使用常用敬拜影片</label>
-        <div id="worshipPresetRow">
-          <label>常用敬拜影片
-            <select id="worshipPreset">
-              <option value="">選擇敬拜影片</option>
-              <optgroup id="customWorshipGroup" label="我加入的敬拜影片"></optgroup>
-              <optgroup label="讚美之泉">
-                <option value="https://youtu.be/7mrMh_2tXCI?si=xiVMJ-2zx56L9oeW" data-announcement-title="讚美之泉（美好的創造）">美好的創造</option>
-                <option value="https://www.youtube.com/watch?v=v76-wz1mv8w" data-announcement-title="讚美之泉（祢的恩典夠我用）">祢的恩典夠我用</option>
-                <option value="https://www.youtube.com/watch?v=mVqSmWIjoZU" data-announcement-title="讚美之泉（好喜歡與你在一起）">好喜歡與你在一起</option>
-                <option value="https://www.youtube.com/watch?v=kvrRtRe9AoU" data-announcement-title="讚美之泉（我們的神）">我們的神</option>
-              </optgroup>
-              <optgroup label="盛曉玫・泥土音樂">
-                <option value="https://www.youtube.com/watch?v=uSHI-9s4dTU" data-announcement-title="盛曉玫（依然愛我）">依然愛我</option>
-                <option value="https://www.youtube.com/watch?v=lfP-3JLVvaw" data-announcement-title="盛曉玫（活出愛）">活出愛</option>
-                <option value="https://www.youtube.com/watch?v=Q3m-in8i6FU" data-announcement-title="盛曉玫（幸福）">幸福</option>
-                <option value="https://www.youtube.com/watch?v=96WDXhk6qjU" data-announcement-title="盛曉玫（有一天）">有一天</option>
-                <option value="https://www.youtube.com/watch?v=eGAeeQxZ6FM" data-announcement-title="盛曉玫（因為祢）">因為祢</option>
-              </optgroup>
-              <optgroup label="新店行道會">
-                <option value="https://www.youtube.com/watch?v=KqlvbYd5uJA" data-announcement-title="新店行道會（叫我抬起頭的神）">叫我抬起頭的神</option>
-                <option value="https://www.youtube.com/watch?v=v-k7ojwYE08" data-announcement-title="新店行道會（這裡有榮耀）">這裡有榮耀</option>
-              </optgroup>
-            </select>
+          <label class="worship-song-label">敬拜歌名 <span class="optional-label">自動辨識，可修改</span>
+            <input type="text" id="inWorshipTitle" maxlength="128" placeholder="留空會自動辨識歌曲名稱" />
           </label>
-          <label>加入常用敬拜影片
-            <input type="text" id="inCustomWorshipTitle" maxlength="128" placeholder="公告歌名（可留空，會自動讀取）" />
-            <div class="url-row add-preset-row">
-              <input type="text" id="inCustomWorshipUrl" placeholder="貼上 YouTube 連結" />
-              <button type="button" id="btnPasteCustomWorship" class="paste-btn">貼上</button>
-              <button type="button" id="btnAddWorshipPreset" class="paste-btn add-btn">加入</button>
+          <p class="settings-group-label">播放範圍</p>
+          <div class="worship-range-row">
+            <div class="worship-time" role="group" aria-labelledby="worshipStartLabel">
+              <span id="worshipStartLabel" class="worship-time-label">開始</span>
+              <div class="worship-time-inputs">
+                <input id="worshipStartMinutes" type="number" min="0" max="9999" step="1" inputmode="numeric" placeholder="0" aria-label="開始分鐘" aria-describedby="worshipStartHint" /><span>分</span>
+                <input id="worshipStartSeconds" type="number" min="0" max="59" step="1" inputmode="numeric" placeholder="0" aria-label="開始秒數" aria-describedby="worshipStartHint" /><span>秒</span>
+              </div>
+              <p id="worshipStartHint" class="field-note">留空從頭播放</p>
             </div>
-            <span class="field-note">會自動辨識歌曲名稱並移除歌手、專輯與格式標籤，仍可手動修正。</span>
-          </label>
-          <div id="customWorshipList" class="custom-worship-list"></div>
-        </div>
-        <div id="worshipUrlRow">
-          <label>敬拜影片連結
-            <div class="url-row">
-              <input type="text" id="inWorshipUrl" placeholder="https://www.youtube.com/watch?v=..." />
-              <button type="button" id="btnPasteWorship" class="paste-btn">貼上</button>
+            <div class="worship-time" role="group" aria-labelledby="worshipEndLabel">
+              <span id="worshipEndLabel" class="worship-time-label">結束</span>
+              <div class="worship-time-inputs">
+                <input id="worshipEndMinutes" type="number" min="0" max="9999" step="1" inputmode="numeric" placeholder="0" aria-label="結束分鐘" aria-describedby="worshipEndHint" /><span>分</span>
+                <input id="worshipEndSeconds" type="number" min="0" max="59" step="1" inputmode="numeric" placeholder="0" aria-label="結束秒數" aria-describedby="worshipEndHint" /><span>秒</span>
+              </div>
+              <p id="worshipEndHint" class="field-note">留空播到結尾</p>
             </div>
+          </div>
+          <details id="worshipAdvanced" class="settings-disclosure">
+            <summary><span>聲音淡入淡出</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg></summary>
+            <div class="settings-disclosure-body">
+              <div class="worship-range-row">
+                <label>淡入（秒）<input id="worshipFadeIn" type="number" min="0" max="10" step="0.1" /></label>
+                <label>淡出（秒）<input id="worshipFadeOut" type="number" min="0" max="10" step="0.1" /></label>
+              </div>
+              <p id="worshipRangeHint" class="field-note">更換歌曲會清空起訖時間，保留聲音淡入淡出。修改於下次播放生效。</p>
+            </div>
+          </details>
+        </fieldset>
+        <details id="backgroundMusicSettings" class="settings-disclosure settings-section-disclosure">
+          <summary><span>背景音樂</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg></summary>
+          <div class="settings-disclosure-body">
+            <label>音樂連結
+              <div class="url-row">
+                <input type="text" id="inMusicUrl" placeholder="貼上 YouTube 音樂連結" />
+                <button type="button" id="btnPasteMusic" class="paste-btn">貼上</button>
+              </div>
+            </label>
+            <label class="inline"><input type="checkbox" id="autoPlayMusic" /> 主畫面自動播放</label>
+            <label>背景音量 <input type="range" id="musicVolume" min="0" max="1" step="0.05" /></label>
+          </div>
+        </details>
+      </section>
+
+      <section id="settingsDaily" class="settings-pane" role="tabpanel" aria-labelledby="settingsTabDaily" tabindex="0" hidden>
+        <fieldset>
+          <legend>每日經文</legend>
+          <input type="hidden" id="inScheduleUrl" />
+          <label class="inline"><input type="checkbox" id="scheduleEnabled" /> 自動更新靈修進度</label>
+          <p class="field-note">每日 17:30 預備隔天內容。</p>
+          <button id="btnScheduleNow" class="full-btn secondary-btn">立即更新今日進度</button>
+          <p id="scheduleStatus" class="hint" role="status"></p>
+          <div class="settings-reading-preview">今日範圍<strong id="refPreview"></strong></div>
+          <details class="settings-disclosure" id="manualScriptureSettings">
+            <summary><span>手動調整經文</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg></summary>
+            <div class="settings-disclosure-body">
+              <label for="bkBook">書卷</label>
+              <select id="bkBook" class="ref-book" aria-label="書卷"></select>
+              <div class="ref-row">
+                <span class="ref-lab">起</span>
+                <select id="bkStartCh" aria-label="開始章"></select><span class="ref-colon">:</span><select id="bkStartV" aria-label="開始節"></select>
+              </div>
+              <div class="ref-row">
+                <span class="ref-lab">迄</span>
+                <select id="bkEndCh" aria-label="結束章"></select><span class="ref-colon">:</span><select id="bkEndV" aria-label="結束節"></select>
+              </div>
+            </div>
+          </details>
+          <label class="settings-spaced-label">其他閱讀
+            <textarea id="inReading" rows="2" placeholder="竭誠獻上"></textarea>
           </label>
-          <label>公告歌名
-            <input type="text" id="inWorshipTitle" maxlength="128" placeholder="可留空，會自動辨識歌曲名稱" />
-          </label>
-        </div>
-      </fieldset>
+        </fieldset>
+        <fieldset>
+          <legend>封面日期</legend>
+          <label class="inline"><input type="checkbox" id="dateAuto" /> 自動使用今天日期</label>
+          <div class="date-row" id="manualDateFields">
+            <label>月份<select id="dateMonth"></select></label>
+            <label>日期<select id="dateDay"></select></label>
+          </div>
+        </fieldset>
+      </section>
 
-      <fieldset>
-        <legend>日期</legend>
-        <label class="inline"><input type="checkbox" id="dateAuto" /> 自動使用今天日期</label>
-        <div class="date-row">
-          <label>月份<select id="dateMonth"></select></label>
-          <label>日期<select id="dateDay"></select></label>
-        </div>
-      </fieldset>
-
-      <fieldset>
-        <legend>經文</legend>
-        <input type="hidden" id="inScheduleUrl" />
-        <label class="inline"><input type="checkbox" id="scheduleEnabled" /> 自動更新靈修進度（每日 17:30 預備隔天）</label>
-        <button id="btnScheduleNow" class="full-btn">立即更新今日進度</button>
-        <p id="scheduleStatus" class="hint"></p>
-
-        <div class="settings-divider"></div>
-        <label>今日經文範圍</label>
-        <select id="bkBook" class="ref-book"></select>
-        <div class="ref-row">
-          <span class="ref-lab">起</span>
-          <select id="bkStartCh"></select><span class="ref-colon">:</span><select id="bkStartV"></select>
-        </div>
-        <div class="ref-row">
-          <span class="ref-lab">迄</span>
-          <select id="bkEndCh"></select><span class="ref-colon">:</span><select id="bkEndV"></select>
-        </div>
-        <p class="hint">目前：<span id="refPreview"></span></p>
-        <label>其他閱讀
-          <textarea id="inReading" rows="2" placeholder="竭誠獻上"></textarea>
-        </label>
-      </fieldset>
-
-      <fieldset>
-        <legend>背景</legend>
-        <button id="btnPickImage" class="full-btn">選擇背景圖片</button>
-        <p class="hint">也可以直接把圖片拖曳到主畫面。</p>
-      </fieldset>
-
-      <fieldset>
-        <legend>閱讀操作</legend>
-        <label class="inline"><input type="checkbox" id="preventLeftArrowWorship" /> 在經文第一頁停用左方向鍵返回敬拜（防誤觸）</label>
-        <p class="hint">需要返回時，仍可明確點選頁面下方的「上一頁」。</p>
-      </fieldset>
-
-      <fieldset>
-        <legend>快取</legend>
-        <p class="hint">目前使用：<span id="cacheSize">計算中...</span></p>
-        <label>保留天數
-          <select id="cacheKeepDays">
-            <option value="7">7 天</option>
-            <option value="14">14 天</option>
-            <option value="30">30 天</option>
-            <option value="90">90 天</option>
-            <option value="0">全部清除</option>
-          </select>
-        </label>
-        <button id="btnCleanCache" class="full-btn">清理快取</button>
-        <p id="cacheMsg" class="hint"></p>
-      </fieldset>
-
-      <fieldset>
-        <legend>軟體更新</legend>
-        <p class="hint">目前版本：<span id="appVer">--</span></p>
-        <button id="btnAppUpdate" class="full-btn">檢查軟體更新</button>
-        <div id="appUpdateProgress" class="hint hidden">下載中 <span id="appUpdatePct">0</span>%</div>
-        <button id="btnAppInstall" class="full-btn hidden" style="margin-top:8px;background:#2e9e5b;">重新啟動並安裝</button>
-        <p id="appUpdateMsg" class="hint"></p>
-      </fieldset>
+      <section id="settingsGeneral" class="settings-pane" role="tabpanel" aria-labelledby="settingsTabGeneral" tabindex="0" hidden>
+        <fieldset>
+          <legend>封面背景</legend>
+          <button id="btnPickImage" class="full-btn secondary-btn">選擇背景圖片</button>
+          <p class="hint">也可以將圖片拖曳到主畫面。</p>
+        </fieldset>
+        <fieldset>
+          <legend>閱讀操作</legend>
+          <label class="inline"><input type="checkbox" id="preventLeftArrowWorship" /> 經文第一頁停用左方向鍵返回敬拜</label>
+          <p class="field-note">仍可點選「上一頁」返回，避免鍵盤誤觸。</p>
+        </fieldset>
+        <details class="settings-disclosure settings-section-disclosure" id="cacheSettings">
+          <summary><span>快取管理</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg></summary>
+          <div class="settings-disclosure-body">
+            <p class="hint">目前使用：<span id="cacheSize">計算中...</span></p>
+            <label>保留天數
+              <select id="cacheKeepDays">
+                <option value="7">7 天</option>
+                <option value="14">14 天</option>
+                <option value="30">30 天</option>
+                <option value="90">90 天</option>
+                <option value="0">全部清除</option>
+              </select>
+            </label>
+            <button id="btnCleanCache" class="full-btn secondary-btn">清理快取</button>
+            <p id="cacheMsg" class="hint" role="status"></p>
+          </div>
+        </details>
+        <fieldset>
+          <legend>軟體更新</legend>
+          <p class="hint">目前版本：<span id="appVer">--</span></p>
+          <button id="btnAppUpdate" class="full-btn secondary-btn">檢查軟體更新</button>
+          <div id="appUpdateProgress" class="hint hidden">下載中 <span id="appUpdatePct">0</span>%</div>
+          <button id="btnAppInstall" class="full-btn hidden" style="margin-top:8px;background:#2e9e5b;">重新啟動並安裝</button>
+          <p id="appUpdateMsg" class="hint" role="status"></p>
+          <div class="settings-divider"></div>
+          <h3 class="update-tool-title">下載工具 yt-dlp</h3>
+          <p class="field-note">自動更新已啟用，每次啟動會在背景更新。</p>
+          <p id="ytDlpVersion" class="hint">版本讀取中…</p>
+          <p id="ytDlpStatus" class="hint" role="status">尚未確認最新版本</p>
+          <details class="yt-dlp-manual settings-disclosure">
+            <summary><span>手動檢查／重試更新</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg></summary>
+            <div class="worship-range-row settings-disclosure-body">
+              <button id="btnYtDlpCheck" class="full-btn secondary-btn" type="button">檢查版本</button>
+              <button id="btnYtDlpUpdate" class="full-btn secondary-btn" type="button">立即更新下載工具</button>
+            </div>
+          </details>
+        </fieldset>
+      </section>
     </div>
   </div>
 
@@ -260,6 +291,7 @@
   <script src="bible.js"></script>
   <script src="../devotional-date.js"></script>
   <script src="../assignment-shared.js"></script>
+  <script src="../worship-shared.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

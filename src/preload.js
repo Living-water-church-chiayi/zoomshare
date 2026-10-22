@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('api', {
 
   updateYtDlp: () => ipcRenderer.invoke('ytdlp:update'),
   ytDlpVersion: () => ipcRenderer.invoke('ytdlp:version'),
+  ytDlpStatus: (check = false) => ipcRenderer.invoke('ytdlp:status', check),
 
   // App 自動更新
   appVersion: () => ipcRenderer.invoke('app:version'),
@@ -36,6 +37,7 @@ contextBridge.exposeInMainWorld('api', {
 
   openExternal: (url) => ipcRenderer.invoke('open:external', url),
   openHostConsole: () => ipcRenderer.invoke('host:open'),
+  publishWorshipPlayback: (state) => ipcRenderer.send('worship:playback', state),
   scheduleToday: (url, options) => ipcRenderer.invoke('schedule:today', url, options),
   clearExpiredScheduleCache: () => ipcRenderer.invoke('schedule:clear-expired'),
   utmostToday: () => ipcRenderer.invoke('utmost:today'),
@@ -47,6 +49,7 @@ contextBridge.exposeInMainWorld('api', {
   endWindowDrag: () => ipcRenderer.send('win:drag-end'),
   minimizeWindow: () => ipcRenderer.invoke('win:minimize'),
   closeWindow: () => ipcRenderer.invoke('win:close'),
+  quitApp: () => ipcRenderer.invoke('app:quit'),
   readClipboard: () => ipcRenderer.invoke('clipboard:read'),
   writeClipboard: (text) => ipcRenderer.invoke('clipboard:write', text),
   pathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch { return ''; } }

@@ -1,4 +1,4 @@
-import { parseRosterRows, parseScheduleRows, parseUtmostSharingRows } from './shared.mjs';
+import { datePartsInTimeZone, parseRosterRows, parseScheduleRows, parseUtmostSharingRows, parseUtmostSharingSheets } from './shared.mjs';
 
 const encoder = new TextEncoder();
 let cachedAccessToken = null;
@@ -72,8 +72,27 @@ export function parseCsv(text) {
   return rows;
 }
 
+// Discover public tabs without credentials or evaluating Google's page scripts.
+// Keep the page-format dependency here so an unexpected Google response fails visibly.
+export function parsePublicSheetTabs(html) {
+  const tabs = [];
+  const seen = new Set();
+  const pattern = /items\.push\(\{name:\s*("(?:\\.|[^"\\])*"),[^}]*?\bgid:\s*"(\d+)"/g;
+  for (const match of String(html || '').matchAll(pattern)) {
+    const name = JSON.parse(match[1].replace(/\\x([\da-f]{2})/gi, (_value, hex) => `\\u00${hex}`));
+    if (seen.has(match[2])) continue;
+    seen.add(match[2]);
+    tabs.push({ name, gid: match[2] });
+  }
+  if (!tabs.length) throw new Error('無法取得服事表分頁清單，請確認試算表可供檢視');
+  if (tabs.length > 64) throw new Error('服事表分頁過多（上限 64）');
+  return tabs;
+}
+
 async function loadUtmostSharing(env, now) {
-  const value = String(env.UTMOST_ASSIGNMENT_CSV_URL || '').trim();
+  // Accept the old setting too, but treat its gid as obsolete: quarterly tabs
+  // belong to one workbook and must be discovered on each refresh.
+  const value = String(env.UTMOST_ASSIGNMENT_SHEET_URL || env.UTMOST_ASSIGNMENT_CSV_URL || '').trim();
   if (!value) {
     return {
       ...parseUtmostSharingRows([], now, env.APP_TIME_ZONE || 'Asia/Taipei'),
@@ -82,12 +101,31 @@ async function loadUtmostSharing(env, now) {
   }
   let url;
   try { url = new URL(value); } catch { throw new Error('竭誠獻上排班表網址格式錯誤'); }
-  if (url.protocol !== 'https:' || url.hostname !== 'docs.google.com' || !/^\/spreadsheets\/d\/[a-zA-Z0-9_-]+\/export$/.test(url.pathname)) {
-    throw new Error('竭誠獻上排班表必須使用 Google 試算表 CSV 匯出網址');
+  const path = url.pathname.match(/^\/spreadsheets\/d\/([a-zA-Z0-9_-]+)(?:\/(?:edit|export|htmlview))?\/?$/);
+  if (url.protocol !== 'https:' || url.hostname !== 'docs.google.com' || url.username || url.password || !path) {
+    throw new Error('竭誠獻上排班表必須使用 Google 試算表網址');
   }
-  const response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(15_000) });
-  if (!response.ok) throw new Error(`讀取竭誠獻上排班表失敗：HTTP ${response.status}`);
-  return parseUtmostSharingRows(parseCsv(await readTextLimited(response)), now, env.APP_TIME_ZONE || 'Asia/Taipei');
+  const base = `https://docs.google.com/spreadsheets/d/${path[1]}`;
+  const timeZone = env.APP_TIME_ZONE || 'Asia/Taipei';
+  const year = datePartsInTimeZone(now, timeZone).year;
+  const response = await fetch(`${base}/htmlview`, { redirect: 'follow', signal: AbortSignal.timeout(15_000) });
+  if (!response.ok) throw new Error(`讀取服事表分頁失敗：HTTP ${response.status}`);
+  const tabs = parsePublicSheetTabs(await readTextLimited(response)).filter((tab) => {
+    const tabYear = tab.name.normalize('NFKC').match(/20\d{2}/);
+    return !tabYear || (Number(tabYear[0]) >= year - 1 && Number(tabYear[0]) <= year + 1);
+  });
+  // Read in small batches to bound concurrent requests even for larger workbooks.
+  const sheets = [];
+  for (let index = 0; index < tabs.length; index += 4) {
+    sheets.push(...await Promise.all(tabs.slice(index, index + 4).map(async (tab) => {
+      const csv = await fetch(`${base}/export?format=csv&gid=${tab.gid}`, { redirect: 'follow', signal: AbortSignal.timeout(15_000) });
+      if (!csv.ok) throw new Error(`讀取服事表「${tab.name}」失敗：HTTP ${csv.status}`);
+      const text = await readTextLimited(csv);
+      if (/^\s*(?:<!doctype|<html)/i.test(text)) throw new Error(`服事表「${tab.name}」回傳登入頁，請確認檢視權限`);
+      return { ...tab, rows: parseCsv(text) };
+    })));
+  }
+  return parseUtmostSharingSheets(sheets, now, timeZone);
 }
 
 async function loadPublicSchedule(env, now) {
@@ -193,7 +231,7 @@ async function appsScriptRanges(env) {
 
 async function serviceAccountRanges(env) {
   const scheduleRange = env.SCHEDULE_RANGE || '經文進度!A:F';
-  const rosterRange = env.ROSTER_RANGE || '服務名單!A:G';
+  const rosterRange = env.ROSTER_RANGE || '服務名單!A:H';
   const query = new URLSearchParams();
   query.append('ranges', scheduleRange);
   query.append('ranges', rosterRange);
