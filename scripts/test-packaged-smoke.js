@@ -211,6 +211,18 @@ async function run() {
         window.PresenceShared.matchRosterMemberIds(matcher, name));
     })()`);
     assert.deepEqual(nameMatches, [['z'], [], ['s'], []], 'Packaged host must reject surname-prefix and conflicting-surname matches');
+    // Startup prefetch can replace the visible reading asynchronously. Wait for
+    // that work before supplying fixed pages for keyboard/IPC assertions.
+    await delay(1600);
+    const readingReadyDeadline = Date.now() + 35000;
+    let readingIdle = false;
+    do {
+      readingIdle = await evaluate(page, `!dailyRefreshInFlight && !flowLoading && !flowTransitioning`);
+      if (readingIdle) break;
+      await delay(100);
+    } while (Date.now() < readingReadyDeadline);
+    assert.equal(readingIdle, true, 'Startup reading refresh must settle before keyboard fixtures');
+    await evaluate(page, `lastDailyRefreshDateKey = appDateKey(); lastDailyRefreshOkDateKey = appDateKey();`);
     await evaluate(page, `flowStep = 'scripture'; flowPages = [textPage('第一頁'), textPage('第二頁')]; flowPageIndex = 0;
       flowTransitioning = false; flowLoading = false; document.getElementById('flowScreen').dataset.step = 'scripture';
       document.getElementById('flowScreen').classList.remove('hidden'); renderFlowPage();`);
@@ -230,12 +242,12 @@ async function run() {
       const deadline = Date.now() + 3000;
       let observed;
       do {
-        observed = await evaluate(page, `({ index: flowPageIndex, events: globalThis.__hostArrowEvents.length })`);
+        observed = await evaluate(page, `({ index: flowPageIndex, events: globalThis.__hostArrowEvents.length, step: flowStep, pages: flowPages.length })`);
         if (observed.index === expectedIndex && observed.events > before) break;
         await delay(50);
       } while (Date.now() < deadline);
       assert.ok(observed.events > before, 'Host arrow must reach the projection renderer');
-      assert.equal(observed.index, expectedIndex, 'Host keyboard must turn the projection page over real IPC');
+      assert.equal(observed.index, expectedIndex, `Host keyboard must turn the projection page over real IPC: ${JSON.stringify(observed)}`);
       assert.equal(await evaluate(hostPage, `document.activeElement.id`), 'refreshButton', 'Projection paging must retain the host input focus');
       assert.equal(await evaluate(hostPage, `document.hasFocus()`), hostFocusBeforePaging, 'Paging must not activate another window');
     }
