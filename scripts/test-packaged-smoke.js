@@ -214,7 +214,10 @@ async function run() {
     await evaluate(page, `flowStep = 'scripture'; flowPages = [textPage('第一頁'), textPage('第二頁')]; flowPageIndex = 0;
       flowTransitioning = false; flowLoading = false; document.getElementById('flowScreen').dataset.step = 'scripture';
       document.getElementById('flowScreen').classList.remove('hidden'); renderFlowPage();`);
-    await evaluate(hostPage, `document.getElementById('setupView').classList.add('hidden'); document.getElementById('consoleView').classList.remove('hidden');
+    // Finish startup refresh before installing the paired-console fixture. Merely
+    // unhiding the DOM lets a late paragraph/config render restore the setup view.
+    await evaluate(hostPage, `refreshHostDailyData().catch(() => {})`);
+    await evaluate(hostPage, `renderState({ ...currentState, configured: true });
       document.getElementById('refreshButton').focus();`);
     const hostFocusBeforePaging = await evaluate(hostPage, `document.hasFocus()`);
     await evaluate(page, `globalThis.__hostArrowEvents = []; window.api.onHostReadingArrow((key) => globalThis.__hostArrowEvents.push(key));`);
@@ -223,7 +226,7 @@ async function run() {
       assert.equal(await evaluate(hostPage, `(() => {
         const event = new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true, cancelable: true });
         document.activeElement.dispatchEvent(event); return event.defaultPrevented;
-      })()`), true);
+      })()`), true, 'Visible host console must handle the reading arrow');
       const deadline = Date.now() + 3000;
       let observed;
       do {
@@ -237,6 +240,9 @@ async function run() {
       assert.equal(await evaluate(hostPage, `document.hasFocus()`), hostFocusBeforePaging, 'Paging must not activate another window');
     }
     await hostArrow('ArrowRight', 1);
+    await evaluate(hostPage, `renderState(currentState)`);
+    assert.equal(await evaluate(hostPage, `document.getElementById('consoleView').classList.contains('hidden')`), false,
+      'Refreshing paired-console fixture must preserve the reading controls');
     await hostArrow('ArrowLeft', 0);
     await hostArrow('ArrowLeft', 0);
     assert.equal(await evaluate(page, `flowStep`), 'scripture', 'Host paging must stop before worship');
