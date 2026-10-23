@@ -211,8 +211,44 @@ async function run() {
         window.PresenceShared.matchRosterMemberIds(matcher, name));
     })()`);
     assert.deepEqual(nameMatches, [['z'], [], ['s'], []], 'Packaged host must reject surname-prefix and conflicting-surname matches');
-    const showFinalUtmost = `flowStep = 'utmost'; flowPages = [{ type: 'text', text: '測試最後一頁' }]; flowPageIndex = 0;
-      flowTransitioning = false; flowLoading = false; document.getElementById('flowScreen').classList.remove('hidden');`;
+    await evaluate(page, `flowStep = 'scripture'; flowPages = [textPage('第一頁'), textPage('第二頁')]; flowPageIndex = 0;
+      flowTransitioning = false; flowLoading = false; document.getElementById('flowScreen').dataset.step = 'scripture';
+      document.getElementById('flowScreen').classList.remove('hidden'); renderFlowPage();`);
+    await evaluate(hostPage, `document.getElementById('setupView').classList.add('hidden'); document.getElementById('consoleView').classList.remove('hidden');
+      document.getElementById('refreshButton').focus();`);
+    const hostFocusBeforePaging = await evaluate(hostPage, `document.hasFocus()`);
+    await evaluate(page, `globalThis.__hostArrowEvents = []; window.api.onHostReadingArrow((key) => globalThis.__hostArrowEvents.push(key));`);
+    async function hostArrow(key, expectedIndex) {
+      const before = await evaluate(page, `globalThis.__hostArrowEvents.length`);
+      assert.equal(await evaluate(hostPage, `(() => {
+        const event = new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true, cancelable: true });
+        document.activeElement.dispatchEvent(event); return event.defaultPrevented;
+      })()`), true);
+      const deadline = Date.now() + 3000;
+      let observed;
+      do {
+        observed = await evaluate(page, `({ index: flowPageIndex, events: globalThis.__hostArrowEvents.length })`);
+        if (observed.index === expectedIndex && observed.events > before) break;
+        await delay(50);
+      } while (Date.now() < deadline);
+      assert.ok(observed.events > before, 'Host arrow must reach the projection renderer');
+      assert.equal(observed.index, expectedIndex, 'Host keyboard must turn the projection page over real IPC');
+      assert.equal(await evaluate(hostPage, `document.activeElement.id`), 'refreshButton', 'Projection paging must retain the host input focus');
+      assert.equal(await evaluate(hostPage, `document.hasFocus()`), hostFocusBeforePaging, 'Paging must not activate another window');
+    }
+    await hostArrow('ArrowRight', 1);
+    await hostArrow('ArrowLeft', 0);
+    await hostArrow('ArrowLeft', 0);
+    assert.equal(await evaluate(page, `flowStep`), 'scripture', 'Host paging must stop before worship');
+    const showFinalUtmost = `flowStep = 'utmost'; flowPages = [textPage('測試最後一頁')]; flowPageIndex = 0;
+      flowTransitioning = false; flowLoading = false; document.getElementById('flowScreen').dataset.step = 'utmost';
+      document.getElementById('flowScreen').classList.remove('hidden'); renderFlowPage();`;
+    await evaluate(page, showFinalUtmost);
+    await hostArrow('ArrowRight', 0);
+    await hostArrow('ArrowRight', 0);
+    await hostArrow('ArrowRight', 0);
+    assert.equal(await evaluate(page, `utmostFinishConfirmCount`), 0, 'Host arrows must not arm app exit');
+    assert.equal(child.exitCode, null, 'Host navigation must not quit the app');
     await evaluate(page, `${showFinalUtmost}
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));

@@ -2150,6 +2150,7 @@ function finishManualWindowDrag() {
 }
 
 function registerIpc() {
+  trustedOn('host:reading-arrow', forwardHostReadingArrow);
   trustedOn('worship:playback', (event, state) => {
     if (event.sender === mainWindow?.webContents) updateHostWorshipPlayback(state);
   });
@@ -2360,6 +2361,7 @@ let manualWindowDrag = null;
 let mainWindowAspectRatio = 16 / 9;
 let hostPresenceRefreshTimer = null;
 let coordinatedWindowLayoutTimer = null;
+let raisingWindowPair = false;
 let applyingCoordinatedWindowLayout = false;
 const HOST_PRESENCE_REFRESH_INTERVAL_MS = 60_000;
 const COORDINATED_WINDOW_LAYOUT_DEBOUNCE_MS = 120;
@@ -2437,12 +2439,36 @@ function scheduleCoordinatedWindowLayout(driver = 'cover') {
   if (typeof coordinatedWindowLayoutTimer.unref === 'function') coordinatedWindowLayoutTimer.unref();
 }
 
+function forwardHostReadingArrow(event, key) {
+  if (!hostWindow || hostWindow.isDestroyed() || event.sender !== hostWindow.webContents) return false;
+  if (!['ArrowLeft', 'ArrowRight'].includes(key) || !mainWindow || mainWindow.isDestroyed()) return false;
+  mainWindow.webContents.send('flow:host-arrow', key);
+  return true;
+}
+
+function raiseWindowPair(focused) {
+  if (raisingWindowPair || !focused || focused.isDestroyed() || !focused.isFocused()) return;
+  const companion = focused === mainWindow ? hostWindow : focused === hostWindow ? mainWindow : null;
+  if (!companion || companion.isDestroyed()) return;
+  raisingWindowPair = true;
+  try {
+    if (companion.isMinimized()) companion.restore();
+    companion.showInactive();
+    companion.moveTop();
+    focused.moveTop();
+    if (!focused.isFocused()) focused.focus();
+  } finally {
+    raisingWindowPair = false;
+  }
+}
+
 function attachCoordinatedWindowLayoutEvents(window, driver) {
   const schedule = () => scheduleCoordinatedWindowLayout(driver);
   window.on('move', schedule);
   window.on('resize', schedule);
   window.on('moved', schedule);
   window.on('resized', schedule);
+  window.on('focus', () => raiseWindowPair(window));
 }
 
 function pointInsideBounds(point, bounds) {
@@ -2518,6 +2544,7 @@ app.on('second-instance', () => {
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
+  raiseWindowPair(mainWindow);
 });
 
 async function createWindow() {
@@ -2792,6 +2819,12 @@ app.whenReady().then(async () => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow().catch((error) => console.error('建立主視窗失敗：', error));
+    } else if (mainWindow && !mainWindow.isDestroyed()) {
+      const target = BrowserWindow.getFocusedWindow() || mainWindow;
+      if (target.isMinimized()) target.restore();
+      target.show();
+      target.focus();
+      raiseWindowPair(target);
     }
   });
 });

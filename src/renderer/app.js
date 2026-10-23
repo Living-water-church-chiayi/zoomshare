@@ -2165,7 +2165,7 @@ function nextFlowStep(source = 'button') {
   if (flowTransitioning) return;
   const idx = FLOW_ORDER.indexOf(flowStep);
   if (idx >= FLOW_ORDER.length - 1) return;
-  goFlowStep(FLOW_ORDER[Math.min(idx + 1, FLOW_ORDER.length - 1)] || 'cover', { revealFooter: source !== 'keyboard' });
+  goFlowStep(FLOW_ORDER[Math.min(idx + 1, FLOW_ORDER.length - 1)] || 'cover', { revealFooter: source !== 'keyboard' && source !== 'host' });
 }
 
 function prevFlowStep() {
@@ -2224,7 +2224,7 @@ function requestFlowReturnToCover(source = 'button') {
       revealFlowFooter();
       scheduleFlowFooterHide();
       resetUtmostFinishConfirmation();
-      toast('按 Esc 返回主畫面，或連按三下右方向鍵關閉軟體', 3000);
+      toast(source === 'host' ? '已到竭誠獻上最後一頁' : '按 Esc 返回主畫面，或連按三下右方向鍵關閉軟體', 3000);
       return false;
     }
     if (!requestUtmostFinishConfirmation(source)) return false;
@@ -2247,7 +2247,7 @@ function nextFlowPageOrStep(source = 'button') {
   if ($('flowScreen').classList.contains('hidden')) { nextFlowStep(source); return; }
   if (flowPageIndex < flowPages.length - 1) {
     flowPageIndex++;
-    renderFlowPage({ revealFooter: source !== 'keyboard' && source !== 'right' });
+    renderFlowPage({ revealFooter: source !== 'keyboard' && source !== 'right' && source !== 'host' });
   } else {
     if (flowStep === FLOW_ORDER[FLOW_ORDER.length - 1]) {
       requestFlowReturnToCover(source);
@@ -2267,12 +2267,12 @@ function prevFlowPageOrStep(source = 'button') {
   if ($('flowScreen').classList.contains('hidden')) { prevFlowStep(); return; }
   if (flowPageIndex > 0) {
     flowPageIndex--;
-    renderFlowPage({ revealFooter: source !== 'keyboard' });
+    renderFlowPage({ revealFooter: source !== 'keyboard' && source !== 'host' });
   } else if (flowStep === 'utmost') {
     goFlowStep('scripture').then((ok) => {
       if (!ok || flowStep !== 'scripture') return;
       flowPageIndex = Math.max(flowPages.length - 1, 0);
-      renderFlowPage({ revealFooter: source !== 'keyboard' });
+      renderFlowPage({ revealFooter: source !== 'keyboard' && source !== 'host' });
     });
   } else if (flowStep === 'scripture') {
     goFlowStep('worship');
@@ -2637,7 +2637,12 @@ function handleFlowWheelNavigation(event) {
   return true;
 }
 
-function handleFlowArrowNavigation(event) {
+function handleHostReadingArrow(key) {
+  if (!['ArrowLeft', 'ArrowRight'].includes(key)) return false;
+  return handleFlowArrowNavigation({ key, preventDefault() {} }, 'host');
+}
+
+function handleFlowArrowNavigation(event, source = 'keyboard') {
   if (!event || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return false;
   if (
     event.repeat ||
@@ -2647,6 +2652,7 @@ function handleFlowArrowNavigation(event) {
     event.metaKey ||
     event.shiftKey
   ) return false;
+  if (source === 'host' && (worshipActive || (flowStep !== 'scripture' && flowStep !== 'utmost') || $('flowScreen').classList.contains('hidden'))) return false;
   if (
     !$('settingsPanel').classList.contains('hidden') ||
     flowTransitioning ||
@@ -2672,11 +2678,11 @@ function handleFlowArrowNavigation(event) {
 
   event.preventDefault();
   if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
-    nextFlowPageOrStep(flowStep === 'utmost' && event.key === 'ArrowRight' ? 'right' : 'keyboard');
-  } else if (cfg.preventLeftArrowWorship !== false && flowStep === 'scripture' && flowPageIndex <= 0) {
+    nextFlowPageOrStep(source === 'host' ? 'host' : flowStep === 'utmost' && event.key === 'ArrowRight' ? 'right' : 'keyboard');
+  } else if ((source === 'host' || cfg.preventLeftArrowWorship !== false) && flowStep === 'scripture' && flowPageIndex <= 0) {
     return true;
   } else {
-    prevFlowPageOrStep('keyboard');
+    prevFlowPageOrStep(source);
   }
   return true;
 }
@@ -3716,6 +3722,7 @@ async function init() {
   setupSettingsTextSelection();
   setupSettingsTabs();
   window.api.onWindowPointerActivity(handleWindowPointerActivity);
+  window.api.onHostReadingArrow(handleHostReadingArrow);
   $('btnMin').addEventListener('click', () => window.api.minimizeWindow());
   $('btnClose').addEventListener('click', () => window.api.closeWindow());
   $('btnPasteMusic').addEventListener('click', () => pasteInto('inMusicUrl'));

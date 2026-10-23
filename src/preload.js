@@ -37,6 +37,11 @@ contextBridge.exposeInMainWorld('api', {
 
   openExternal: (url) => ipcRenderer.invoke('open:external', url),
   openHostConsole: () => ipcRenderer.invoke('host:open'),
+  onHostReadingArrow: (callback) => {
+    const listener = (_event, key) => callback(key);
+    ipcRenderer.on('flow:host-arrow', listener);
+    return () => ipcRenderer.removeListener('flow:host-arrow', listener);
+  },
   publishWorshipPlayback: (state) => ipcRenderer.send('worship:playback', state),
   scheduleToday: (url, options) => ipcRenderer.invoke('schedule:today', url, options),
   clearExpiredScheduleCache: () => ipcRenderer.invoke('schedule:clear-expired'),

@@ -3233,7 +3233,7 @@ test('requires three deliberate right-arrow actions to quit without returning ho
 });
 
 test('down arrows, buttons and wheel input cannot quit and reset right-arrow confirmation', () => {
-  for (const source of ['keyboard', 'button', 'wheel']) {
+  for (const source of ['keyboard', 'button', 'wheel', 'host']) {
     const harness = loadUtmostConfirmationHarness();
     harness.requestFlowReturnToCover('right');
     for (let i = 0; i < 3; i++) harness.requestFlowReturnToCover(source);
@@ -3851,6 +3851,89 @@ test('migrates the active legacy worship source and title without reviving the r
   assert.equal(saved.worshipFadeOutSeconds, 1);
   assert.ok(!('useWorshipPreset' in saved));
   assert.ok(!('customWorshipPresets' in saved));
+});
+
+test('host reading arrows only forward from the host renderer without moving focus', () => {
+  const sent = [];
+  const host = { isDestroyed: () => false, webContents: {} };
+  const projection = { isDestroyed: () => false, webContents: { send: (...args) => sent.push(args) }, focus: () => assert.fail('paging must not steal focus') };
+  const { forwardHostReadingArrow } = loadFunctions(mainSource, ['forwardHostReadingArrow'], { mainWindow: projection, hostWindow: host });
+  assert.equal(forwardHostReadingArrow({ sender: host.webContents }, 'ArrowRight'), true);
+  assert.equal(forwardHostReadingArrow({ sender: host.webContents }, 'ArrowLeft'), true);
+  assert.equal(forwardHostReadingArrow({ sender: projection.webContents }, 'ArrowRight'), false);
+  for (const key of ['ArrowDown', 'Escape', null, {}]) assert.equal(forwardHostReadingArrow({ sender: host.webContents }, key), false);
+  projection.isDestroyed = () => true;
+  assert.equal(forwardHostReadingArrow({ sender: host.webContents }, 'ArrowRight'), false);
+  assert.deepEqual(sent, [['flow:host-arrow', 'ArrowRight'], ['flow:host-arrow', 'ArrowLeft']]);
+});
+
+test('host arrows turn reading pages but cannot enter worship, skip video, or arm app exit', () => {
+  for (const step of ['cover', 'worship', 'scripture', 'utmost']) {
+    for (const key of ['ArrowLeft', 'ArrowRight']) {
+      const calls = [];
+      const { handleHostReadingArrow } = loadFunctions(rendererSource,
+        ['handleHostReadingArrow', 'handleFlowArrowNavigation', 'isEditableFlowNavigationTarget'], {
+          $: (id) => ({ classList: { contains: () => id === 'settingsPanel' } }),
+          flowStep: step, flowPageIndex: 1, flowLoading: false, flowTransitioning: false,
+          worshipActive: step === 'worship', cfg: { preventLeftArrowWorship: false },
+          nextFlowPageOrStep: (source) => calls.push(['next', source]),
+          prevFlowPageOrStep: (source) => calls.push(['prev', source]),
+          nextFlowStep: () => assert.fail('host must not enter worship'),
+          backToCover: () => assert.fail('host must not skip worship')
+        });
+      const reading = ['scripture', 'utmost'].includes(step);
+      assert.equal(handleHostReadingArrow(key), reading);
+      assert.deepEqual(calls, reading ? [[key === 'ArrowRight' ? 'next' : 'prev', 'host']] : []);
+      assert.equal(handleHostReadingArrow('Escape'), false);
+    }
+  }
+  const calls = [];
+  const { handleHostReadingArrow } = loadFunctions(rendererSource,
+    ['handleHostReadingArrow', 'handleFlowArrowNavigation', 'isEditableFlowNavigationTarget'], {
+      $: (id) => ({ classList: { contains: () => id === 'settingsPanel' } }),
+      flowStep: 'scripture', flowPageIndex: 0, flowLoading: false, flowTransitioning: false,
+      worshipActive: false, cfg: { preventLeftArrowWorship: false },
+      prevFlowPageOrStep: () => calls.push('back')
+    });
+  assert.equal(handleHostReadingArrow('ArrowLeft'), true);
+  assert.deepEqual(calls, [], 'host left arrow must stop at the first Scripture page');
+});
+
+test('bringing either app window forward raises its companion and preserves the selected window focus', () => {
+  for (const active of ['cover', 'host']) {
+    const calls = [];
+    let focused = active;
+    const makeWindow = (name) => ({
+      isDestroyed: () => false, isFocused: () => focused === name,
+      isMinimized: () => name !== active,
+      restore: () => { calls.push([name, 'restore']); focused = name; },
+      showInactive: () => calls.push([name, 'showInactive']),
+      moveTop: () => calls.push([name, 'moveTop']),
+      focus: () => { calls.push([name, 'focus']); focused = name; }
+    });
+    const mainWindow = makeWindow('cover'), hostWindow = makeWindow('host');
+    const { raiseWindowPair } = loadFunctions(mainSource, ['raiseWindowPair'], { mainWindow, hostWindow, raisingWindowPair: false });
+    raiseWindowPair(active === 'cover' ? mainWindow : hostWindow);
+    assert.equal(focused, active);
+    assert.deepEqual(calls.map((call) => call[1]), ['restore', 'showInactive', 'moveTop', 'moveTop', 'focus']);
+    assert.equal(calls[0][0], active === 'cover' ? 'host' : 'cover');
+    hostWindow.isDestroyed = () => true;
+    calls.length = 0;
+    raiseWindowPair(mainWindow);
+    assert.deepEqual(calls, [], 'closed host must not be recreated');
+  }
+});
+
+test('companion window raising ignores reentrant and stale focus events', () => {
+  const window = { isDestroyed: () => false, isFocused: () => true };
+  const { raiseWindowPair } = loadFunctions(mainSource, ['raiseWindowPair'], {
+    mainWindow: window, hostWindow: { isDestroyed: () => assert.fail('reentrant call should return immediately') }, raisingWindowPair: true
+  });
+  raiseWindowPair(window);
+  const { raiseWindowPair: staleRaise } = loadFunctions(mainSource, ['raiseWindowPair'], {
+    mainWindow: { ...window, isFocused: () => false }, hostWindow: null, raisingWindowPair: false
+  });
+  staleRaise({ ...window, isFocused: () => false });
 });
 
 async function runTests() {

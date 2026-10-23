@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('hostApi', {
   },
   openRosterSheet: () => ipcRenderer.invoke('host:open-roster-sheet'),
   close: () => ipcRenderer.invoke('host:close'),
+  navigateReading: (key) => ipcRenderer.send('host:reading-arrow', key),
   onState: (callback) => {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on('presence:state', listener);

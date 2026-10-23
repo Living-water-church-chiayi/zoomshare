@@ -47,8 +47,10 @@ let rosterSheetOpenCount = 0;
 let refreshCount = 0;
 let scriptureCurrentCount = 0;
 let utmostTodayCount = 0;
+const readingKeys = [];
 
 async function run() {
+  ipcMain.on('host:reading-arrow', (_event, key) => readingKeys.push(key));
   ipcMain.handle('presence:state', () => state);
   ipcMain.handle('presence:refresh', () => { refreshCount += 1; return state; });
   ipcMain.handle('presence:unpair', () => state);
@@ -236,6 +238,27 @@ async function run() {
   assert.match(pools.clock, /\d{2}:\d{2}:\d{2}/);
   const staffLabels = await window.webContents.executeJavaScript(`document.getElementById('consoleView').textContent.includes('全職同工')`);
   assert.equal(staffLabels, false, 'staff classification should not be displayed in the host console');
+  const consumedKeys = await window.webContents.executeJavaScript(`(() => {
+    const results = [];
+    const send = (key, options = {}, target = window) => {
+      const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...options });
+      target.dispatchEvent(event);
+      results.push(event.defaultPrevented);
+    };
+    send('ArrowLeft'); send('ArrowRight');
+    send('ArrowRight', { repeat: true }); send('ArrowRight', { isComposing: true });
+    for (const modifier of ['ctrlKey', 'altKey', 'metaKey', 'shiftKey']) send('ArrowRight', { [modifier]: true });
+    send('ArrowDown'); send('Escape');
+    const input = document.createElement('input'); document.body.appendChild(input);
+    input.focus(); send('ArrowLeft', {}, input); input.remove();
+    send('ArrowRight', {}, document.querySelector('.all-online summary'));
+    const editor = document.createElement('div'); editor.contentEditable = 'true'; document.body.appendChild(editor);
+    send('ArrowRight', {}, editor); editor.remove();
+    return results;
+  })()`);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.deepEqual(readingKeys, ['ArrowLeft', 'ArrowRight']);
+  assert.deepEqual(consumedKeys, [true, true, ...Array(11).fill(false)], 'text input, menus, repeat and modified keys must retain their normal behavior');
   state = { ...state,
     roster: [...state.roster, { memberId: 'past', name: '昨天讀過的人', aliases: [], enabled: true, canReadScripture: true, canReadUtmost: true }],
     snapshot: { ...state.snapshot, participants: [...state.snapshot.participants, { sessionId: 'p7', displayName: '昨天讀過的人' }] },

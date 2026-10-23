@@ -589,12 +589,27 @@ async function refreshHostDailyData() {
   return hostRefreshPromise;
 }
 
+function handleHostReadingKeydown(event) {
+  if (!event || event.defaultPrevented || event.repeat || event.isComposing ||
+      event.altKey || event.ctrlKey || event.metaKey || event.shiftKey ||
+      !['ArrowLeft', 'ArrowRight'].includes(event.key)) return false;
+  if ($('consoleView').classList.contains('hidden')) return false;
+  const target = event.target;
+  if (target && (target.isContentEditable || target.closest?.(
+    'input, textarea, select, summary, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="listbox"], [role="menu"], [role="slider"], [role="tablist"]'
+  ))) return false;
+  event.preventDefault();
+  window.hostApi.navigateReading(event.key);
+  return true;
+}
+
 async function init() {
   document.body.classList.add(window.hostApi.platform === 'darwin' ? 'plat-mac' : 'plat-win');
   updateHostDisplayScale();
   updateHostClock();
   setInterval(updateHostClock, 1000);
   window.addEventListener('resize', updateHostDisplayScale);
+  window.addEventListener('keydown', handleHostReadingKeydown);
   $('deviceLabel').value = `${window.hostApi.platform === 'darwin' ? 'Mac' : 'Windows'} 主持人電腦`;
   $('pairForm').addEventListener('submit', submitPair);
   $('scriptureEligibleList').addEventListener('click', chooseCandidate);

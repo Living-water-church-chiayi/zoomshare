@@ -34,6 +34,7 @@ const sourceFiles = [
   'src/presence-shared.js',
   'src/assignment-shared.js',
   'src/devotional-date.js',
+  'src/window-title.js',
   'src/host/host-preload.js',
   'src/host/host.js',
   'src/host/index.html',
